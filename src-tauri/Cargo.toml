@@ -45,6 +45,9 @@ ignore = "0.4"
 # git: libgit2 (vendored so no system lib is required); push shells out to git CLI
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 # this feature is used for production builds or when a dev server is not specified
 custom-protocol = ["tauri/custom-protocol"]

@@ -1,8 +1,10 @@
+use crate::error::{AppError, AppResult};
+use git2::{ConfigLevel, Repository};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---- types ----
 
@@ -56,6 +58,16 @@ pub enum Resolution {
     None,
     Apply { account: Account },
     Ask { suggested_account_id: Option<String> },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentIdentity {
+    pub is_repo: bool,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub remote_login: Option<String>,
+    pub account_id: Option<String>,
 }
 
 pub struct IdentityStore {
@@ -169,9 +181,79 @@ pub fn resolve(
     }
 }
 
+// ---- git mutations ----
+
+/// Set local `user.name`/`user.email` and (for HTTPS github remotes) embed the
+/// account login in `origin`. Returns `true` when push-auth routing was skipped
+/// because `origin` is missing or not an HTTPS github remote.
+pub fn apply_identity(repo_path: &Path, account: &Account) -> AppResult<bool> {
+    let repo = Repository::discover(repo_path)
+        .map_err(|e| AppError::Msg(format!("not a git repository: {e}")))?;
+
+    {
+        let mut cfg = repo.config().map_err(|e| AppError::Msg(e.to_string()))?;
+        let mut local = cfg
+            .open_level(ConfigLevel::Local)
+            .map_err(|e| AppError::Msg(e.to_string()))?;
+        local
+            .set_str("user.name", &account.name)
+            .map_err(|e| AppError::Msg(e.to_string()))?;
+        local
+            .set_str("user.email", &account.email)
+            .map_err(|e| AppError::Msg(e.to_string()))?;
+    }
+
+    let url = repo
+        .find_remote("origin")
+        .ok()
+        .and_then(|r| r.url().map(String::from));
+    let routing_skipped = match url.as_deref().and_then(|u| rewrite_remote_url(u, &account.login)) {
+        Some(new_url) => {
+            repo.remote_set_url("origin", &new_url)
+                .map_err(|e| AppError::Msg(e.to_string()))?;
+            false
+        }
+        None => true,
+    };
+    Ok(routing_skipped)
+}
+
+/// Read the effective identity + embedded origin login for display. `account_id`
+/// is the mapped account for this repo (passed through unchanged).
+pub fn current_identity(repo_path: &Path, account_id: Option<String>) -> CurrentIdentity {
+    let repo = match Repository::discover(repo_path) {
+        Ok(r) => r,
+        Err(_) => {
+            return CurrentIdentity {
+                is_repo: false,
+                name: None,
+                email: None,
+                remote_login: None,
+                account_id,
+            }
+        }
+    };
+    let cfg = repo.config().ok();
+    let name = cfg.as_ref().and_then(|c| c.get_string("user.name").ok());
+    let email = cfg.as_ref().and_then(|c| c.get_string("user.email").ok());
+    let remote_login = repo
+        .find_remote("origin")
+        .ok()
+        .and_then(|r| r.url().map(String::from))
+        .and_then(|u| remote_login(&u));
+    CurrentIdentity {
+        is_repo: true,
+        name,
+        email,
+        remote_login,
+        account_id,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn rewrites_plain_https_with_git_suffix() {
@@ -291,5 +373,53 @@ mod tests {
         // mapping points to "gone" which no longer exists -> treat as unmapped
         let r = resolve(&accounts, Some("gone"), None, UnmappedBehavior::Ask, Some("alpha"));
         assert!(matches!(r, Resolution::Ask { .. }));
+    }
+
+    #[test]
+    fn apply_identity_sets_config_and_rewrites_origin() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+
+        let account = acct("a1", "octocat");
+        let routing_skipped = apply_identity(dir.path(), &account).unwrap();
+        assert!(!routing_skipped);
+
+        // Re-open and assert local config + remote url.
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let cfg = repo.config().unwrap();
+        assert_eq!(cfg.get_string("user.name").unwrap(), "a1 name");
+        assert_eq!(cfg.get_string("user.email").unwrap(), "a1@example.com");
+        let url = repo.find_remote("origin").unwrap().url().unwrap().to_string();
+        assert_eq!(url, "https://octocat@github.com/acme/widgets.git");
+    }
+
+    #[test]
+    fn apply_identity_skips_routing_for_ssh_origin() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "git@github.com:acme/widgets.git").unwrap();
+
+        let routing_skipped = apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+        assert!(routing_skipped);
+
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let url = repo.find_remote("origin").unwrap().url().unwrap().to_string();
+        assert_eq!(url, "git@github.com:acme/widgets.git"); // unchanged
+    }
+
+    #[test]
+    fn current_identity_reads_back_values() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+
+        let cur = current_identity(dir.path(), Some("a1".to_string()));
+        assert!(cur.is_repo);
+        assert_eq!(cur.name.as_deref(), Some("a1 name"));
+        assert_eq!(cur.email.as_deref(), Some("a1@example.com"));
+        assert_eq!(cur.remote_login.as_deref(), Some("octocat"));
+        assert_eq!(cur.account_id.as_deref(), Some("a1"));
     }
 }
