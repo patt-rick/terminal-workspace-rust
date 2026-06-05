@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useIdentity } from '../../state/identity'
-import type { Account, UnmappedBehavior } from '../../lib/ipc'
+import { ipc, type Account, type UnmappedBehavior } from '../../lib/ipc'
 
 const blank = (): Account => ({
   id: crypto.randomUUID(),
@@ -45,7 +45,6 @@ export function AccountsModal() {
   const onSetGlobal = async (a: Account): Promise<void> => {
     setGlobalMsg(null)
     try {
-      const { ipc } = await import('../../lib/ipc')
       await ipc.identity.applyGlobal(a.id)
       setGlobalMsg(`Global git identity set to ${a.label}.`)
     } catch (e) {
