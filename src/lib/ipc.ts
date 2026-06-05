@@ -199,6 +199,39 @@ export interface ClaudeSession {
   gitBranch: string | null
 }
 
+export interface Account {
+  id: string
+  label: string
+  login: string
+  name: string
+  email: string
+}
+
+export type UnmappedBehavior = 'useDefault' | 'ask'
+
+export interface IdentityConfig {
+  defaultAccountId: string | null
+  unmappedBehavior: UnmappedBehavior
+}
+
+export type IdentityResolution =
+  | { kind: 'none' }
+  | { kind: 'apply'; account: Account }
+  | { kind: 'ask'; suggestedAccountId: string | null }
+
+export interface CurrentIdentity {
+  isRepo: boolean
+  name: string | null
+  email: string | null
+  remoteLogin: string | null
+  accountId: string | null
+}
+
+export interface ApplyResult {
+  current: CurrentIdentity
+  routingSkipped: boolean
+}
+
 /** True when running inside the Tauri webview (false in a plain browser/dev). */
 export const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -322,5 +355,26 @@ export const ipc = {
       invoke<ClaudeSession[]>('claude_sessions_list', { projectId }),
     deleteSession: (projectId: string, sessionId: string) =>
       invoke<void>('claude_session_delete', { projectId, sessionId }),
+  },
+
+  identity: {
+    listAccounts: () => invoke<Account[]>('identity_list_accounts'),
+    getConfig: () => invoke<IdentityConfig>('identity_get_config'),
+    saveAccount: (account: Account) =>
+      invoke<Account[]>('identity_save_account', { account }),
+    removeAccount: (id: string) => invoke<Account[]>('identity_remove_account', { id }),
+    setConfig: (config: IdentityConfig) =>
+      invoke<IdentityConfig>('identity_set_config', {
+        defaultAccountId: config.defaultAccountId,
+        unmappedBehavior: config.unmappedBehavior,
+      }),
+    resolve: (projectId: string) =>
+      invoke<IdentityResolution>('identity_resolve', { projectId }),
+    apply: (projectId: string, accountId: string) =>
+      invoke<ApplyResult>('identity_apply', { projectId, accountId }),
+    current: (projectId: string) =>
+      invoke<CurrentIdentity>('identity_current', { projectId }),
+    applyGlobal: (accountId: string) =>
+      invoke<void>('identity_apply_global', { accountId }),
   },
 }
