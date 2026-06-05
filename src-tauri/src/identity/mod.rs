@@ -191,7 +191,7 @@ pub fn apply_identity(repo_path: &Path, account: &Account) -> AppResult<bool> {
         .map_err(|e| AppError::Msg(format!("not a git repository: {e}")))?;
 
     {
-        let mut cfg = repo.config().map_err(|e| AppError::Msg(e.to_string()))?;
+        let cfg = repo.config().map_err(|e| AppError::Msg(e.to_string()))?;
         let mut local = cfg
             .open_level(ConfigLevel::Local)
             .map_err(|e| AppError::Msg(e.to_string()))?;
@@ -233,9 +233,15 @@ pub fn current_identity(repo_path: &Path, account_id: Option<String>) -> Current
             }
         }
     };
-    let cfg = repo.config().ok();
-    let name = cfg.as_ref().and_then(|c| c.get_string("user.name").ok());
-    let email = cfg.as_ref().and_then(|c| c.get_string("user.email").ok());
+    // Read the LOCAL config level only: apply_identity writes locally, so the
+    // read-back must not fall back to the user's global identity (which would
+    // falsely report an unconfigured repo as configured).
+    let local = repo
+        .config()
+        .ok()
+        .and_then(|c| c.open_level(ConfigLevel::Local).ok());
+    let name = local.as_ref().and_then(|c| c.get_string("user.name").ok());
+    let email = local.as_ref().and_then(|c| c.get_string("user.email").ok());
     let remote_login = repo
         .find_remote("origin")
         .ok()
@@ -421,5 +427,16 @@ mod tests {
         assert_eq!(cur.email.as_deref(), Some("a1@example.com"));
         assert_eq!(cur.remote_login.as_deref(), Some("octocat"));
         assert_eq!(cur.account_id.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn current_identity_reports_non_repo() {
+        let dir = tempdir().unwrap();
+        let cur = current_identity(dir.path(), None);
+        assert!(!cur.is_repo);
+        assert_eq!(cur.name, None);
+        assert_eq!(cur.email, None);
+        assert_eq!(cur.remote_login, None);
+        assert_eq!(cur.account_id, None);
     }
 }
