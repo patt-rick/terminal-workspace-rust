@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ipc, type FileDiff, type GitInfo } from '../../lib/ipc'
+import { ipc, type CurrentIdentity, type FileDiff, type GitInfo } from '../../lib/ipc'
 import { useDiffView } from '../../state/diff'
+import { useIdentity } from '../../state/identity'
 
 const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
+
+const accountLabel = (
+  identity: CurrentIdentity | null,
+  accounts: { id: string; label: string }[]
+): string => {
+  const id = identity?.accountId
+  const matched = id ? accounts.find((a) => a.id === id) : undefined
+  if (matched) return matched.label
+  if (identity?.remoteLogin) return identity.remoteLogin
+  return 'Set account'
+}
 
 const statusDot = (status: string): string => {
   switch (status) {
@@ -39,6 +51,10 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true)
   const [pushing, setPushing] = useState(false)
   const [pushMsg, setPushMsg] = useState<string | null>(null)
+  const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
+  const accounts = useIdentity((s) => s.accounts)
+  const appliedTick = useIdentity((s) => s.appliedTick)
+  const openPicker = useIdentity((s) => s.openPicker)
   const show = useDiffView((s) => s.show)
   const active = useDiffView((s) => s.active)
 
@@ -53,9 +69,15 @@ export function GitPanel({ projectId }: { projectId: string }) {
         setDiffs(d)
       })
       .finally(() => setLoading(false))
+    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
   }, [projectId])
 
   useEffect(refresh, [refresh])
+
+  // Refresh the badge when an account is applied elsewhere (picker / auto-apply).
+  useEffect(() => {
+    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
+  }, [projectId, appliedTick])
 
   const onPush = async (): Promise<void> => {
     if (!info?.branch) return
@@ -93,17 +115,27 @@ export function GitPanel({ projectId }: { projectId: string }) {
           {info.ahead > 0 && <span className="text-success">↑{info.ahead}</span>}
           {info.behind > 0 && <span className="text-warning">↓{info.behind}</span>}
         </div>
-        <button
-          type="button"
-          onClick={refresh}
-          title="Refresh"
-          className="flex h-5 w-5 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="23 4 23 10 17 10" />
-            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => openPicker(projectId, identity?.accountId ?? null)}
+            title="Switch GitHub account for this repo"
+            className="max-w-[8rem] truncate rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground/70 hover:bg-foreground/5"
+          >
+            {accountLabel(identity, accounts)}
+          </button>
+          <button
+            type="button"
+            onClick={refresh}
+            title="Refresh"
+            className="flex h-5 w-5 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {(info.dirty || info.ahead > 0 || !info.hasUpstream) && info.branch && (
