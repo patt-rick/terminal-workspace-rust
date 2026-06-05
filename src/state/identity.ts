@@ -49,7 +49,9 @@ export const useIdentity = create<IdentityState>((set) => ({
 
   removeAccount: async (id) => {
     const accounts = await ipc.identity.removeAccount(id)
-    set({ accounts })
+    // Bump appliedTick so the git-panel badge re-resolves its label (the
+    // removed account may have been the one a repo was mapped to).
+    set((s) => ({ accounts, appliedTick: s.appliedTick + 1 }))
   },
 
   setConfig: async (config) => {

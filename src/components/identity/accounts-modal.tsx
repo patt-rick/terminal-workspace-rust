@@ -27,8 +27,15 @@ export function AccountsModal() {
   const startAdd = (): void => setDraft(blank())
   const startEdit = (a: Account): void => setDraft({ ...a })
 
+  // GitHub logins are letters/digits/hyphens only; reject anything else so it
+  // can't produce a malformed `https://<login>@github.com/...` origin URL.
+  const loginValid = !!draft && /^[A-Za-z0-9-]+$/.test(draft.login.trim())
   const canSave =
-    !!draft && draft.label.trim() && draft.login.trim() && draft.name.trim() && draft.email.trim()
+    !!draft &&
+    !!draft.label.trim() &&
+    loginValid &&
+    !!draft.name.trim() &&
+    !!draft.email.trim()
 
   const onSave = async (): Promise<void> => {
     if (!draft || !canSave) return
@@ -139,6 +146,11 @@ export function AccountsModal() {
                 onChange={(v) => setDraft({ ...draft, login: v })}
                 placeholder="octocat"
               />
+              {draft.login.trim() && !loginValid && (
+                <p className="text-[11px] text-danger">
+                  Login may contain only letters, numbers, and hyphens.
+                </p>
+              )}
               <Field
                 label="Commit name (user.name)"
                 value={draft.name}
