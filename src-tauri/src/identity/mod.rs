@@ -70,6 +70,13 @@ pub struct CurrentIdentity {
     pub account_id: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResult {
+    pub current: CurrentIdentity,
+    pub routing_skipped: bool,
+}
+
 pub struct IdentityStore {
     path: PathBuf,
     inner: Mutex<IdentityData>,
@@ -109,6 +116,91 @@ impl IdentityStore {
             default_account_id: d.default_account_id.clone(),
             unmapped_behavior: d.unmapped_behavior,
         }
+    }
+
+    pub fn save_account(&self, account: Account) -> Vec<Account> {
+        let mut d = self.inner.lock();
+        if let Some(slot) = d.accounts.iter_mut().find(|a| a.id == account.id) {
+            *slot = account;
+        } else {
+            d.accounts.push(account);
+        }
+        self.persist(&d);
+        d.accounts.clone()
+    }
+
+    pub fn remove_account(&self, id: &str) -> Vec<Account> {
+        let mut d = self.inner.lock();
+        d.accounts.retain(|a| a.id != id);
+        d.mapping.retain(|_, v| v != id);
+        if d.default_account_id.as_deref() == Some(id) {
+            d.default_account_id = None;
+        }
+        self.persist(&d);
+        d.accounts.clone()
+    }
+
+    pub fn set_config(
+        &self,
+        default_account_id: Option<String>,
+        unmapped_behavior: UnmappedBehavior,
+    ) -> IdentityConfig {
+        let mut d = self.inner.lock();
+        d.default_account_id = default_account_id;
+        d.unmapped_behavior = unmapped_behavior;
+        self.persist(&d);
+        IdentityConfig {
+            default_account_id: d.default_account_id.clone(),
+            unmapped_behavior: d.unmapped_behavior,
+        }
+    }
+
+    /// Decide what to do for a repo. `owner` is the repo's GitHub owner (if known).
+    pub fn resolve_for(&self, repo_path: &str, owner: Option<&str>) -> Resolution {
+        let d = self.inner.lock();
+        resolve(
+            &d.accounts,
+            d.mapping.get(repo_path).map(|s| s.as_str()),
+            d.default_account_id.as_deref(),
+            d.unmapped_behavior,
+            owner,
+        )
+    }
+
+    /// Apply an account to a repo and remember the mapping.
+    pub fn apply(&self, repo_path: &str, account_id: &str) -> AppResult<ApplyResult> {
+        let account = self
+            .accounts()
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| AppError::Msg("account not found".to_string()))?;
+        let routing_skipped = apply_identity(Path::new(repo_path), &account)?;
+        {
+            let mut d = self.inner.lock();
+            d.mapping.insert(repo_path.to_string(), account_id.to_string());
+            self.persist(&d);
+        }
+        let current = current_identity(Path::new(repo_path), Some(account_id.to_string()));
+        Ok(ApplyResult {
+            current,
+            routing_skipped,
+        })
+    }
+
+    /// Read the current identity for a repo, including its mapped account (if any).
+    pub fn current(&self, repo_path: &str) -> CurrentIdentity {
+        let mapped = self.inner.lock().mapping.get(repo_path).cloned();
+        current_identity(Path::new(repo_path), mapped)
+    }
+
+    /// Set the account as the global git identity (`git config --global`).
+    pub fn apply_global(&self, account_id: &str) -> AppResult<()> {
+        let account = self
+            .accounts()
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| AppError::Msg("account not found".to_string()))?;
+        apply_global(&account)
     }
 }
 
@@ -216,6 +308,28 @@ pub fn apply_identity(repo_path: &Path, account: &Account) -> AppResult<bool> {
         None => true,
     };
     Ok(routing_skipped)
+}
+
+/// Write the account's identity to the global git config. Shelling out to the
+/// git CLI (as the push path does) guarantees `~/.gitconfig` is created on first
+/// use, which `git2`'s global config level does not.
+pub fn apply_global(account: &Account) -> AppResult<()> {
+    use std::process::Command;
+    for (key, val) in [
+        ("user.name", account.name.as_str()),
+        ("user.email", account.email.as_str()),
+    ] {
+        let out = Command::new("git")
+            .args(["config", "--global", key, val])
+            .output()
+            .map_err(|e| AppError::Msg(e.to_string()))?;
+        if !out.status.success() {
+            return Err(AppError::Msg(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Read the effective identity + embedded origin login for display. `account_id`
