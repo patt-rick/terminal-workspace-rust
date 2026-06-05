@@ -5,6 +5,10 @@ use crate::github::{
     self, DeviceFlowStart, DevicePoll, GithubSettings, GithubStore, PullRequestDetail,
     PullRequestSummary, WorkflowRunDetail, WorkflowRunSummary, WorkflowSummary,
 };
+use crate::identity::{
+    Account, ApplyResult, CurrentIdentity, IdentityConfig, IdentityStore, Resolution,
+    UnmappedBehavior,
+};
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::settings::SettingsStore;
 use crate::state::{AppState, Project, StateStore, TerminalRecord};
@@ -589,6 +593,75 @@ pub fn claude_session_delete(
     let root = project_root(&store, &project_id)?;
     let home = home_dir(&app)?;
     crate::claude::delete_session(&home, &root, &session_id)
+}
+
+// ---------- identity (account switcher) ----------
+
+#[tauri::command]
+pub fn identity_list_accounts(ids: State<IdentityStore>) -> Vec<Account> {
+    ids.accounts()
+}
+
+#[tauri::command]
+pub fn identity_get_config(ids: State<IdentityStore>) -> IdentityConfig {
+    ids.config()
+}
+
+#[tauri::command]
+pub fn identity_save_account(ids: State<IdentityStore>, account: Account) -> Vec<Account> {
+    ids.save_account(account)
+}
+
+#[tauri::command]
+pub fn identity_remove_account(ids: State<IdentityStore>, id: String) -> Vec<Account> {
+    ids.remove_account(&id)
+}
+
+#[tauri::command]
+pub fn identity_set_config(
+    ids: State<IdentityStore>,
+    default_account_id: Option<String>,
+    unmapped_behavior: UnmappedBehavior,
+) -> IdentityConfig {
+    ids.set_config(default_account_id, unmapped_behavior)
+}
+
+#[tauri::command]
+pub fn identity_resolve(
+    ids: State<IdentityStore>,
+    store: State<StateStore>,
+    project_id: String,
+) -> AppResult<Resolution> {
+    let root = project_root(&store, &project_id)?;
+    let info = crate::git::get_info(Path::new(&root));
+    let owner = info.github_repo.as_ref().map(|g| g.owner.clone());
+    Ok(ids.resolve_for(&root, owner.as_deref()))
+}
+
+#[tauri::command]
+pub fn identity_apply(
+    ids: State<IdentityStore>,
+    store: State<StateStore>,
+    project_id: String,
+    account_id: String,
+) -> AppResult<ApplyResult> {
+    let root = project_root(&store, &project_id)?;
+    ids.apply(&root, &account_id)
+}
+
+#[tauri::command]
+pub fn identity_current(
+    ids: State<IdentityStore>,
+    store: State<StateStore>,
+    project_id: String,
+) -> AppResult<CurrentIdentity> {
+    let root = project_root(&store, &project_id)?;
+    Ok(ids.current(&root))
+}
+
+#[tauri::command]
+pub fn identity_apply_global(ids: State<IdentityStore>, account_id: String) -> AppResult<()> {
+    ids.apply_global(&account_id)
 }
 
 // ---------- helpers ----------

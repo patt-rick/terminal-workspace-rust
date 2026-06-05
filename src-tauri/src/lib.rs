@@ -93,6 +93,15 @@ pub fn run() {
             commands::github_dispatch_workflow,
             commands::claude_sessions_list,
             commands::claude_session_delete,
+            commands::identity_list_accounts,
+            commands::identity_get_config,
+            commands::identity_save_account,
+            commands::identity_remove_account,
+            commands::identity_set_config,
+            commands::identity_resolve,
+            commands::identity_apply,
+            commands::identity_current,
+            commands::identity_apply_global,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
