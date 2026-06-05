@@ -1,0 +1,131 @@
+import { useSettings } from '../state/settings'
+import { useThemeList } from '../themes/theme-provider'
+
+export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const themes = useThemeList()
+  const themeId = useSettings((s) => s.themeId)
+  const setThemeId = useSettings((s) => s.setThemeId)
+  const editor = useSettings((s) => s.editor)
+  const updateEditor = useSettings((s) => s.updateEditor)
+  const terminal = useSettings((s) => s.terminal)
+  const updateTerminal = useSettings((s) => s.updateTerminal)
+
+  if (!open) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'var(--backdrop)' }}
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[80vh] w-[480px] overflow-auto rounded-xl border border-border bg-overlay p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div className="text-sm font-semibold text-foreground">Settings</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        <Section title="Appearance">
+          <Row label="Theme">
+            <select
+              value={themeId}
+              onChange={(e) => setThemeId(e.target.value)}
+              className="rounded-md border border-border bg-field-background px-2 py-1 text-foreground outline-none focus:border-accent"
+            >
+              {themes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </Row>
+        </Section>
+
+        <Section title="Editor">
+          <Row label="Font size">
+            <input
+              type="number"
+              min={9}
+              max={28}
+              value={editor.fontSize}
+              onChange={(e) => updateEditor({ fontSize: Number(e.target.value) || 13 })}
+              className="w-20 rounded-md border border-border bg-field-background px-2 py-1 text-foreground outline-none focus:border-accent"
+            />
+          </Row>
+          <Row label="Tab size">
+            <input
+              type="number"
+              min={1}
+              max={8}
+              value={editor.tabSize}
+              onChange={(e) => updateEditor({ tabSize: Number(e.target.value) || 2 })}
+              className="w-20 rounded-md border border-border bg-field-background px-2 py-1 text-foreground outline-none focus:border-accent"
+            />
+          </Row>
+          <Row label="Word wrap">
+            <Toggle checked={editor.wordWrap} onChange={(v) => updateEditor({ wordWrap: v })} />
+          </Row>
+          <Row label="Line numbers">
+            <Toggle checked={editor.lineNumbers} onChange={(v) => updateEditor({ lineNumbers: v })} />
+          </Row>
+        </Section>
+
+        <Section title="Terminal">
+          <div className="text-xs text-muted">Startup command — run in every new terminal tab.</div>
+          <textarea
+            value={terminal.startupCommand}
+            onChange={(e) => updateTerminal({ startupCommand: e.target.value })}
+            rows={2}
+            placeholder="e.g. source .venv/bin/activate"
+            className="mt-1 w-full resize-none rounded-md border border-border bg-field-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent"
+          />
+        </Section>
+      </div>
+    </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-5">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{title}</div>
+      <div className="flex flex-col gap-2">{children}</div>
+    </div>
+  )
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-foreground/80">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative h-5 w-9 rounded-full transition-colors ${checked ? 'bg-accent' : 'bg-foreground/20'}`}
+    >
+      <span
+        className={`absolute top-0.5 h-4 w-4 rounded-full bg-background transition-transform ${
+          checked ? 'left-0.5 translate-x-4' : 'left-0.5'
+        }`}
+      />
+    </button>
+  )
+}

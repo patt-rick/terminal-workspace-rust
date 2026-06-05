@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# logs / os
+*.log
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# local dev helper (one-off MSVC build-tools installer)
+src-tauri/install-msvc.cmd
+
+src-tauri/build-msvc.cmd

@@ -1,0 +1,57 @@
+[package]
+name = "terminal-workspace"
+version = "0.1.0"
+description = "Multi-project, multi-terminal workspace IDE built with Tauri and Rust"
+authors = ["patt-rick"]
+edition = "2021"
+rust-version = "1.77"
+
+# The library that main.rs (and, on mobile, the generated entrypoint) calls into.
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# GitHub REST + device flow
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# GitHub token at rest in the OS keychain
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
+
+# PTY (cross-platform, ConPTY on Windows)
+portable-pty = "0.8"
+
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+thiserror = "2"
+parking_lot = "0.12"
+
+# gitignore-aware file listing
+ignore = "0.4"
+
+# git: libgit2 (vendored so no system lib is required); push shells out to git CLI
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+
+[features]
+# this feature is used for production builds or when a dev server is not specified
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

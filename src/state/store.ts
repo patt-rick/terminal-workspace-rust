@@ -1,0 +1,379 @@
+import { create } from 'zustand'
+import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
+import { useSettings } from './settings'
+
+export const SIDEBAR_MIN_WIDTH = 180
+export const SIDEBAR_MAX_WIDTH = 480
+export const SIDEBAR_DEFAULT_WIDTH = 256
+
+export const RIGHT_SIDEBAR_MIN_WIDTH = 220
+export const RIGHT_SIDEBAR_MAX_WIDTH = 560
+export const RIGHT_SIDEBAR_DEFAULT_WIDTH = 280
+
+const SIDEBAR_WIDTH_KEY = 'tw:sidebar-width'
+const SIDEBAR_COLLAPSED_KEY = 'tw:sidebar-collapsed'
+const RIGHT_SIDEBAR_WIDTH_KEY = 'tw:right-sidebar-width'
+const RIGHT_SIDEBAR_COLLAPSED_KEY = 'tw:right-sidebar-collapsed'
+
+const clampSidebar = (w: number): number =>
+  Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(w)))
+
+const clampRightSidebar = (w: number): number =>
+  Math.min(RIGHT_SIDEBAR_MAX_WIDTH, Math.max(RIGHT_SIDEBAR_MIN_WIDTH, Math.round(w)))
+
+const readNum = (key: string, fallback: number): number => {
+  try {
+    const raw = localStorage.getItem(key)
+    const n = raw ? Number.parseInt(raw, 10) : NaN
+    return Number.isFinite(n) ? n : fallback
+  } catch {
+    return fallback
+  }
+}
+
+interface WorkspaceState {
+  projects: Project[]
+  selectedProjectId: string | null
+  activeTerminalByProject: Record<string, string | null>
+  expandedProjectIds: Record<string, boolean>
+  unreadByTerminal: Record<string, number>
+  titleByTerminal: Record<string, string>
+  busyByTerminal: Record<string, boolean>
+  sessionIdByTerminal: Record<string, string>
+  pendingTerminalClose: { projectId: string; terminalId: string } | null
+
+  sidebarWidth: number
+  sidebarCollapsed: boolean
+  rightSidebarWidth: number
+  rightSidebarCollapsed: boolean
+
+  setProjects: (
+    projects: Project[],
+    opts?: { selectedProjectId?: string | null; activeTerminalByProject?: Record<string, string | null> }
+  ) => void
+  upsertProject: (project: Project) => void
+  removeProject: (id: string) => void
+  selectProject: (id: string | null) => void
+  renameProject: (id: string, name: string) => void
+
+  addTerminal: (projectId: string, terminal: TerminalRecord) => void
+  removeTerminalLocal: (projectId: string, terminalId: string) => void
+  renameTerminalLocal: (projectId: string, terminalId: string, name: string) => void
+  setActiveTerminal: (projectId: string, terminalId: string | null) => void
+
+  toggleProjectExpanded: (id: string) => void
+  setProjectExpanded: (id: string, expanded: boolean) => void
+
+  bumpUnread: (terminalId: string) => void
+  clearUnread: (terminalId: string) => void
+  setTerminalTitle: (terminalId: string, title: string) => void
+  setTerminalBusy: (terminalId: string, busy: boolean) => void
+  setTerminalSession: (terminalId: string, sessionId: string) => void
+
+  requestTerminalClose: (projectId: string, terminalId: string) => void
+  clearPendingTerminalClose: () => void
+
+  setSidebarWidth: (w: number) => void
+  setRightSidebarWidth: (w: number) => void
+  toggleSidebar: () => void
+  toggleRightSidebar: () => void
+}
+
+export const useWorkspace = create<WorkspaceState>((set) => ({
+  projects: [],
+  selectedProjectId: null,
+  activeTerminalByProject: {},
+  expandedProjectIds: {},
+  unreadByTerminal: {},
+  titleByTerminal: {},
+  busyByTerminal: {},
+  sessionIdByTerminal: {},
+  pendingTerminalClose: null,
+
+  sidebarWidth: clampSidebar(readNum(SIDEBAR_WIDTH_KEY, SIDEBAR_DEFAULT_WIDTH)),
+  sidebarCollapsed: (() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })(),
+  rightSidebarWidth: clampRightSidebar(readNum(RIGHT_SIDEBAR_WIDTH_KEY, RIGHT_SIDEBAR_DEFAULT_WIDTH)),
+  rightSidebarCollapsed: (() => {
+    try {
+      return localStorage.getItem(RIGHT_SIDEBAR_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })(),
+
+  setProjects: (projects, opts) =>
+    set((state) => {
+      const activeNext: Record<string, string | null> = {
+        ...state.activeTerminalByProject,
+        ...(opts?.activeTerminalByProject ?? {}),
+      }
+      const expandedNext = { ...state.expandedProjectIds }
+      for (const p of projects) {
+        if (!(p.id in activeNext)) activeNext[p.id] = p.terminals[0]?.id ?? null
+        const aid = activeNext[p.id]
+        if (aid && !p.terminals.find((t) => t.id === aid)) {
+          activeNext[p.id] = p.terminals[0]?.id ?? null
+        }
+      }
+      const selectedId =
+        opts?.selectedProjectId ?? state.selectedProjectId ?? projects[0]?.id ?? null
+      if (selectedId && !(selectedId in expandedNext)) expandedNext[selectedId] = true
+      return {
+        projects,
+        selectedProjectId: selectedId,
+        activeTerminalByProject: activeNext,
+        expandedProjectIds: expandedNext,
+      }
+    }),
+
+  upsertProject: (project) =>
+    set((state) => {
+      const idx = state.projects.findIndex((p) => p.id === project.id)
+      const next = [...state.projects]
+      if (idx >= 0) next[idx] = project
+      else next.push(project)
+      return {
+        projects: next,
+        selectedProjectId: state.selectedProjectId ?? project.id,
+        expandedProjectIds: {
+          ...state.expandedProjectIds,
+          [project.id]: state.expandedProjectIds[project.id] ?? true,
+        },
+      }
+    }),
+
+  removeProject: (id) =>
+    set((state) => {
+      const projects = state.projects.filter((p) => p.id !== id)
+      const { [id]: _a, ...activeRest } = state.activeTerminalByProject
+      const { [id]: _e, ...expandedRest } = state.expandedProjectIds
+      return {
+        projects,
+        selectedProjectId:
+          state.selectedProjectId === id ? projects[0]?.id ?? null : state.selectedProjectId,
+        activeTerminalByProject: activeRest,
+        expandedProjectIds: expandedRest,
+      }
+    }),
+
+  selectProject: (id) =>
+    set((state) => ({
+      selectedProjectId: id,
+      expandedProjectIds: id ? { ...state.expandedProjectIds, [id]: true } : state.expandedProjectIds,
+    })),
+
+  renameProject: (id, name) =>
+    set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)) })),
+
+  addTerminal: (projectId, terminal) => {
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, terminals: [...p.terminals, terminal] } : p
+      ),
+      activeTerminalByProject: { ...state.activeTerminalByProject, [projectId]: terminal.id },
+    }))
+    void ipc.projects.setActive(projectId, terminal.id)
+  },
+
+  removeTerminalLocal: (projectId, terminalId) => {
+    let nextActive: string | null | undefined
+    set((state) => {
+      const project = state.projects.find((p) => p.id === projectId)
+      const remaining = project ? project.terminals.filter((t) => t.id !== terminalId) : []
+      const wasActive = state.activeTerminalByProject[projectId] === terminalId
+      const { [terminalId]: _u, ...unreadRest } = state.unreadByTerminal
+      const { [terminalId]: _t, ...titleRest } = state.titleByTerminal
+      const { [terminalId]: _b, ...busyRest } = state.busyByTerminal
+      const { [terminalId]: _s, ...sessionRest } = state.sessionIdByTerminal
+      nextActive = wasActive ? remaining[0]?.id ?? null : state.activeTerminalByProject[projectId]
+      return {
+        projects: state.projects.map((p) =>
+          p.id === projectId ? { ...p, terminals: remaining } : p
+        ),
+        activeTerminalByProject: { ...state.activeTerminalByProject, [projectId]: nextActive ?? null },
+        unreadByTerminal: unreadRest,
+        titleByTerminal: titleRest,
+        busyByTerminal: busyRest,
+        sessionIdByTerminal: sessionRest,
+      }
+    })
+    if (nextActive !== undefined) void ipc.projects.setActive(projectId, nextActive)
+  },
+
+  renameTerminalLocal: (projectId, terminalId, name) =>
+    set((state) => {
+      const { [terminalId]: _t, ...titleRest } = state.titleByTerminal
+      return {
+        projects: state.projects.map((p) =>
+          p.id === projectId
+            ? { ...p, terminals: p.terminals.map((t) => (t.id === terminalId ? { ...t, name } : t)) }
+            : p
+        ),
+        titleByTerminal: titleRest,
+      }
+    }),
+
+  setActiveTerminal: (projectId, terminalId) => {
+    set((state) => ({
+      activeTerminalByProject: { ...state.activeTerminalByProject, [projectId]: terminalId },
+    }))
+    void ipc.projects.setActive(projectId, terminalId)
+  },
+
+  toggleProjectExpanded: (id) =>
+    set((state) => ({
+      expandedProjectIds: { ...state.expandedProjectIds, [id]: !state.expandedProjectIds[id] },
+    })),
+
+  setProjectExpanded: (id, expanded) =>
+    set((state) => ({ expandedProjectIds: { ...state.expandedProjectIds, [id]: expanded } })),
+
+  bumpUnread: (terminalId) =>
+    set((state) => ({
+      unreadByTerminal: {
+        ...state.unreadByTerminal,
+        [terminalId]: (state.unreadByTerminal[terminalId] ?? 0) + 1,
+      },
+    })),
+
+  clearUnread: (terminalId) =>
+    set((state) => {
+      if (!state.unreadByTerminal[terminalId]) return state
+      const { [terminalId]: _o, ...rest } = state.unreadByTerminal
+      return { unreadByTerminal: rest }
+    }),
+
+  setTerminalTitle: (terminalId, title) =>
+    set((state) => {
+      const trimmed = title.trim()
+      const current = state.titleByTerminal[terminalId]
+      if (!trimmed) {
+        if (!current) return state
+        const { [terminalId]: _o, ...rest } = state.titleByTerminal
+        return { titleByTerminal: rest }
+      }
+      if (current === trimmed) return state
+      return { titleByTerminal: { ...state.titleByTerminal, [terminalId]: trimmed } }
+    }),
+
+  setTerminalBusy: (terminalId, busy) =>
+    set((state) => {
+      const current = !!state.busyByTerminal[terminalId]
+      if (current === busy) return state
+      if (!busy) {
+        const { [terminalId]: _o, ...rest } = state.busyByTerminal
+        return { busyByTerminal: rest }
+      }
+      return { busyByTerminal: { ...state.busyByTerminal, [terminalId]: true } }
+    }),
+
+  setTerminalSession: (terminalId, sessionId) =>
+    set((state) => ({
+      sessionIdByTerminal: { ...state.sessionIdByTerminal, [terminalId]: sessionId },
+    })),
+
+  requestTerminalClose: (projectId, terminalId) =>
+    set({ pendingTerminalClose: { projectId, terminalId } }),
+  clearPendingTerminalClose: () => set({ pendingTerminalClose: null }),
+
+  setSidebarWidth: (w) => {
+    const next = clampSidebar(w)
+    set({ sidebarWidth: next })
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next))
+    } catch {
+      // ignore
+    }
+  },
+
+  setRightSidebarWidth: (w) => {
+    const next = clampRightSidebar(w)
+    set({ rightSidebarWidth: next })
+    try {
+      localStorage.setItem(RIGHT_SIDEBAR_WIDTH_KEY, String(next))
+    } catch {
+      // ignore
+    }
+  },
+
+  toggleSidebar: () =>
+    set((state) => {
+      const next = !state.sidebarCollapsed
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
+      } catch {
+        // ignore
+      }
+      return { sidebarCollapsed: next }
+    }),
+
+  toggleRightSidebar: () =>
+    set((state) => {
+      const next = !state.rightSidebarCollapsed
+      try {
+        localStorage.setItem(RIGHT_SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
+      } catch {
+        // ignore
+      }
+      return { rightSidebarCollapsed: next }
+    }),
+}))
+
+/**
+ * If `command` is a bare `claude` invocation with no resume/continue/session-id
+ * flag, append `--session-id <uuid>` and return that id so the app can track
+ * which session the terminal is running. Otherwise returns the command unchanged.
+ */
+export function linkClaudeSession(command: string): {
+  startupCommand: string
+  sessionId?: string
+} {
+  const trimmed = command.trim()
+  if (!/^claude(\s|$)/.test(trimmed)) return { startupCommand: command }
+  if (/(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(trimmed)) {
+    return { startupCommand: command }
+  }
+  const sessionId = crypto.randomUUID()
+  return { startupCommand: `${trimmed} --session-id ${sessionId}`, sessionId }
+}
+
+/** Create a terminal for a project, applying the configured startup command. */
+export async function createProjectTerminal(
+  projectId: string,
+  opts?: { cwd?: string; name?: string; startupCommand?: string; claudeSessionId?: string }
+): Promise<TerminalRecord | null> {
+  let startupCommand =
+    opts?.startupCommand ?? (useSettings.getState().terminal.startupCommand.trim() || undefined)
+  let claudeSessionId = opts?.claudeSessionId
+  // Fresh `claude` launches get a generated session id so they show as "open"
+  // in the Sessions panel. Resume launches already carry an explicit id.
+  if (startupCommand && !claudeSessionId) {
+    const linked = linkClaudeSession(startupCommand)
+    startupCommand = linked.startupCommand
+    claudeSessionId = linked.sessionId
+  }
+  const record = await ipc.terminals.create({
+    projectId,
+    startupCommand,
+    cwd: opts?.cwd,
+    name: opts?.name,
+  })
+  if (record) {
+    useWorkspace.getState().addTerminal(projectId, record)
+    if (claudeSessionId) useWorkspace.getState().setTerminalSession(record.id, claudeSessionId)
+  }
+  return record
+}
+
+/** Kill a terminal and drop its record everywhere. */
+export async function closeProjectTerminal(projectId: string, terminalId: string): Promise<void> {
+  await ipc.terminals.kill(terminalId)
+  void ipc.terminals.removeRecord(projectId, terminalId)
+  useWorkspace.getState().removeTerminalLocal(projectId, terminalId)
+}

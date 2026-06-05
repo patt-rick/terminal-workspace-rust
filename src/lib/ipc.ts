@@ -1,0 +1,326 @@
+import { invoke, Channel } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+
+// ---- Types mirroring the Rust serde models (camelCase) ----
+
+export interface TerminalRecord {
+  id: string
+  name: string
+  shell: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  path: string
+  color: string
+  terminals: TerminalRecord[]
+}
+
+export interface AppStateSnapshot {
+  version: number
+  selectedProjectId: string | null
+  projects: Project[]
+  activeTerminalByProject: Record<string, string | null>
+}
+
+export interface CreateTerminalOptions {
+  projectId: string
+  name?: string
+  shell?: string
+  /** working dir relative to the project root; defaults to the project root */
+  cwd?: string
+  startupCommand?: string
+  cols?: number
+  rows?: number
+}
+
+export interface ExitPayload {
+  id: string
+  exitCode: number
+}
+
+export interface FsEntry {
+  name: string
+  /** path relative to the project root, forward slashes; "" = root */
+  path: string
+  isDirectory: boolean
+  ignored: boolean
+}
+
+export type ReadResult =
+  | { kind: 'text'; content: string }
+  | { kind: 'binary' }
+  | { kind: 'tooLarge' }
+
+export interface GitInfo {
+  isRepo: boolean
+  branch: string | null
+  githubRepo: { owner: string; repo: string } | null
+  hasUpstream: boolean
+  ahead: number
+  behind: number
+  dirty: boolean
+  defaultBranch: string | null
+}
+
+export interface DiffLine {
+  /** ' ' context, '+' added, '-' removed */
+  origin: string
+  content: string
+  oldLineno: number | null
+  newLineno: number | null
+}
+
+export interface DiffHunk {
+  header: string
+  lines: DiffLine[]
+}
+
+export interface FileDiff {
+  path: string
+  oldPath: string | null
+  status: string
+  binary: boolean
+  hunks: DiffHunk[]
+}
+
+export interface GithubSettings {
+  clientId: string | null
+  hasToken: boolean
+  login: string | null
+  source: string | null
+}
+
+export interface DeviceFlowStart {
+  deviceCode: string
+  userCode: string
+  verificationUri: string
+  verificationUriComplete: string
+  expiresIn: number
+  interval: number
+}
+
+export type DevicePoll =
+  | { status: 'pending' }
+  | { status: 'slow-down'; interval: number }
+  | { status: 'authorized'; login: string | null }
+  | { status: 'error'; error: string; description?: string }
+
+export interface PullRequestSummary {
+  number: number
+  title: string
+  state: string
+  draft: boolean
+  merged: boolean
+  url: string
+  author: string
+  authorAvatar: string | null
+  headRef: string
+  baseRef: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PrComment {
+  id: number
+  author: string
+  avatar: string | null
+  body: string
+  createdAt: string
+}
+
+export interface PullRequestDetail extends PullRequestSummary {
+  body: string
+  mergeable: boolean | null
+  additions: number
+  deletions: number
+  changedFiles: number
+  comments: PrComment[]
+}
+
+export interface WorkflowSummary {
+  id: number
+  name: string
+  path: string
+  state: string
+}
+
+export interface WorkflowRunSummary {
+  id: number
+  name: string | null
+  workflowId: number
+  branch: string | null
+  event: string
+  status: string
+  conclusion: string | null
+  url: string
+  runNumber: number
+  actor: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface JobStep {
+  name: string
+  status: string
+  conclusion: string | null
+  number: number
+}
+
+export interface WorkflowJob {
+  id: number
+  name: string
+  status: string
+  conclusion: string | null
+  url: string
+  steps: JobStep[]
+}
+
+export interface WorkflowRunDetail extends WorkflowRunSummary {
+  jobs: WorkflowJob[]
+}
+
+export interface CreatePullRequestInput {
+  projectId: string
+  title: string
+  body: string
+  head: string
+  base: string
+  draft: boolean
+}
+
+export interface ClaudeSession {
+  sessionId: string
+  title: string
+  messageCount: number
+  /** epoch millis (file mtime) */
+  lastActive: number
+  gitBranch: string | null
+}
+
+/** True when running inside the Tauri webview (false in a plain browser/dev). */
+export const isTauri =
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+export const ipc = {
+  app: {
+    version: () => invoke<string>('app_version'),
+  },
+
+  settings: {
+    get: () => invoke<unknown | null>('settings_get'),
+    set: (value: unknown) => invoke<void>('settings_set', { value }),
+  },
+
+  projects: {
+    snapshot: () => invoke<AppStateSnapshot>('projects_snapshot'),
+    add: (path: string) => invoke<Project>('projects_add', { path }),
+    remove: (id: string) => invoke<void>('projects_remove', { id }),
+    rename: (id: string, name: string) => invoke<void>('projects_rename', { id, name }),
+    select: (id: string | null) => invoke<void>('projects_select', { id }),
+    setActive: (projectId: string, terminalId: string | null) =>
+      invoke<void>('projects_set_active', { projectId, terminalId }),
+    openInTerminal: (id: string) => invoke<void>('project_open_in_terminal', { id }),
+    openInFileManager: (id: string) => invoke<void>('project_open_in_file_manager', { id }),
+  },
+
+  terminals: {
+    create: (opts: CreateTerminalOptions) =>
+      invoke<TerminalRecord | null>('terminal_create', { args: opts }),
+    /**
+     * Subscribe to a terminal's output. `onData` first receives the replay
+     * snapshot string, then each live chunk as it arrives over the channel.
+     * Returns the snapshot promise (already delivered via onData too) so callers
+     * can sequence the first write deterministically.
+     */
+    attach: (id: string, onData: (chunk: string) => void): Promise<string> => {
+      const channel = new Channel<string>()
+      channel.onmessage = onData
+      return invoke<string>('terminal_attach', { id, channel })
+    },
+    write: (id: string, data: string) => invoke<void>('terminal_write', { id, data }),
+    resize: (id: string, cols: number, rows: number) =>
+      invoke<void>('terminal_resize', { id, cols, rows }),
+    kill: (id: string) => invoke<void>('terminal_kill', { id }),
+    rename: (projectId: string, id: string, name: string) =>
+      invoke<void>('terminal_rename', { projectId, id, name }),
+    removeRecord: (projectId: string, id: string) =>
+      invoke<void>('terminal_remove_record', { projectId, id }),
+    onExit: (cb: (p: ExitPayload) => void): Promise<UnlistenFn> =>
+      listen<ExitPayload>('terminals:exit', (e) => cb(e.payload)),
+  },
+
+  fs: {
+    list: (projectId: string, rel: string) =>
+      invoke<FsEntry[]>('fs_list', { projectId, rel }),
+    readText: (projectId: string, rel: string) =>
+      invoke<ReadResult>('fs_read_text', { projectId, rel }),
+    writeText: (projectId: string, rel: string, content: string) =>
+      invoke<void>('fs_write_text', { projectId, rel, content }),
+    createFile: (projectId: string, rel: string) =>
+      invoke<void>('fs_create_file', { projectId, rel }),
+    createFolder: (projectId: string, rel: string) =>
+      invoke<void>('fs_create_folder', { projectId, rel }),
+    rename: (projectId: string, from: string, to: string) =>
+      invoke<void>('fs_rename', { projectId, from, to }),
+    remove: (projectId: string, rel: string) =>
+      invoke<void>('fs_remove', { projectId, rel }),
+    duplicate: (projectId: string, rel: string) =>
+      invoke<string>('fs_duplicate', { projectId, rel }),
+    saveTempPaste: (bytes: number[], ext: string) =>
+      invoke<string>('fs_save_temp_paste', { bytes, ext }),
+  },
+
+  git: {
+    info: (projectId: string) => invoke<GitInfo>('git_info', { projectId }),
+    push: (projectId: string, branch: string) =>
+      invoke<{ ok: boolean; output: string }>('git_push', { projectId, branch }),
+    diff: (projectId: string) => invoke<FileDiff[]>('git_diff', { projectId }),
+  },
+
+  github: {
+    getSettings: () => invoke<GithubSettings>('github_get_settings'),
+    setClientId: (clientId: string | null) =>
+      invoke<GithubSettings>('github_set_client_id', { clientId }),
+    setToken: (token: string) => invoke<GithubSettings>('github_set_token', { token }),
+    signOut: () => invoke<GithubSettings>('github_sign_out'),
+    deviceStart: () => invoke<DeviceFlowStart>('github_device_start'),
+    devicePoll: (deviceCode: string) => invoke<DevicePoll>('github_device_poll', { deviceCode }),
+    listPullRequests: (projectId: string, state: 'open' | 'closed' | 'all' = 'open') =>
+      invoke<PullRequestSummary[]>('github_list_prs', { projectId, state }),
+    getPullRequest: (projectId: string, number: number) =>
+      invoke<PullRequestDetail>('github_get_pr', { projectId, number }),
+    createPullRequest: (input: CreatePullRequestInput) =>
+      invoke<PullRequestSummary>('github_create_pr', { input }),
+    mergePullRequest: (projectId: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
+      invoke<void>('github_merge_pr', { projectId, number, method }),
+    commentPullRequest: (projectId: string, number: number, body: string) =>
+      invoke<void>('github_comment_pr', { projectId, number, body }),
+    listWorkflows: (projectId: string) =>
+      invoke<WorkflowSummary[]>('github_list_workflows', { projectId }),
+    listRuns: (projectId: string, branch?: string) =>
+      invoke<WorkflowRunSummary[]>('github_list_runs', { projectId, branch }),
+    getRun: (projectId: string, runId: number) =>
+      invoke<WorkflowRunDetail>('github_get_run', { projectId, runId }),
+    rerunRun: (projectId: string, runId: number) =>
+      invoke<void>('github_rerun_run', { projectId, runId }),
+    rerunFailed: (projectId: string, runId: number) =>
+      invoke<void>('github_rerun_failed', { projectId, runId }),
+    cancelRun: (projectId: string, runId: number) =>
+      invoke<void>('github_cancel_run', { projectId, runId }),
+    dispatchWorkflow: (
+      projectId: string,
+      workflowId: number,
+      gitRef: string,
+      inputs?: Record<string, string>
+    ) => invoke<void>('github_dispatch_workflow', { projectId, workflowId, gitRef, inputs }),
+  },
+
+  claude: {
+    listSessions: (projectId: string) =>
+      invoke<ClaudeSession[]>('claude_sessions_list', { projectId }),
+    deleteSession: (projectId: string, sessionId: string) =>
+      invoke<void>('claude_session_delete', { projectId, sessionId }),
+  },
+}
