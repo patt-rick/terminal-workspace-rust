@@ -113,6 +113,17 @@ pub fn rewrite_remote_url(url: &str, login: &str) -> Option<String> {
     Some(format!("https://{login}@github.com/{path}"))
 }
 
+/// Return the login embedded as userinfo in an HTTPS remote URL, if any.
+pub fn remote_login(url: &str) -> Option<String> {
+    let rest = url.trim().strip_prefix("https://")?;
+    let (userinfo, _tail) = rest.split_once('@')?;
+    if userinfo.is_empty() {
+        None
+    } else {
+        Some(userinfo.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +165,23 @@ mod tests {
     #[test]
     fn skips_when_no_path() {
         assert_eq!(rewrite_remote_url("https://github.com/", "octocat"), None);
+    }
+
+    #[test]
+    fn reads_embedded_login() {
+        assert_eq!(
+            remote_login("https://octocat@github.com/acme/widgets.git"),
+            Some("octocat".to_string())
+        );
+    }
+
+    #[test]
+    fn no_login_when_absent() {
+        assert_eq!(remote_login("https://github.com/acme/widgets.git"), None);
+    }
+
+    #[test]
+    fn no_login_for_ssh() {
+        assert_eq!(remote_login("git@github.com:acme/widgets.git"), None);
     }
 }
