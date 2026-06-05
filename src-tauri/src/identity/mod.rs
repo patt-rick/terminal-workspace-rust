@@ -50,6 +50,14 @@ pub struct IdentityConfig {
     pub unmapped_behavior: UnmappedBehavior,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Resolution {
+    None,
+    Apply { account: Account },
+    Ask { suggested_account_id: Option<String> },
+}
+
 pub struct IdentityStore {
     path: PathBuf,
     inner: Mutex<IdentityData>,
@@ -124,6 +132,43 @@ pub fn remote_login(url: &str) -> Option<String> {
     }
 }
 
+/// Decide what to do for a repo, given the configured accounts/mapping/behavior
+/// and the repo's GitHub owner (used only to pre-suggest an account in Ask mode).
+pub fn resolve(
+    accounts: &[Account],
+    mapped_id: Option<&str>,
+    default_account_id: Option<&str>,
+    behavior: UnmappedBehavior,
+    owner: Option<&str>,
+) -> Resolution {
+    if accounts.is_empty() {
+        return Resolution::None;
+    }
+    if let Some(id) = mapped_id {
+        if let Some(acc) = accounts.iter().find(|a| a.id == id) {
+            return Resolution::Apply { account: acc.clone() };
+        }
+    }
+    // Unmapped, or mapped to an account that was deleted.
+    let suggested = owner.and_then(|o| {
+        accounts
+            .iter()
+            .find(|a| a.login.eq_ignore_ascii_case(o))
+            .map(|a| a.id.clone())
+    });
+    match behavior {
+        UnmappedBehavior::UseDefault => {
+            if let Some(did) = default_account_id {
+                if let Some(acc) = accounts.iter().find(|a| a.id == did) {
+                    return Resolution::Apply { account: acc.clone() };
+                }
+            }
+            Resolution::Ask { suggested_account_id: suggested }
+        }
+        UnmappedBehavior::Ask => Resolution::Ask { suggested_account_id: suggested },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +228,68 @@ mod tests {
     #[test]
     fn no_login_for_ssh() {
         assert_eq!(remote_login("git@github.com:acme/widgets.git"), None);
+    }
+
+    fn acct(id: &str, login: &str) -> Account {
+        Account {
+            id: id.to_string(),
+            label: id.to_string(),
+            login: login.to_string(),
+            name: format!("{id} name"),
+            email: format!("{id}@example.com"),
+        }
+    }
+
+    #[test]
+    fn resolve_none_when_no_accounts() {
+        let r = resolve(&[], None, None, UnmappedBehavior::Ask, Some("acme"));
+        assert!(matches!(r, Resolution::None));
+    }
+
+    #[test]
+    fn resolve_apply_when_mapped() {
+        let accounts = vec![acct("a1", "alpha"), acct("a2", "beta")];
+        let r = resolve(&accounts, Some("a2"), None, UnmappedBehavior::Ask, None);
+        match r {
+            Resolution::Apply { account } => assert_eq!(account.id, "a2"),
+            _ => panic!("expected Apply"),
+        }
+    }
+
+    #[test]
+    fn resolve_ask_when_unmapped_and_behavior_ask() {
+        let accounts = vec![acct("a1", "alpha")];
+        let r = resolve(&accounts, None, None, UnmappedBehavior::Ask, Some("alpha"));
+        match r {
+            Resolution::Ask { suggested_account_id } => {
+                assert_eq!(suggested_account_id, Some("a1".to_string()))
+            }
+            _ => panic!("expected Ask with suggestion"),
+        }
+    }
+
+    #[test]
+    fn resolve_apply_default_when_use_default() {
+        let accounts = vec![acct("a1", "alpha"), acct("a2", "beta")];
+        let r = resolve(&accounts, None, Some("a1"), UnmappedBehavior::UseDefault, Some("zzz"));
+        match r {
+            Resolution::Apply { account } => assert_eq!(account.id, "a1"),
+            _ => panic!("expected Apply default"),
+        }
+    }
+
+    #[test]
+    fn resolve_ask_when_use_default_but_no_default_set() {
+        let accounts = vec![acct("a1", "alpha")];
+        let r = resolve(&accounts, None, None, UnmappedBehavior::UseDefault, None);
+        assert!(matches!(r, Resolution::Ask { suggested_account_id: None }));
+    }
+
+    #[test]
+    fn resolve_ask_when_mapped_account_deleted() {
+        let accounts = vec![acct("a1", "alpha")];
+        // mapping points to "gone" which no longer exists -> treat as unmapped
+        let r = resolve(&accounts, Some("gone"), None, UnmappedBehavior::Ask, Some("alpha"));
+        assert!(matches!(r, Resolution::Ask { .. }));
     }
 }
