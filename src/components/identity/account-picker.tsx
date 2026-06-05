@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { ipc } from '../../lib/ipc'
 import { useIdentity } from '../../state/identity'
+import { useUi } from '../../state/ui'
 
 export function AccountPicker() {
   const projectId = useIdentity((s) => s.pickerProjectId)
   const suggestedId = useIdentity((s) => s.pickerSuggestedId)
   const accounts = useIdentity((s) => s.accounts)
   const close = useIdentity((s) => s.closePicker)
-  const openAccountsModal = useIdentity((s) => s.openAccountsModal)
+  const openSettings = useUi((s) => s.openSettings)
   const markApplied = useIdentity((s) => s.markApplied)
 
   const [selected, setSelected] = useState<string | null>(null)
@@ -50,7 +51,7 @@ export function AccountPicker() {
               type="button"
               onClick={() => {
                 close()
-                openAccountsModal()
+                openSettings()
               }}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90"
             >
@@ -82,7 +83,7 @@ export function AccountPicker() {
                 type="button"
                 onClick={() => {
                   close()
-                  openAccountsModal()
+                  openSettings()
                 }}
                 className="text-xs text-link hover:underline"
               >

@@ -1,5 +1,6 @@
 import { useSettings } from '../state/settings'
 import { useThemeList } from '../themes/theme-provider'
+import { AccountsSection } from './identity/accounts-section'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const themes = useThemeList()
@@ -91,6 +92,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             className="mt-1 w-full resize-none rounded-md border border-border bg-field-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent"
           />
         </Section>
+
+        <AccountsSection />
       </div>
     </div>
   )

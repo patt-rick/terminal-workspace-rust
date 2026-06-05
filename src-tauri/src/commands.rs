@@ -6,8 +6,8 @@ use crate::github::{
     PullRequestSummary, WorkflowRunDetail, WorkflowRunSummary, WorkflowSummary,
 };
 use crate::identity::{
-    Account, ApplyResult, CurrentIdentity, IdentityConfig, IdentityStore, Resolution,
-    UnmappedBehavior,
+    Account, ApplyResult, CurrentIdentity, DetectedGhAccount, IdentityConfig, IdentityStore,
+    Resolution, UnmappedBehavior,
 };
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::settings::SettingsStore;
@@ -662,6 +662,11 @@ pub fn identity_current(
 #[tauri::command]
 pub fn identity_apply_global(ids: State<IdentityStore>, account_id: String) -> AppResult<()> {
     ids.apply_global(&account_id)
+}
+
+#[tauri::command]
+pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
+    crate::identity::detect_gh_accounts()
 }
 
 // ---------- helpers ----------

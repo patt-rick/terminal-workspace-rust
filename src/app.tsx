@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { ProjectList } from './components/sidebar/project-list'
 import { TerminalPane } from './components/workspace/terminal-pane'
 import { FileViewer } from './components/workspace/file-viewer'
@@ -12,6 +12,7 @@ import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
 import { useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
+import { useUi } from './state/ui'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
 import type { Project, TerminalRecord } from './lib/ipc'
@@ -41,7 +42,10 @@ export default function App() {
   const pendingTerminalClose = useWorkspace((s) => s.pendingTerminalClose)
   const clearPendingTerminalClose = useWorkspace((s) => s.clearPendingTerminalClose)
 
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpen = useUi((s) => s.settingsOpen)
+  const openSettings = useUi((s) => s.openSettings)
+  const closeSettings = useUi((s) => s.closeSettings)
+  const toggleSettings = useUi((s) => s.toggleSettings)
 
   const activeTerminalId = selectedProject
     ? activeTerminalByProject[selectedProject.id] ?? null
@@ -80,7 +84,7 @@ export default function App() {
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.key === ',') {
         e.preventDefault()
-        setSettingsOpen((v) => !v)
+        toggleSettings()
         return
       }
       if (e.key === 'b' || e.key === 'B') {
@@ -156,7 +160,7 @@ export default function App() {
           <div className="flex-1" />
           <button
             type="button"
-            onClick={() => setSettingsOpen(true)}
+            onClick={openSettings}
             title={`Settings (${kbd(',')})`}
             className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
           >
@@ -269,7 +273,7 @@ export default function App() {
         onCancel={clearPendingTerminalClose}
       />
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal open={settingsOpen} onClose={closeSettings} />
       <IdentityAutoApply />
     </div>
   )

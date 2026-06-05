@@ -8,8 +8,7 @@ interface IdentityState {
   /** bumped after any apply so dependent views (the badge) refresh */
   appliedTick: number
 
-  // UI flags (shared across the picker, badge, and modal)
-  accountsModalOpen: boolean
+  // UI flags (shared across the picker and badge)
   pickerProjectId: string | null
   pickerSuggestedId: string | null
 
@@ -19,8 +18,6 @@ interface IdentityState {
   setConfig: (config: IdentityConfig) => Promise<void>
   markApplied: () => void
 
-  openAccountsModal: () => void
-  closeAccountsModal: () => void
   openPicker: (projectId: string, suggestedId?: string | null) => void
   closePicker: () => void
 }
@@ -30,7 +27,6 @@ export const useIdentity = create<IdentityState>((set) => ({
   config: { defaultAccountId: null, unmappedBehavior: 'ask' },
   loaded: false,
   appliedTick: 0,
-  accountsModalOpen: false,
   pickerProjectId: null,
   pickerSuggestedId: null,
 
@@ -61,8 +57,6 @@ export const useIdentity = create<IdentityState>((set) => ({
 
   markApplied: () => set((s) => ({ appliedTick: s.appliedTick + 1 })),
 
-  openAccountsModal: () => set({ accountsModalOpen: true }),
-  closeAccountsModal: () => set({ accountsModalOpen: false }),
   openPicker: (projectId, suggestedId = null) =>
     set({ pickerProjectId: projectId, pickerSuggestedId: suggestedId }),
   closePicker: () => set({ pickerProjectId: null, pickerSuggestedId: null }),

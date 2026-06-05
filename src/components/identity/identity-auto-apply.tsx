@@ -3,14 +3,13 @@ import { ipc } from '../../lib/ipc'
 import { useWorkspace } from '../../state/store'
 import { useIdentity } from '../../state/identity'
 import { AccountPicker } from './account-picker'
-import { AccountsModal } from './accounts-modal'
 
 /**
  * Watches the selected project and applies the right GitHub account on open:
  * - `apply`  -> set identity silently
  * - `ask`    -> open the picker (suggestion preselected)
  * - `none`   -> do nothing (no accounts, or not a git repo)
- * Also hosts the picker and accounts modal so any component can open them.
+ * Also hosts the picker so any component can open it.
  */
 export function IdentityAutoApply() {
   const selectedProjectId = useWorkspace((s) => s.selectedProjectId)
@@ -46,10 +45,5 @@ export function IdentityAutoApply() {
     }
   }, [selectedProjectId, openPicker, markApplied])
 
-  return (
-    <>
-      <AccountPicker />
-      <AccountsModal />
-    </>
-  )
+  return <AccountPicker />
 }

@@ -77,6 +77,18 @@ pub struct ApplyResult {
     pub routing_skipped: bool,
 }
 
+/// A GitHub account detected from the local `gh` CLI. `name`/`email` are filled
+/// only for the active account (best-effort via `gh api user`); `gh` does not
+/// expose them for inactive accounts without switching, which we avoid.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedGhAccount {
+    pub login: String,
+    pub active: bool,
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
 pub struct IdentityStore {
     path: PathBuf,
     inner: Mutex<IdentityData>,
@@ -368,6 +380,81 @@ pub fn current_identity(repo_path: &Path, account_id: Option<String>) -> Current
         remote_login,
         account_id,
     }
+}
+
+/// Detect github.com accounts the user is already logged into via the `gh` CLI.
+/// Parses `gh auth status` for logins + the active flag, and enriches the active
+/// account with name/email from `gh api user` (best effort). Returns an error
+/// only when the `gh` binary is missing.
+pub fn detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
+    use std::process::Command;
+    let out = Command::new("gh")
+        .args(["auth", "status"])
+        .output()
+        .map_err(|_| AppError::Msg("GitHub CLI (gh) not found on PATH".to_string()))?;
+    // gh prints the status to stderr on some versions, stdout on others.
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let mut accounts: Vec<DetectedGhAccount> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        // e.g. "✓ Logged in to github.com account patt-rick (keyring)"
+        if l.contains("Logged in") {
+            if let Some(idx) = l.find("account ") {
+                let login = l[idx + "account ".len()..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !login.is_empty() {
+                    accounts.push(DetectedGhAccount {
+                        login,
+                        active: false,
+                        name: None,
+                        email: None,
+                    });
+                }
+            }
+        } else if l.contains("Active account: true") {
+            if let Some(last) = accounts.last_mut() {
+                last.active = true;
+            }
+        }
+    }
+
+    // Enrich the active account with name/email (gh api uses the active account).
+    if accounts.iter().any(|a| a.active) {
+        if let Ok(u) = Command::new("gh")
+            .args(["api", "user", "--jq", "{login: .login, name: .name, email: .email}"])
+            .output()
+        {
+            if u.status.success() {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&u.stdout) {
+                    let api_login = v.get("login").and_then(|x| x.as_str());
+                    if let Some(active) = accounts.iter_mut().find(|a| a.active) {
+                        if api_login == Some(active.login.as_str()) {
+                            active.name = v
+                                .get("name")
+                                .and_then(|x| x.as_str())
+                                .map(str::to_string)
+                                .filter(|s| !s.is_empty());
+                            active.email = v
+                                .get("email")
+                                .and_then(|x| x.as_str())
+                                .map(str::to_string)
+                                .filter(|s| !s.is_empty());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(accounts)
 }
 
 #[cfg(test)]

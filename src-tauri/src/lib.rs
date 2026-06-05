@@ -102,6 +102,7 @@ pub fn run() {
             commands::identity_apply,
             commands::identity_current,
             commands::identity_apply_global,
+            commands::identity_detect_gh_accounts,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

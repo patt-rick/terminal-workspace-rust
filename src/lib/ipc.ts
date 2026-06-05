@@ -232,6 +232,13 @@ export interface ApplyResult {
   routingSkipped: boolean
 }
 
+export interface DetectedGhAccount {
+  login: string
+  active: boolean
+  name: string | null
+  email: string | null
+}
+
 /** True when running inside the Tauri webview (false in a plain browser/dev). */
 export const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -376,5 +383,7 @@ export const ipc = {
       invoke<CurrentIdentity>('identity_current', { projectId }),
     applyGlobal: (accountId: string) =>
       invoke<void>('identity_apply_global', { accountId }),
+    detectGhAccounts: () =>
+      invoke<DetectedGhAccount[]>('identity_detect_gh_accounts'),
   },
 }
