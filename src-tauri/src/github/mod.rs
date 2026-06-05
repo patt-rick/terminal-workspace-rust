@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-const KEYRING_SERVICE: &str = "com.ddnazzah.terminalworkspace";
+const KEYRING_SERVICE: &str = "com.patt-rick.terminalworkspace";
 const KEYRING_USER: &str = "github-token";
 const API: &str = "https://api.github.com";
 const DEFAULT_SCOPE: &str = "repo workflow read:user";
