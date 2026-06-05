@@ -162,11 +162,10 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
       }
     }),
 
-  selectProject: (id) =>
-    set((state) => ({
-      selectedProjectId: id,
-      expandedProjectIds: id ? { ...state.expandedProjectIds, [id]: true } : state.expandedProjectIds,
-    })),
+  // Selection does NOT control expansion: the project row toggles expansion
+  // itself, and new/loaded projects are expanded by upsertProject/setProjects.
+  // (Forcing expanded=true here defeated the row's collapse toggle.)
+  selectProject: (id) => set({ selectedProjectId: id }),
 
   renameProject: (id, name) =>
     set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)) })),

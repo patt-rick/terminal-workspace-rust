@@ -20,3 +20,4 @@ Thumbs.db
 src-tauri/install-msvc.cmd
 
 src-tauri/build-msvc.cmd
+claude.md
