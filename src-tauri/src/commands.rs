@@ -634,6 +634,12 @@ pub fn identity_resolve(
 ) -> AppResult<Resolution> {
     let root = project_root(&store, &project_id)?;
     let info = crate::git::get_info(Path::new(&root));
+    // Git identity only applies to git repos. For a non-repo project there is
+    // nothing to resolve (and applying would fail in `Repository::discover`), so
+    // never prompt the picker for it.
+    if !info.is_repo {
+        return Ok(Resolution::None);
+    }
     let owner = info.github_repo.as_ref().map(|g| g.owner.clone());
     Ok(ids.resolve_for(&root, owner.as_deref()))
 }

@@ -13,10 +13,14 @@ export function AccountPicker() {
 
   const [selected, setSelected] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Reset selection whenever the picker (re)opens.
   useEffect(() => {
-    if (projectId) setSelected(suggestedId ?? accounts[0]?.id ?? null)
+    if (projectId) {
+      setSelected(suggestedId ?? accounts[0]?.id ?? null)
+      setError(null)
+    }
   }, [projectId, suggestedId, accounts])
 
   if (!projectId) return null
@@ -24,10 +28,14 @@ export function AccountPicker() {
   const onApply = async (): Promise<void> => {
     if (!selected) return
     setBusy(true)
+    setError(null)
     try {
       await ipc.identity.apply(projectId, selected)
       markApplied()
       close()
+    } catch (e) {
+      // Surface the failure instead of silently leaving the popup open.
+      setError(String(e))
     } finally {
       setBusy(false)
     }
@@ -107,6 +115,7 @@ export function AccountPicker() {
                 </button>
               </div>
             </div>
+            {error && <p className="mt-2 text-[11px] text-danger">{error}</p>}
           </>
         )}
       </div>
