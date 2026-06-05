@@ -91,3 +91,68 @@ impl IdentityStore {
         }
     }
 }
+
+// ---- pure helpers ----
+
+/// Rewrite an `origin` URL so `login` is embedded as userinfo. Returns `None`
+/// when the URL is not an HTTPS `github.com` remote (SSH, other host, or no
+/// path), in which case push-auth routing is skipped and only the commit
+/// identity is changed.
+pub fn rewrite_remote_url(url: &str, login: &str) -> Option<String> {
+    let rest = url.trim().strip_prefix("https://")?;
+    // Drop any existing `userinfo@`. Repo owners/names cannot contain '@', so
+    // the only '@' in a GitHub HTTPS URL is the userinfo separator.
+    let after_userinfo = match rest.split_once('@') {
+        Some((_userinfo, tail)) => tail,
+        None => rest,
+    };
+    let path = after_userinfo.strip_prefix("github.com/")?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(format!("https://{login}@github.com/{path}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_plain_https_with_git_suffix() {
+        assert_eq!(
+            rewrite_remote_url("https://github.com/acme/widgets.git", "octocat"),
+            Some("https://octocat@github.com/acme/widgets.git".to_string())
+        );
+    }
+
+    #[test]
+    fn rewrites_https_without_git_suffix() {
+        assert_eq!(
+            rewrite_remote_url("https://github.com/acme/widgets", "octocat"),
+            Some("https://octocat@github.com/acme/widgets".to_string())
+        );
+    }
+
+    #[test]
+    fn replaces_existing_userinfo() {
+        assert_eq!(
+            rewrite_remote_url("https://olduser@github.com/acme/widgets.git", "octocat"),
+            Some("https://octocat@github.com/acme/widgets.git".to_string())
+        );
+    }
+
+    #[test]
+    fn skips_ssh_remote() {
+        assert_eq!(rewrite_remote_url("git@github.com:acme/widgets.git", "octocat"), None);
+    }
+
+    #[test]
+    fn skips_non_github_https() {
+        assert_eq!(rewrite_remote_url("https://gitlab.com/acme/widgets.git", "octocat"), None);
+    }
+
+    #[test]
+    fn skips_when_no_path() {
+        assert_eq!(rewrite_remote_url("https://github.com/", "octocat"), None);
+    }
+}
