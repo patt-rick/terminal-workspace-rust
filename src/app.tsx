@@ -6,6 +6,7 @@ import { RightSidebar } from './components/right-sidebar/right-sidebar'
 import { DiffViewer } from './components/diff/diff-viewer'
 import { ConfirmDialog } from './components/confirm-dialog'
 import { SettingsModal } from './components/settings-modal'
+import { IdentityAutoApply } from './components/identity/identity-auto-apply'
 import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
@@ -269,6 +270,7 @@ export default function App() {
       />
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <IdentityAutoApply />
     </div>
   )
 }
