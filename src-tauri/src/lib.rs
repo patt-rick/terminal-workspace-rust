@@ -10,11 +10,13 @@ mod error;
 mod fs;
 mod git;
 mod github;
+mod identity;
 mod pty;
 mod settings;
 mod state;
 
 use github::GithubStore;
+use identity::IdentityStore;
 use pty::PtyManager;
 use settings::SettingsStore;
 use state::StateStore;
@@ -36,6 +38,7 @@ pub fn run() {
             app.manage(StateStore::load(data_dir.join("state.json")));
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
             app.manage(GithubStore::new(data_dir.join("github.json")));
+            app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(PtyManager::new());
             Ok(())
         })
