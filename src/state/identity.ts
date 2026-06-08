@@ -15,6 +15,8 @@ interface IdentityState {
   load: () => Promise<void>
   saveAccount: (account: Account) => Promise<void>
   removeAccount: (id: string) => Promise<void>
+  /** Import accounts already logged in via the `gh` CLI; returns the new logins. */
+  importGhAccounts: () => Promise<{ added: string[]; total: number }>
   setConfig: (config: IdentityConfig) => Promise<void>
   markApplied: () => void
 
@@ -22,7 +24,7 @@ interface IdentityState {
   closePicker: () => void
 }
 
-export const useIdentity = create<IdentityState>((set) => ({
+export const useIdentity = create<IdentityState>((set, get) => ({
   accounts: [],
   config: { defaultAccountId: null, unmappedBehavior: 'ask' },
   loaded: false,
@@ -48,6 +50,22 @@ export const useIdentity = create<IdentityState>((set) => ({
     // Bump appliedTick so the git-panel badge re-resolves its label (the
     // removed account may have been the one a repo was mapped to).
     set((s) => ({ accounts, appliedTick: s.appliedTick + 1 }))
+  },
+
+  importGhAccounts: async () => {
+    const detected = await ipc.identity.detectGhAccounts()
+    const existing = new Set(get().accounts.map((a) => a.login.toLowerCase()))
+    const toAdd = detected.filter((d) => !existing.has(d.login.toLowerCase()))
+    for (const d of toAdd) {
+      await get().saveAccount({
+        id: crypto.randomUUID(),
+        label: d.login,
+        login: d.login,
+        name: d.name?.trim() || d.login,
+        email: d.email?.trim() || `${d.login}@users.noreply.github.com`,
+      })
+    }
+    return { added: toAdd.map((d) => d.login), total: detected.length }
   },
 
   setConfig: async (config) => {

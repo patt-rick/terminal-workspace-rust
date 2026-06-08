@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ipc, type Account, type UnmappedBehavior } from '../../lib/ipc'
+import { addAccountViaGhAuth } from '../../lib/add-account'
 import { useIdentity } from '../../state/identity'
 
 const blank = (): Account => ({
@@ -23,6 +24,7 @@ export function AccountsSection() {
   const load = useIdentity((s) => s.load)
   const saveAccount = useIdentity((s) => s.saveAccount)
   const removeAccount = useIdentity((s) => s.removeAccount)
+  const importGhAccounts = useIdentity((s) => s.importGhAccounts)
   const setConfig = useIdentity((s) => s.setConfig)
 
   const [draft, setDraft] = useState<Account | null>(null)
@@ -73,32 +75,29 @@ export function AccountsSection() {
     setGhMsg(null)
     setGhBusy(true)
     try {
-      const detected = await ipc.identity.detectGhAccounts()
-      const existing = new Set(accounts.map((a) => a.login.toLowerCase()))
-      const toAdd = detected.filter((d) => !existing.has(d.login.toLowerCase()))
-      if (toAdd.length === 0) {
-        setGhMsg(detected.length === 0 ? 'No gh accounts found.' : 'All gh accounts already added.')
+      const { added, total } = await importGhAccounts()
+      if (added.length === 0) {
+        setGhMsg(total === 0 ? 'No gh accounts found.' : 'All gh accounts already added.')
         return
       }
-      for (const d of toAdd) {
-        await saveAccount({
-          id: crypto.randomUUID(),
-          label: d.login,
-          login: d.login,
-          name: d.name?.trim() || d.login,
-          email: d.email?.trim() || `${d.login}@users.noreply.github.com`,
-        })
-      }
       setGhMsg(
-        `Added ${toAdd.length} account${toAdd.length > 1 ? 's' : ''} from gh: ${toAdd
-          .map((d) => d.login)
-          .join(', ')}. Review the email fields below.`
+        `Added ${added.length} account${added.length > 1 ? 's' : ''} from gh: ${added.join(
+          ', '
+        )}. Review the email fields below.`
       )
     } catch (e) {
       setGhMsg(String(e))
     } finally {
       setGhBusy(false)
     }
+  }
+
+  // Authenticate a brand-new account via the real `gh auth login` flow in a
+  // terminal; the account is imported automatically when that terminal exits.
+  const onAddViaGh = async (): Promise<void> => {
+    setGhMsg(null)
+    const err = await addAccountViaGhAuth()
+    if (err) setGhMsg(err)
   }
 
   const setBehavior = (b: UnmappedBehavior): void => {
@@ -220,13 +219,24 @@ export function AccountsSection() {
           </div>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={startAdd}
-          className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-foreground/5"
-        >
-          + Add account
-        </button>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void onAddViaGh()}
+            title="Run `gh auth login` in a terminal, then import the account"
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90"
+          >
+            + Add account
+          </button>
+          <button
+            type="button"
+            onClick={startAdd}
+            title="Enter the account details manually"
+            className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-foreground/5"
+          >
+            Add manually
+          </button>
+        </div>
       )}
 
       {/* unmapped-repo behavior */}
