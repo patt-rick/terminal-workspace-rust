@@ -3,10 +3,13 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { GithubAuth } from './github-auth'
 import {
   ipc,
+  type CurrentIdentity,
   type GithubSettings,
   type PullRequestSummary,
   type WorkflowRunSummary,
 } from '../../lib/ipc'
+import { useIdentity } from '../../state/identity'
+import { useUi } from '../../state/ui'
 
 type Section = 'prs' | 'actions'
 
@@ -22,11 +25,22 @@ export function GithubPanel({ projectId }: { projectId: string }) {
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div className="px-3 py-3 text-xs text-muted">Loading…</div>
-  if (!settings) return <div className="px-3 py-3 text-xs text-muted">GitHub unavailable</div>
-  if (!settings.hasToken) return <GithubAuth settings={settings} onChange={setSettings} />
-
-  return <Authed projectId={projectId} settings={settings} onChangeSettings={setSettings} />
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1">
+        {loading ? (
+          <div className="px-3 py-3 text-xs text-muted">Loading…</div>
+        ) : !settings ? (
+          <div className="px-3 py-3 text-xs text-muted">GitHub unavailable</div>
+        ) : !settings.hasToken ? (
+          <GithubAuth settings={settings} onChange={setSettings} />
+        ) : (
+          <Authed projectId={projectId} settings={settings} onChangeSettings={setSettings} />
+        )}
+      </div>
+      <PushAccountSection projectId={projectId} />
+    </div>
+  )
 }
 
 function Authed({
@@ -64,6 +78,82 @@ function Authed({
       <div className="min-h-0 flex-1 overflow-auto">
         {section === 'prs' ? <PrList projectId={projectId} /> : <RunList projectId={projectId} />}
       </div>
+    </div>
+  )
+}
+
+function PushAccountSection({ projectId }: { projectId: string }) {
+  const accounts = useIdentity((s) => s.accounts)
+  const loaded = useIdentity((s) => s.loaded)
+  const load = useIdentity((s) => s.load)
+  const appliedTick = useIdentity((s) => s.appliedTick)
+  const openPicker = useIdentity((s) => s.openPicker)
+  const openSettings = useUi((s) => s.openSettings)
+  const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
+
+  useEffect(() => {
+    if (!loaded) void load()
+  }, [loaded, load])
+
+  useEffect(() => {
+    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
+  }, [projectId, appliedTick])
+
+  if (!identity?.isRepo) return null
+
+  const account = identity.accountId
+    ? accounts.find((a) => a.id === identity.accountId)
+    : undefined
+  const login = account?.login ?? identity.remoteLogin
+
+  let routing: { text: string; cls: string }
+  if (!identity.remoteLogin) {
+    routing = { text: 'Push routing not set (SSH or no origin)', cls: 'text-warning' }
+  } else if (login && identity.remoteLogin.toLowerCase() !== login.toLowerCase()) {
+    routing = { text: `origin pushes as @${identity.remoteLogin}`, cls: 'text-warning' }
+  } else {
+    routing = { text: `Pushes as @${identity.remoteLogin}`, cls: 'text-muted' }
+  }
+
+  return (
+    <div className="flex-shrink-0 border-t border-border px-3 py-2">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+        Push account
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm text-foreground/90">
+            {account ? (
+              <>
+                {account.label} <span className="text-muted">@{account.login}</span>
+              </>
+            ) : (
+              <span className="text-muted">No account set</span>
+            )}
+          </div>
+          {identity.name && (
+            <div className="truncate text-xs text-muted">
+              {identity.name}
+              {identity.email ? ` <${identity.email}>` : ''}
+            </div>
+          )}
+          <div className={`truncate text-xs ${routing.cls}`}>{routing.text}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => openPicker(projectId, identity.accountId)}
+          className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5"
+        >
+          Change
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={openSettings}
+        className="mt-1 text-xs text-link hover:underline"
+      >
+        Manage accounts…
+      </button>
     </div>
   )
 }
