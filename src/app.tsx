@@ -95,10 +95,21 @@ export default function App() {
         return
       }
       if (!selectedProject) return
-      if (e.key === 't') {
+      const key = e.key.toLowerCase()
+      const newClaude = (startupCommand: string): void => {
+        useWorkspace.getState().setProjectExpanded(selectedProject.id, true)
+        void createProjectTerminal(selectedProject.id, { name: 'Claude Code', startupCommand })
+      }
+      if (key === 't' && e.shiftKey) {
+        e.preventDefault()
+        newClaude('claude')
+      } else if (key === 'd' && e.shiftKey) {
+        e.preventDefault()
+        newClaude('claude --dangerously-skip-permissions')
+      } else if (key === 't') {
         e.preventDefault()
         void createProjectTerminal(selectedProject.id)
-      } else if (e.key === 'w' && activeTerminalId) {
+      } else if (key === 'w' && activeTerminalId) {
         e.preventDefault()
         requestTerminalClose(selectedProject.id, activeTerminalId)
       }
