@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { save } from '@tauri-apps/plugin-dialog'
 import { useSettings } from '../state/settings'
+import { useUpdater } from '../state/updater'
 import { useActiveTheme, useThemeList } from '../themes/theme-provider'
 import { parseThemeJson } from '../themes/validate'
 import { ipc, isTauri } from '../lib/ipc'
@@ -203,8 +204,50 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </Section>
 
         <AccountsSection />
+
+        <UpdatesSection />
       </div>
     </div>
+  )
+}
+
+function UpdatesSection() {
+  const [version, setVersion] = useState<string | null>(null)
+  const status = useUpdater((s) => s.status)
+  const error = useUpdater((s) => s.error)
+  const runCheck = useUpdater((s) => s.check)
+
+  useEffect(() => {
+    if (isTauri) ipc.app.version().then(setVersion).catch(() => {})
+  }, [])
+
+  const checking = status === 'checking'
+
+  return (
+    <Section title="Updates">
+      <Row label="Current version">
+        <span className="text-foreground/60">{version ?? '—'}</span>
+      </Row>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void runCheck(true)}
+          disabled={checking}
+          className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5 disabled:opacity-50"
+        >
+          {checking ? 'Checking…' : 'Check for updates'}
+        </button>
+        {status === 'upToDate' && (
+          <span className="text-xs text-muted">You're on the latest version.</span>
+        )}
+        {status === 'available' && (
+          <span className="text-xs text-muted">Update available.</span>
+        )}
+        {status === 'error' && error && (
+          <span className="text-xs text-danger">{error}</span>
+        )}
+      </div>
+    </Section>
   )
 }
 

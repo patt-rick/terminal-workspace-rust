@@ -52,6 +52,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Updater signing (required for auto-update) ---
+          # minisign keypair from `pnpm tauri signer generate`. The public key
+          # lives in tauri.conf.json (plugins.updater.pubkey); the private key
+          # and its password are repo secrets. tauri-action uses these to sign
+          # each installer and to emit the `latest.json` update manifest.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # --- Code signing / notarization (optional) ---
           # Fill these in via repo secrets to ship installers that don't trip
           # SmartScreen / Gatekeeper. Leave unset for unsigned local-use builds.

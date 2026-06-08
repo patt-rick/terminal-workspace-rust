@@ -1,7 +1,7 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
     "productName": "Terminal Workspace",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "identifier": "com.patt-rick.terminalworkspace",
     "build": {
         "beforeDevCommand": "pnpm dev",
@@ -31,11 +31,20 @@
     "bundle": {
         "active": true,
         "targets": "all",
+        "createUpdaterArtifacts": true,
         "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
         "windows": {
             "nsis": {
                 "installerIcon": "icons/icon.ico"
             }
+        }
+    },
+    "plugins": {
+        "updater": {
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4Q0VFMURENjNERjNGNzgKUldSNFA5OWozZUhPU0o1Z3RZa0c0QU9UemdYWEl0bWMzNCtkU1dxTUg1UDFGaE8zWmJyaEl3alQK",
+            "endpoints": [
+                "https://github.com/patt-rick/terminal-workspace-rust/releases/latest/download/latest.json"
+            ]
         }
     }
 }
