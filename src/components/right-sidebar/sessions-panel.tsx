@@ -50,10 +50,17 @@ export function SessionsPanel({ projectId }: { projectId: string }) {
   // A finished session's title/count may have changed; refresh when a terminal exits.
   useEffect(() => {
     let un: UnlistenFn | undefined
+    let cancelled = false
     void ipc.terminals.onExit(() => refresh()).then((f) => {
-      un = f
+      // If we unmounted before the listener registered, drop it immediately —
+      // otherwise it leaks and keeps firing full session scans on every exit.
+      if (cancelled) f()
+      else un = f
     })
-    return () => un?.()
+    return () => {
+      cancelled = true
+      un?.()
+    }
   }, [refresh])
 
   const onOpen = (s: ClaudeSession): void => {

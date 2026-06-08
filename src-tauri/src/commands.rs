@@ -186,9 +186,17 @@ pub fn terminal_remove_record(store: State<StateStore>, project_id: String, id: 
 // ---------- filesystem ----------
 
 #[tauri::command]
-pub fn fs_list(store: State<StateStore>, project_id: String, rel: String) -> AppResult<Vec<FsEntry>> {
+pub async fn fs_list(
+    store: State<'_, StateStore>,
+    project_id: String,
+    rel: String,
+) -> AppResult<Vec<FsEntry>> {
+    // The gitignore walk + dir read is blocking I/O; run it off the main thread
+    // so a large directory can't freeze the UI.
     let root = project_root(&store, &project_id)?;
-    crate::fs::list(Path::new(&root), &rel)
+    tauri::async_runtime::spawn_blocking(move || crate::fs::list(Path::new(&root), &rel))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?
 }
 
 #[tauri::command]
@@ -258,22 +266,34 @@ pub struct PushResult {
 }
 
 #[tauri::command]
-pub fn git_info(store: State<StateStore>, project_id: String) -> AppResult<GitInfo> {
+pub async fn git_info(store: State<'_, StateStore>, project_id: String) -> AppResult<GitInfo> {
     let root = project_root(&store, &project_id)?;
-    Ok(crate::git::get_info(Path::new(&root)))
+    tauri::async_runtime::spawn_blocking(move || crate::git::get_info(Path::new(&root)))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))
 }
 
 #[tauri::command]
-pub fn git_push(store: State<StateStore>, project_id: String, branch: String) -> AppResult<PushResult> {
+pub async fn git_push(
+    store: State<'_, StateStore>,
+    project_id: String,
+    branch: String,
+) -> AppResult<PushResult> {
     let root = project_root(&store, &project_id)?;
-    let (ok, output) = crate::git::push(Path::new(&root), &branch);
+    let (ok, output) = tauri::async_runtime::spawn_blocking(move || {
+        crate::git::push(Path::new(&root), &branch)
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?;
     Ok(PushResult { ok, output })
 }
 
 #[tauri::command]
-pub fn git_diff(store: State<StateStore>, project_id: String) -> AppResult<Vec<FileDiff>> {
+pub async fn git_diff(store: State<'_, StateStore>, project_id: String) -> AppResult<Vec<FileDiff>> {
     let root = project_root(&store, &project_id)?;
-    crate::git::diff(Path::new(&root)).map_err(AppError::Msg)
+    tauri::async_runtime::spawn_blocking(move || crate::git::diff(Path::new(&root)).map_err(AppError::Msg))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))?
 }
 
 // ---------- github ----------
@@ -578,14 +598,18 @@ fn home_dir(app: &AppHandle) -> AppResult<std::path::PathBuf> {
 }
 
 #[tauri::command]
-pub fn claude_sessions_list(
+pub async fn claude_sessions_list(
     app: AppHandle,
-    store: State<StateStore>,
+    store: State<'_, StateStore>,
     project_id: String,
 ) -> AppResult<Vec<crate::claude::SessionSummary>> {
+    // Reading and parsing every session transcript (can be hundreds of MB) is
+    // heavy blocking work; keep it off the main thread so the UI stays live.
     let root = project_root(&store, &project_id)?;
     let home = home_dir(&app)?;
-    Ok(crate::claude::list_sessions(&home, &root))
+    tauri::async_runtime::spawn_blocking(move || crate::claude::list_sessions(&home, &root))
+        .await
+        .map_err(|e| AppError::Msg(e.to_string()))
 }
 
 #[tauri::command]

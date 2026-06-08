@@ -3,7 +3,8 @@
 //! summarize them so the UI can list and resume past sessions.
 
 use crate::error::{AppError, AppResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,8 +63,27 @@ fn paths_equal(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-fn extract_user_text(v: &Value) -> Option<String> {
-    let content = v.get("message")?.get("content")?;
+/// One transcript line, parsed shallowly: every field we need is a small scalar,
+/// and `message` is kept as a raw slice so a multi-megabyte assistant body is
+/// never materialized into a `Value` tree (only the first user message is).
+#[derive(Deserialize)]
+struct Row<'a> {
+    #[serde(rename = "type", default)]
+    ty: Option<String>,
+    #[serde(rename = "aiTitle", default)]
+    ai_title: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(rename = "gitBranch", default)]
+    git_branch: Option<String>,
+    #[serde(borrow, default)]
+    message: Option<&'a RawValue>,
+}
+
+/// Pull the first text out of a `message` object (content is either a string or
+/// an array of content blocks).
+fn extract_user_text(message: &Value) -> Option<String> {
+    let content = message.get("content")?;
     let text = if let Some(s) = content.as_str() {
         s.to_string()
     } else if let Some(arr) = content.as_array() {
@@ -107,19 +127,23 @@ fn parse_content(content: &str, session_id: &str, project_root: &str) -> Parsed 
         if line.is_empty() {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
+        let Ok(row) = serde_json::from_str::<Row>(line) else {
             continue;
         };
-        match v.get("type").and_then(|t| t.as_str()) {
+        match row.ty.as_deref() {
             Some("ai-title") => {
-                if let Some(t) = v.get("aiTitle").and_then(|t| t.as_str()) {
-                    ai_title = Some(t.to_string()); // keep the latest
+                if let Some(t) = row.ai_title {
+                    ai_title = Some(t); // keep the latest
                 }
             }
             Some("user") => {
                 message_count += 1;
                 if first_user.is_none() {
-                    first_user = extract_user_text(&v);
+                    if let Some(raw) = row.message {
+                        if let Ok(msg) = serde_json::from_str::<Value>(raw.get()) {
+                            first_user = extract_user_text(&msg);
+                        }
+                    }
                 }
             }
             Some("assistant") => {
@@ -128,15 +152,15 @@ fn parse_content(content: &str, session_id: &str, project_root: &str) -> Parsed 
             _ => {}
         }
         if !saw_cwd {
-            if let Some(c) = v.get("cwd").and_then(|c| c.as_str()) {
+            if let Some(c) = row.cwd {
                 saw_cwd = true;
-                cwd_ok = paths_equal(c, project_root);
+                cwd_ok = paths_equal(&c, project_root);
             }
         }
         if git_branch.is_none() {
-            if let Some(b) = v.get("gitBranch").and_then(|b| b.as_str()) {
+            if let Some(b) = row.git_branch {
                 if !b.is_empty() {
-                    git_branch = Some(b.to_string());
+                    git_branch = Some(b);
                 }
             }
         }

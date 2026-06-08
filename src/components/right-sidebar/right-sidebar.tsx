@@ -9,7 +9,16 @@ type Tab = 'files' | 'git' | 'github' | 'sessions'
 
 export function RightSidebar({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<Tab>('files')
+  // Panels are mounted on first visit and then kept mounted (hidden when
+  // inactive) so switching tabs never re-runs their data fetch — that re-fetch
+  // is what froze the app for projects with many files/sessions.
+  const [visited, setVisited] = useState<Set<Tab>>(() => new Set<Tab>(['files']))
   const width = useWorkspace((s) => s.rightSidebarWidth)
+
+  const select = (t: Tab): void => {
+    setTab(t)
+    setVisited((v) => (v.has(t) ? v : new Set(v).add(t)))
+  }
 
   return (
     <aside
@@ -17,27 +26,47 @@ export function RightSidebar({ projectId }: { projectId: string }) {
       className="flex flex-shrink-0 flex-col border-l border-border bg-surface"
     >
       <div className="flex h-11 flex-shrink-0 border-b border-border">
-        <TabButton active={tab === 'files'} onClick={() => setTab('files')}>
+        <TabButton active={tab === 'files'} onClick={() => select('files')}>
           Files
         </TabButton>
-        <TabButton active={tab === 'git'} onClick={() => setTab('git')}>
+        <TabButton active={tab === 'git'} onClick={() => select('git')}>
           Git
         </TabButton>
-        <TabButton active={tab === 'github'} onClick={() => setTab('github')}>
+        <TabButton active={tab === 'github'} onClick={() => select('github')}>
           GitHub
         </TabButton>
-        <TabButton active={tab === 'sessions'} onClick={() => setTab('sessions')}>
+        <TabButton active={tab === 'sessions'} onClick={() => select('sessions')}>
           Sessions
         </TabButton>
       </div>
       <div className="min-h-0 flex-1">
-        {tab === 'files' && <FileTree projectId={projectId} />}
-        {tab === 'git' && <GitPanel projectId={projectId} />}
-        {tab === 'github' && <GithubPanel projectId={projectId} />}
-        {tab === 'sessions' && <SessionsPanel projectId={projectId} />}
+        {visited.has('files') && (
+          <Panel active={tab === 'files'}>
+            <FileTree projectId={projectId} />
+          </Panel>
+        )}
+        {visited.has('git') && (
+          <Panel active={tab === 'git'}>
+            <GitPanel projectId={projectId} />
+          </Panel>
+        )}
+        {visited.has('github') && (
+          <Panel active={tab === 'github'}>
+            <GithubPanel projectId={projectId} />
+          </Panel>
+        )}
+        {visited.has('sessions') && (
+          <Panel active={tab === 'sessions'}>
+            <SessionsPanel projectId={projectId} />
+          </Panel>
+        )}
       </div>
     </aside>
   )
+}
+
+function Panel({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return <div className={active ? 'h-full' : 'hidden'}>{children}</div>
 }
 
 function TabButton({
