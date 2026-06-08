@@ -4,6 +4,7 @@ import { tokyoNight } from './presets/tokyo-night'
 import { catppuccinMocha } from './presets/catppuccin-mocha'
 import { oneDark } from './presets/one-dark'
 import { catppuccinLatte } from './presets/catppuccin-latte'
+import { blackAsh } from './presets/black-ash'
 
 export type { Theme, Appearance, AnsiPalette } from './types'
 
@@ -13,6 +14,7 @@ export const THEMES: Theme[] = [
   catppuccinMocha,
   oneDark,
   catppuccinLatte,
+  blackAsh,
 ]
 
 export const DEFAULT_THEME_ID = halcyon.meta.id
