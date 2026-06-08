@@ -7,6 +7,7 @@ import { DiffViewer } from './components/diff/diff-viewer'
 import { ConfirmDialog } from './components/confirm-dialog'
 import { SettingsModal } from './components/settings-modal'
 import { IdentityAutoApply } from './components/identity/identity-auto-apply'
+import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
@@ -120,7 +121,9 @@ export default function App() {
   const showFilePane = !!selectedProject && (!!activeDiff || hasOpenFiles)
 
   return (
-    <div className="flex h-screen w-screen bg-surface text-foreground">
+    <div className="flex h-screen w-screen flex-col bg-surface text-foreground">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1">
       {!sidebarCollapsed && (
         <>
           <ProjectList />
@@ -248,6 +251,7 @@ export default function App() {
           <RightSidebar projectId={selectedProject.id} />
         </>
       )}
+      </div>
 
       <ConfirmDialog
         open={!!pendingTerminalClose}

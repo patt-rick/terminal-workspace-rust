@@ -16,7 +16,7 @@ export function RightSidebar({ projectId }: { projectId: string }) {
       style={{ width }}
       className="flex flex-shrink-0 flex-col border-l border-border bg-surface"
     >
-      <div className="flex h-9 flex-shrink-0 border-b border-border">
+      <div className="flex h-11 flex-shrink-0 border-b border-border">
         <TabButton active={tab === 'files'} onClick={() => setTab('files')}>
           Files
         </TabButton>
@@ -53,7 +53,7 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 text-xs font-medium ${
+      className={`flex flex-1 items-center justify-center text-xs font-medium ${
         active
           ? 'border-b-2 border-accent text-foreground'
           : 'text-muted hover:text-foreground'
