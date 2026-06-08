@@ -4,7 +4,7 @@ import { useWorkspace, createProjectTerminal } from '../../state/store'
 import { ipc, type Project } from '../../lib/ipc'
 import { ContextMenu, type MenuItem } from '../context-menu'
 import { ConfirmDialog } from '../confirm-dialog'
-import { isMac } from '../../lib/platform'
+import { isMac, kbd } from '../../lib/platform'
 
 export function ProjectList() {
   const { projects, addProject } = useProjects()
@@ -98,9 +98,22 @@ function ProjectRow({ project }: { project: Project }) {
   }
 
   const menuItems: MenuItem[] = [
-    { label: 'New terminal', onClick: () => expandAnd(() => void createProjectTerminal(project.id)) },
-    { label: 'Claude Code', onClick: () => newClaude(false) },
-    { label: 'Claude Code', trailing: <span className="text-accent">⚡</span>, onClick: () => newClaude(true) },
+    {
+      label: 'New terminal',
+      trailing: <Hint>{kbd('T')}</Hint>,
+      onClick: () => expandAnd(() => void createProjectTerminal(project.id)),
+    },
+    { label: 'Claude Code', trailing: <Hint>{kbd('⇧T')}</Hint>, onClick: () => newClaude(false) },
+    {
+      label: 'Claude Code',
+      trailing: (
+        <span className="flex items-center gap-2">
+          <span className="text-accent">⚡</span>
+          <Hint>{kbd('⇧D')}</Hint>
+        </span>
+      ),
+      onClick: () => newClaude(true),
+    },
     { label: 'Rename', separatorBefore: true, onClick: () => setEditing(true) },
     {
       label: isMac ? 'Open in Finder' : 'Open in Explorer',
@@ -255,4 +268,8 @@ function ProjectRow({ project }: { project: Project }) {
       />
     </div>
   )
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return <span className="text-xs text-muted">{children}</span>
 }
