@@ -70,6 +70,7 @@ pub fn run() {
             commands::fs_remove,
             commands::fs_duplicate,
             commands::fs_save_temp_paste,
+            commands::fs_export_text,
             commands::git_info,
             commands::git_push,
             commands::git_diff,

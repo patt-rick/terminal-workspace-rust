@@ -1,5 +1,5 @@
 import { useLayoutEffect } from 'react'
-import { applyTheme, getTheme, THEMES } from './index'
+import { applyTheme, resolveTheme, THEMES } from './index'
 import { useSettings } from '../state/settings'
 
 /**
@@ -10,19 +10,26 @@ import { useSettings } from '../state/settings'
  */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const themeId = useSettings((s) => s.themeId)
+  const customThemes = useSettings((s) => s.customThemes)
 
   useLayoutEffect(() => {
-    applyTheme(getTheme(themeId))
-  }, [themeId])
+    applyTheme(resolveTheme(themeId, customThemes))
+  }, [themeId, customThemes])
 
   return children
 }
 
+/** Built-in and custom theme metadata, grouped for the settings picker. */
 export function useThemeList() {
-  return THEMES.map((t) => t.meta)
+  const customThemes = useSettings((s) => s.customThemes)
+  return {
+    builtin: THEMES.map((t) => t.meta),
+    custom: customThemes.map((t) => t.meta),
+  }
 }
 
 export function useActiveTheme() {
   const themeId = useSettings((s) => s.themeId)
-  return getTheme(themeId)
+  const customThemes = useSettings((s) => s.customThemes)
+  return resolveTheme(themeId, customThemes)
 }

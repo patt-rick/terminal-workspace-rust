@@ -200,6 +200,17 @@ fn copy_dir(src: &Path, dest: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Write text to an absolute path the user picked via a native save dialog.
+/// Used for exports (e.g. themes); the WebView2 `<a download>` mechanism does
+/// not work in the Tauri webview, so saving goes through the backend.
+pub fn write_text_abs(path: &str, content: &str) -> AppResult<()> {
+    if let Some(dir) = Path::new(path).parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, content)?;
+    Ok(())
+}
+
 /// Write pasted/dropped bytes to a temp file and return its absolute path.
 pub fn save_temp_paste(bytes: &[u8], ext: &str) -> AppResult<String> {
     let dir = std::env::temp_dir().join("tw-paste");

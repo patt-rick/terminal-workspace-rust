@@ -310,6 +310,8 @@ export const ipc = {
       invoke<string>('fs_duplicate', { projectId, rel }),
     saveTempPaste: (bytes: number[], ext: string) =>
       invoke<string>('fs_save_temp_paste', { bytes, ext }),
+    exportText: (path: string, content: string) =>
+      invoke<void>('fs_export_text', { path, content }),
   },
 
   git: {

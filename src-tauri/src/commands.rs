@@ -243,6 +243,11 @@ pub fn fs_save_temp_paste(bytes: Vec<u8>, ext: String) -> AppResult<String> {
     crate::fs::save_temp_paste(&bytes, &ext)
 }
 
+#[tauri::command]
+pub fn fs_export_text(path: String, content: String) -> AppResult<()> {
+    crate::fs::write_text_abs(&path, &content)
+}
+
 // ---------- git ----------
 
 #[derive(serde::Serialize)]

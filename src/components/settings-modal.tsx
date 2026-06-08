@@ -1,15 +1,78 @@
+import { useRef, useState } from 'react'
+import { save } from '@tauri-apps/plugin-dialog'
 import { useSettings } from '../state/settings'
-import { useThemeList } from '../themes/theme-provider'
+import { useActiveTheme, useThemeList } from '../themes/theme-provider'
+import { parseThemeJson } from '../themes/validate'
+import { ipc, isTauri } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const themes = useThemeList()
   const themeId = useSettings((s) => s.themeId)
   const setThemeId = useSettings((s) => s.setThemeId)
+  const addCustomTheme = useSettings((s) => s.addCustomTheme)
+  const removeCustomTheme = useSettings((s) => s.removeCustomTheme)
+  const activeTheme = useActiveTheme()
   const editor = useSettings((s) => s.editor)
   const updateEditor = useSettings((s) => s.updateEditor)
   const terminal = useSettings((s) => s.terminal)
   const updateTerminal = useSettings((s) => s.updateTerminal)
+
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [themeError, setThemeError] = useState<string | null>(null)
+
+  const activeIsCustom = themes.custom.some((t) => t.id === themeId)
+
+  const exportTheme = async () => {
+    const json = JSON.stringify(activeTheme, null, 2)
+    const filename = `${activeTheme.meta.id.replace(/^custom:/, '')}.theme.json`
+    try {
+      if (isTauri) {
+        // The WebView2 <a download> mechanism is a no-op in the Tauri webview,
+        // so saving goes through a native save dialog + backend file write.
+        const path = await save({
+          defaultPath: filename,
+          filters: [{ name: 'Theme JSON', extensions: ['json'] }],
+        })
+        if (!path) return // user cancelled
+        await ipc.fs.exportText(path, json)
+      } else {
+        const blob = new Blob([json], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        // Revoke after the click is processed, not synchronously (which can
+        // abort the download).
+        setTimeout(() => URL.revokeObjectURL(url), 0)
+      }
+      setThemeError(null)
+    } catch (err) {
+      setThemeError(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const importTheme = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-importing the same filename
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = parseThemeJson(String(reader.result))
+      if (!result.ok) {
+        setThemeError(result.error)
+        return
+      }
+      const stored = addCustomTheme(result.theme)
+      setThemeId(stored.meta.id)
+      setThemeError(null)
+    }
+    reader.onerror = () => setThemeError('Could not read the selected file.')
+    reader.readAsText(file)
+  }
 
   if (!open) return null
 
@@ -44,13 +107,59 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               onChange={(e) => setThemeId(e.target.value)}
               className="rounded-md border border-border bg-field-background px-2 py-1 text-foreground outline-none focus:border-accent"
             >
-              {themes.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
+              <optgroup label="Built-in">
+                {themes.builtin.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </optgroup>
+              {themes.custom.length > 0 && (
+                <optgroup label="Custom">
+                  {themes.custom.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </Row>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void exportTheme()}
+              className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5"
+            >
+              Export…
+            </button>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5"
+            >
+              Import…
+            </button>
+            <button
+              type="button"
+              onClick={() => removeCustomTheme(themeId)}
+              disabled={!activeIsCustom}
+              className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Delete
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={importTheme}
+              className="hidden"
+            />
+          </div>
+          <div className="text-xs text-muted">
+            Export the active theme, edit the JSON, then import it back.
+          </div>
+          {themeError && <div className="text-xs text-danger">{themeError}</div>}
         </Section>
 
         <Section title="Editor">

@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './app'
 import { ThemeProvider } from './themes/theme-provider'
-import { applyTheme, getTheme } from './themes'
+import { applyTheme, resolveTheme } from './themes'
 import {
   readStoredSettings,
   setSettingsBackendSync,
@@ -14,7 +14,8 @@ import { initPlatform } from './lib/platform'
 import './styles/globals.css'
 
 // Paint the persisted theme before the first frame (no flash).
-applyTheme(getTheme(readStoredSettings().themeId))
+const stored = readStoredSettings()
+applyTheme(resolveTheme(stored.themeId, stored.customThemes))
 
 // Persist every settings change to the Rust settings.json (source of truth).
 setSettingsBackendSync((s) => {
@@ -28,8 +29,9 @@ async function bootstrap(): Promise<void> {
   try {
     const remote = (await ipc.settings.get()) as Settings | null
     if (remote && remote.themeId && remote.editor && remote.terminal) {
-      useSettings.getState().replaceAll(remote)
-      applyTheme(getTheme(remote.themeId))
+      const merged: Settings = { ...remote, customThemes: remote.customThemes ?? [] }
+      useSettings.getState().replaceAll(merged)
+      applyTheme(resolveTheme(merged.themeId, merged.customThemes))
     }
   } catch {
     // backend unavailable (plain browser dev) — localStorage settings stand

@@ -25,6 +25,15 @@ export function getTheme(id: string): Theme {
   return BY_ID.get(id) ?? halcyon
 }
 
+/**
+ * Resolve a theme id against the user's custom themes first, then the built-in
+ * presets, falling back to the default. Custom themes win on id collision; the
+ * fallback covers a selected theme that was since deleted.
+ */
+export function resolveTheme(id: string, custom: Theme[]): Theme {
+  return custom.find((t) => t.meta.id === id) ?? BY_ID.get(id) ?? halcyon
+}
+
 // camelCase → kebab-case for CSS custom property names.
 const kebab = (s: string): string => s.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)
 
