@@ -25,6 +25,10 @@ const tokenStore = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 }
 
+// Last-viewed terminal, restored when the OS reloads the backgrounded PWA so
+// reopening lands you where you left off.
+const LAST_TERM_KEY = 'tw_last_term'
+
 // Dark theme matching the desktop default. Following the desktop's *active*
 // theme (sent in hello.ok) is a later refinement.
 const XTERM_THEME = {
@@ -172,6 +176,7 @@ export function App() {
     curIdRef.current = id
     curTagRef.current = null
     setCurrentId(id)
+    localStorage.setItem(LAST_TERM_KEY, id)
     termRef.current?.reset()
     client.attach(id)
     const term = termRef.current
@@ -187,15 +192,28 @@ export function App() {
         setStatus('connected')
         setReconnecting(false)
         setPhase('ready')
-        // On a reconnect the server has no memory of the previous socket, so
-        // re-subscribe to the terminal we were viewing (replays its scrollback).
         const id = curIdRef.current
         if (id) {
+          // Reconnect on a live page: the server has no memory of the previous
+          // socket, so re-subscribe (replays scrollback).
           curTagRef.current = null
           termRef.current?.reset()
           clientRef.current?.attach(id)
           const term = termRef.current
           if (term) clientRef.current?.resize(id, term.cols, term.rows)
+          return
+        }
+        // Fresh page load (OS reloaded the PWA): restore the last-viewed
+        // terminal if it still exists and is live; otherwise open the drawer.
+        const last = localStorage.getItem(LAST_TERM_KEY)
+        const terminal = last
+          ? state.projects.flatMap((p) => p.terminals).find((t) => t.id === last)
+          : undefined
+        if (terminal?.live) {
+          attachTo(terminal.id)
+        } else {
+          if (last && !terminal) localStorage.removeItem(LAST_TERM_KEY)
+          setDrawerOpen(true)
         }
       },
       onAttached: (tid, tag) => {
@@ -220,6 +238,7 @@ export function App() {
         setProjects((ps) =>
           ps.map((p) => ({ ...p, terminals: p.terminals.filter((t) => t.id !== tid) }))
         )
+        if (localStorage.getItem(LAST_TERM_KEY) === tid) localStorage.removeItem(LAST_TERM_KEY)
         if (curIdRef.current === tid) {
           curIdRef.current = null
           curTagRef.current = null

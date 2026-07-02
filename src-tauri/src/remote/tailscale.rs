@@ -87,6 +87,43 @@ fn locate() -> Option<PathBuf> {
     None
 }
 
+/// Configure `tailscale serve` to front the local server with HTTPS at the
+/// node's MagicDNS name (needs "HTTPS Certificates" enabled on the tailnet).
+/// Returns the public https URL on success. A secure origin is what unlocks the
+/// full PWA on phones: service worker, background notifications, install.
+pub fn serve_start(port: u16) -> Result<String, String> {
+    let bin = locate().ok_or_else(|| "tailscale CLI not found".to_string())?;
+    let info = detect().ok_or_else(|| "tailscale is not running".to_string())?;
+    let Some(dns_name) = info.dns_name.clone() else {
+        return Err("MagicDNS is disabled; HTTPS needs the tailnet DNS name".to_string());
+    };
+    let out = Command::new(&bin)
+        .args(["serve", "--bg", "--https=443", &format!("http://127.0.0.1:{port}")])
+        .output()
+        .map_err(|e| format!("tailscale serve failed to run: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("does not support getting TLS certs") || err.contains("HTTPS") {
+            return Err(
+                "Tailnet HTTPS certificates aren't enabled. Turn on \"HTTPS Certificates\" at \
+                 https://login.tailscale.com/admin/dns, then start remote access again."
+                    .to_string(),
+            );
+        }
+        return Err(format!("tailscale serve failed: {}", err.trim()));
+    }
+    Ok(format!("https://{dns_name}"))
+}
+
+/// Remove the serve config installed by [`serve_start`]. Best-effort.
+pub fn serve_stop() {
+    if let Some(bin) = locate() {
+        let _ = Command::new(&bin)
+            .args(["serve", "--https=443", "off"])
+            .output();
+    }
+}
+
 /// True for an address in Tailscale's CGNAT range 100.64.0.0/10.
 fn is_tailnet_ipv4(s: &str) -> bool {
     s.parse::<Ipv4Addr>()

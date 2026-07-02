@@ -34,6 +34,8 @@ pub struct StartInfo {
     /// Always the `127.0.0.1` URL the server actually binds.
     pub local_url: String,
     pub pairing_code: String,
+    /// Non-fatal setup advice (e.g. how to unlock HTTPS in Tailscale mode).
+    pub hint: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -48,6 +50,7 @@ pub struct RemoteStatus {
     pub pairing_code: Option<String>,
     /// Unix-epoch milliseconds the current session connected, if any.
     pub connected_since: Option<u64>,
+    pub hint: Option<String>,
 }
 
 struct Running {
@@ -55,6 +58,9 @@ struct Running {
     mode: String,
     url: String,
     local_url: String,
+    hint: Option<String>,
+    /// A `tailscale serve` HTTPS front is active and must be torn down on stop.
+    serve_active: bool,
     shutdown: tokio::sync::oneshot::Sender<()>,
     /// Kept alive for the session; dropping it kills `cloudflared`.
     _tunnel: Option<tunnel::Tunnel>,
@@ -110,7 +116,27 @@ impl RemoteServer {
             None
         };
 
+        // Tailscale mode wants a stable port (the serve config references it).
+        let port = if mode == MODE_TAILSCALE && port == 0 { 8765 } else { port };
+
+        // Try to front the server with `tailscale serve` HTTPS first. A secure
+        // origin is required for the phone PWA (service worker, notifications,
+        // install); when it works we bind localhost only — the HTTPS proxy is
+        // the sole way in. Falls back to plain HTTP on the tailnet IP.
+        let (serve_url, mut hint) = if mode == MODE_TAILSCALE && !bind_all {
+            match tokio::task::spawn_blocking(move || tailscale::serve_start(port))
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Ok(url) => (Some(url), None),
+                Err(why) => (None, Some(format!("HTTPS unavailable ({why})"))),
+            }
+        } else {
+            (None, None)
+        };
+
         let bind_ip: IpAddr = match mode {
+            MODE_TAILSCALE if serve_url.is_some() => Ipv4Addr::LOCALHOST.into(),
             MODE_TAILSCALE if bind_all => Ipv4Addr::UNSPECIFIED.into(),
             MODE_TAILSCALE => ts_info
                 .as_ref()
@@ -121,9 +147,16 @@ impl RemoteServer {
             _ => Ipv4Addr::LOCALHOST.into(),
         };
 
-        let listener = tokio::net::TcpListener::bind((bind_ip, port))
-            .await
-            .map_err(|e| format!("bind failed: {e}"))?;
+        let listener = match tokio::net::TcpListener::bind((bind_ip, port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                // Don't leak the serve config if we never got a server behind it.
+                if serve_url.is_some() {
+                    let _ = tokio::task::spawn_blocking(tailscale::serve_stop);
+                }
+                return Err(format!("bind failed: {e}"));
+            }
+        };
         let actual = listener
             .local_addr()
             .map_err(|e| e.to_string())?
@@ -163,18 +196,31 @@ impl RemoteServer {
                     return Err(e);
                 }
             },
-            MODE_TAILSCALE => {
-                let host = ts_info.as_ref().unwrap().host();
-                (None, format!("http://{host}:{actual}"))
-            }
+            MODE_TAILSCALE => match &serve_url {
+                Some(https) => (None, https.clone()),
+                None => {
+                    let host = ts_info.as_ref().unwrap().host();
+                    if hint.is_some() {
+                        hint = Some(format!(
+                            "{} Serving plain HTTP — the phone PWA (install, notifications) \
+                             needs the HTTPS address.",
+                            hint.unwrap()
+                        ));
+                    }
+                    (None, format!("http://{host}:{actual}"))
+                }
+            },
             _ => (None, local_url.clone()),
         };
 
+        let serve_active = serve_url.is_some();
         *self.inner.lock() = Some(Running {
             port: actual,
             mode: mode.to_string(),
             url: url.clone(),
             local_url: local_url.clone(),
+            hint: hint.clone(),
+            serve_active,
             shutdown,
             _tunnel: tunnel,
         });
@@ -184,6 +230,7 @@ impl RemoteServer {
             url,
             local_url,
             pairing_code: code,
+            hint,
         })
     }
 
@@ -191,6 +238,10 @@ impl RemoteServer {
     pub fn stop(&self) {
         if let Some(running) = self.inner.lock().take() {
             let _ = running.shutdown.send(());
+            if running.serve_active {
+                // CLI call; keep it off whatever thread called stop().
+                std::thread::spawn(tailscale::serve_stop);
+            }
         }
         self.sessions.reset();
     }
@@ -217,6 +268,7 @@ impl RemoteServer {
                 local_url: Some(running.local_url.clone()),
                 pairing_code: self.sessions.current_code(),
                 connected_since,
+                hint: running.hint.clone(),
             },
             None => RemoteStatus {
                 running: false,
@@ -226,6 +278,7 @@ impl RemoteServer {
                 local_url: None,
                 pairing_code: None,
                 connected_since: None,
+                hint: None,
             },
         }
     }

@@ -271,6 +271,8 @@ export interface RemoteStatus {
   pairingCode: string | null
   /** Unix-epoch ms the current session connected, if any. */
   connectedSince: number | null
+  /** Non-fatal setup advice (e.g. how to unlock HTTPS in Tailscale mode). */
+  hint: string | null
 }
 
 export interface RemoteStartInfo {
@@ -279,6 +281,7 @@ export interface RemoteStartInfo {
   url: string
   localUrl: string
   pairingCode: string
+  hint: string | null
 }
 
 /** True when running inside the Tauri webview (false in a plain browser/dev). */

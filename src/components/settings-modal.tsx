@@ -355,6 +355,7 @@ function RemoteAccessSection() {
         localUrl: info.localUrl,
         pairingCode: info.pairingCode,
         connectedSince: null,
+        hint: info.hint,
       })
     } catch (e) {
       setError(String(e))
@@ -422,6 +423,7 @@ function RemoteAccessSection() {
           <Row label="URL">
             <span className="font-mono text-xs text-foreground/80 break-all">{status?.url}</span>
           </Row>
+          {status?.hint && <div className="text-xs text-warning">{status.hint}</div>}
           {status?.mode === 'cloudflare' && status.localUrl && (
             <Row label="Local URL">
               <span className="font-mono text-xs text-muted">{status.localUrl}</span>
