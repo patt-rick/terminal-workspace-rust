@@ -6,3 +6,9 @@
 //! rebuild `remote-web` whenever the web client changes.
 
 pub const WEB_CLIENT: &str = include_str!("web_client.html");
+
+// PWA assets served at their own URLs (a service worker and manifest can't be
+// inlined into the single-file bundle — the browser must fetch them separately).
+pub const SW_JS: &str = include_str!("pwa_sw.js");
+pub const MANIFEST: &str = include_str!("pwa_manifest.webmanifest");
+pub const ICON_SVG: &str = include_str!("pwa_icon.svg");

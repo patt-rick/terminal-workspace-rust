@@ -430,6 +430,15 @@ body {
   font-size: 13px;
   flex-shrink: 0;
 }
+.reconnbar {
+  flex-shrink: 0;
+  background: var(--warning, #e0af68);
+  color: #16161e;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+}
 .g-add {
   color: var(--green, #9ece6a);
 }

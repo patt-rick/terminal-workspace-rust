@@ -16,6 +16,15 @@ import { SessionsSheet } from './sessions-sheet'
 const TOKEN_KEY = 'tw_remote_token'
 type Phase = 'pair' | 'connecting' | 'ready' | 'evicted' | 'closed'
 
+// Token lives in localStorage (not sessionStorage) so the session survives the
+// app being closed or backgrounded — reopening auto-reconnects instead of
+// forcing a re-pair.
+const tokenStore = {
+  get: () => localStorage.getItem(TOKEN_KEY),
+  set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+}
+
 // Dark theme matching the desktop default. Following the desktop's *active*
 // theme (sent in hello.ok) is a later refinement.
 const XTERM_THEME = {
@@ -42,13 +51,12 @@ const XTERM_THEME = {
 }
 
 export function App() {
-  const [phase, setPhase] = useState<Phase>(() =>
-    sessionStorage.getItem(TOKEN_KEY) ? 'connecting' : 'pair'
-  )
+  const [phase, setPhase] = useState<Phase>(() => (tokenStore.get() ? 'connecting' : 'pair'))
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [status, setStatus] = useState('')
+  const [reconnecting, setReconnecting] = useState(false)
   const [pairError, setPairError] = useState<string | null>(null)
   const [working, setWorking] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<string | null>(null)
@@ -85,8 +93,21 @@ export function App() {
 
   const notify = useCallback((title: string, body: string) => {
     if ('Notification' in window && Notification.permission === 'granted') {
+      // Prefer the service worker's notification: it keeps showing while the app
+      // is backgrounded, and is tappable to refocus the PWA.
+      const opts = { body, icon: '/icon.svg', badge: '/icon.svg', tag: title }
+      navigator.serviceWorker?.ready
+        .then((reg) => reg.showNotification(title, opts))
+        .catch(() => {
+          try {
+            new Notification(title, opts)
+          } catch {
+            setToast(`${title} — ${body}`)
+          }
+        })
+      if (navigator.serviceWorker) return
       try {
-        new Notification(title, { body })
+        new Notification(title, opts)
         return
       } catch {
         // fall through to toast
@@ -164,7 +185,18 @@ export function App() {
       onState: (state) => {
         setProjects(state.projects)
         setStatus('connected')
+        setReconnecting(false)
         setPhase('ready')
+        // On a reconnect the server has no memory of the previous socket, so
+        // re-subscribe to the terminal we were viewing (replays its scrollback).
+        const id = curIdRef.current
+        if (id) {
+          curTagRef.current = null
+          termRef.current?.reset()
+          clientRef.current?.attach(id)
+          const term = termRef.current
+          if (term) clientRef.current?.resize(id, term.cols, term.rows)
+        }
       },
       onAttached: (tid, tag) => {
         if (tid === curIdRef.current) {
@@ -249,27 +281,44 @@ export function App() {
         }
       },
       onEvicted: () => {
-        sessionStorage.removeItem(TOKEN_KEY)
+        tokenStore.clear()
+        setReconnecting(false)
         setPhase('evicted')
       },
-      onError: (m) => {
-        if (phaseRef.current === 'connecting') {
-          sessionStorage.removeItem(TOKEN_KEY)
-          setPairError(m)
-          setPhase('pair')
-        } else {
-          setStatus(m)
-        }
+      onReconnecting: () => {
+        setReconnecting(true)
+        setStatus('reconnecting…')
       },
-      onClose: () => {
-        if (phaseRef.current === 'ready' || phaseRef.current === 'connecting') setPhase('closed')
+      onAuthFail: (m) => {
+        // Token no longer valid (e.g. desktop restarted) — must re-pair.
+        tokenStore.clear()
+        setReconnecting(false)
+        setPairError(m || 'Session expired — pair again.')
+        setPhase('pair')
       },
+      onError: (m) => setStatus(m),
     })
     clientRef.current = client
-    const token = sessionStorage.getItem(TOKEN_KEY)
+    const token = tokenStore.get()
     if (token) client.connect(token)
     return () => client.disconnect()
   }, [attachTo])
+
+  // Reconnect promptly when returning to the app or regaining connectivity —
+  // this is what removes the "session ended for a bit" gap after an app switch.
+  useEffect(() => {
+    const kick = () => {
+      if (document.visibilityState === 'visible') clientRef.current?.reconnectNow()
+    }
+    document.addEventListener('visibilitychange', kick)
+    window.addEventListener('focus', kick)
+    window.addEventListener('online', kick)
+    return () => {
+      document.removeEventListener('visibilitychange', kick)
+      window.removeEventListener('focus', kick)
+      window.removeEventListener('online', kick)
+    }
+  }, [])
 
   // Re-fit on viewport changes (orientation, mobile keyboard show/hide).
   useEffect(() => {
@@ -333,7 +382,7 @@ export function App() {
     }
     try {
       const token = await pair(code)
-      sessionStorage.setItem(TOKEN_KEY, token)
+      tokenStore.set(token)
       setPhase('connecting')
       clientRef.current?.connect(token)
     } catch (e) {
@@ -380,11 +429,12 @@ export function App() {
           {current && working.has(current.id) && <span className="spin">◐</span>}
           {current ? current.name : 'No terminal'}
         </span>
-        <span className="status">{status}</span>
+        <span className="status">{reconnecting ? '⟳ reconnecting…' : status}</span>
         <button className="iconbtn" onClick={openGit} aria-label="Git">
           ⎇
         </button>
       </div>
+      {reconnecting && <div className="reconnbar">Connection lost — reconnecting…</div>}
 
       <div className="termwrap">
         {current ? (

@@ -82,6 +82,10 @@ export interface Handlers {
   onClaudeSessions?: (projectId: string, sessions: SessionSummary[]) => void
   onEvicted?: () => void
   onError?: (message: string) => void
+  /** The socket dropped but we'll auto-reconnect (transient — e.g. app switch). */
+  onReconnecting?: () => void
+  /** The token was rejected (server restarted) — the client must re-pair. */
+  onAuthFail?: (message: string) => void
   onClose?: () => void
 }
 
@@ -102,17 +106,72 @@ export async function pair(code: string): Promise<string> {
 
 export class RemoteClient {
   private ws: WebSocket | null = null
+  private token: string | null = null
+  private intentionalClose = false
+  // Set on eviction or auth failure: a permanent stop, no reconnect.
+  private stopped = false
+  private attempts = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null
+  private lastActivity = 0
 
   constructor(private h: Handlers) {}
 
   connect(token: string): void {
+    this.token = token
+    this.intentionalClose = false
+    this.stopped = false
+    this.attempts = 0
+    this.open()
+  }
+
+  /** Force an immediate reconnect (e.g. on returning to the app). No-op if the
+   *  socket is open or we've permanently stopped. */
+  reconnectNow(): void {
+    if (this.stopped || this.intentionalClose || !this.token) return
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.attempts = 0
+    this.open()
+  }
+
+  private open(): void {
+    const token = this.token
+    if (!token) return
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws`)
+    let ws: WebSocket
+    try {
+      ws = new WebSocket(`${proto}://${location.host}/ws`)
+    } catch {
+      this.scheduleReconnect()
+      return
+    }
     ws.binaryType = 'arraybuffer'
     this.ws = ws
-    ws.onopen = () => this.send({ type: 'hello', token })
-    ws.onclose = () => this.h.onClose?.()
+    ws.onopen = () => {
+      this.attempts = 0
+      this.lastActivity = Date.now()
+      this.startHeartbeat()
+      this.send({ type: 'hello', token })
+    }
+    ws.onclose = () => {
+      this.stopHeartbeat()
+      if (this.intentionalClose) {
+        this.h.onClose?.()
+      } else if (!this.stopped) {
+        this.h.onReconnecting?.()
+        this.scheduleReconnect()
+      }
+    }
+    ws.onerror = () => {
+      // onclose fires next and drives reconnection.
+    }
     ws.onmessage = (ev) => {
+      this.lastActivity = Date.now()
       if (typeof ev.data !== 'string') {
         this.onBinary(new Uint8Array(ev.data as ArrayBuffer))
         return
@@ -123,7 +182,8 @@ export class RemoteClient {
           this.h.onState?.(m.state, m.appVersion)
           break
         case 'hello.err':
-          this.h.onError?.(m.message)
+          this.stopped = true
+          this.h.onAuthFail?.(m.message)
           break
         case 'term.attached':
           this.h.onAttached?.(m.terminalId, m.tag)
@@ -165,12 +225,50 @@ export class RemoteClient {
           this.h.onClaudeSessions?.(m.projectId, m.sessions)
           break
         case 'session.evicted':
+          this.stopped = true
           this.h.onEvicted?.()
           break
         case 'error':
           this.h.onError?.(m.message)
           break
       }
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.stopped || this.intentionalClose) return
+    const delay = Math.min(1000 * 2 ** this.attempts, 15000)
+    this.attempts++
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.open()
+    }, delay)
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    // Keep the socket warm; the watchdog force-closes a silently-dead one so the
+    // onclose path reconnects fast (mobile suspends backgrounded sockets).
+    this.heartbeatTimer = setInterval(() => this.ping(), 20000)
+    this.watchdogTimer = setInterval(() => {
+      if (Date.now() - this.lastActivity > 35000) {
+        try {
+          this.ws?.close()
+        } catch {
+          // ignore
+        }
+      }
+    }, 10000)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer)
+      this.watchdogTimer = null
     }
   }
 
@@ -181,7 +279,7 @@ export class RemoteClient {
   }
 
   private send(o: unknown): void {
-    this.ws?.send(JSON.stringify(o))
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(o))
   }
 
   attach(terminalId: string): void {
@@ -224,6 +322,12 @@ export class RemoteClient {
     this.send({ type: 'ping' })
   }
   disconnect(): void {
+    this.intentionalClose = true
+    this.stopHeartbeat()
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
     this.ws?.close()
   }
 }

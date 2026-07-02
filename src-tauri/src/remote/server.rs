@@ -3,7 +3,7 @@
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -36,11 +36,40 @@ pub fn router(ctx: ServerCtx) -> Router {
         .route("/", get(index))
         .route("/pair", post(pair))
         .route("/ws", get(ws_upgrade))
+        // PWA assets (public, static): installability + notifications.
+        .route("/sw.js", get(sw_js))
+        .route("/manifest.webmanifest", get(manifest))
+        .route("/icon.svg", get(icon))
         .with_state(ctx)
 }
 
 async fn index() -> Html<&'static str> {
     Html(client::WEB_CLIENT)
+}
+
+async fn sw_js() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript"),
+            // Allow the SW (served from root) to control the whole origin.
+            (HeaderName::from_static("service-worker-allowed"), "/"),
+        ],
+        client::SW_JS,
+    )
+}
+
+async fn manifest() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/manifest+json")],
+        client::MANIFEST,
+    )
+}
+
+async fn icon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml")],
+        client::ICON_SVG,
+    )
 }
 
 #[derive(Deserialize)]
