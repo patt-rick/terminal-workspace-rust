@@ -40,10 +40,16 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("resolve app data dir");
+            // TW_DATA_DIR overrides the app-data location (state/settings/etc).
+            // Lets a second, fully isolated instance run for testing without
+            // touching the installed app's data.
+            let data_dir = match std::env::var_os("TW_DATA_DIR") {
+                Some(dir) => std::path::PathBuf::from(dir),
+                None => app
+                    .path()
+                    .app_data_dir()
+                    .expect("resolve app data dir"),
+            };
             std::fs::create_dir_all(&data_dir).ok();
             app.manage(StateStore::load(data_dir.join("state.json")));
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
