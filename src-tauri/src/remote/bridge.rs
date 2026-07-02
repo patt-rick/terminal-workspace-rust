@@ -3,13 +3,15 @@
 //! "invoke any command" passthrough, and no filesystem or project-management
 //! access (R3.7 / AC-3.10).
 
+use crate::claude::SessionSummary;
 use crate::git::discover::RepoInfo;
 use crate::git::{FileDiff, GitInfo};
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::settings::SettingsStore;
 use crate::state::{StateStore, TerminalRecord};
+use serde::Serialize;
 use std::path::Path;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 use super::protocol::{ProjectInfo, StateSnapshot, TermInfo};
@@ -50,43 +52,42 @@ fn claude_skip_permissions(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// Spawn a terminal in a project. `kind` is "shell" or "claude". Honors the
-/// Phase 1 skip-permissions setting for Claude launches (AC-3.2). Returns the
-/// created terminal's metadata.
-pub fn create_terminal(
+/// Emitted so the desktop UI shows terminals a remote client created/resumed,
+/// without waiting for a state reload (AC-3.5).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TerminalAdded {
+    project_id: String,
+    terminal: TerminalRecord,
+}
+
+/// Build the Claude launch command, appending the Phase 1 skip-permissions flag
+/// when enabled (AC-3.2). `resume_id` produces a `--resume <id>` launch.
+fn claude_command(app: &AppHandle, resume_id: Option<&str>) -> String {
+    let mut cmd = String::from("claude");
+    if let Some(id) = resume_id {
+        cmd.push_str(" --resume ");
+        cmd.push_str(id);
+    }
+    if claude_skip_permissions(app) {
+        cmd.push_str(" --dangerously-skip-permissions");
+    }
+    cmd
+}
+
+/// Core terminal spawn: create the PTY, persist the record, and notify the
+/// desktop. Shared by shell/claude create and Claude resume.
+fn spawn_terminal(
     app: &AppHandle,
     project_id: &str,
-    kind: &str,
-    cwd: Option<&str>,
+    name: String,
+    full_cwd: String,
+    startup_command: Option<String>,
 ) -> Result<TermInfo, String> {
     let store = app.state::<StateStore>();
     let pty = app.state::<PtyManager>();
-
-    let root = store
-        .project_path(project_id)
-        .ok_or_else(|| "project not found".to_string())?;
-    let full_cwd = match cwd.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(rel) => std::path::Path::new(&root).join(rel).to_string_lossy().to_string(),
-        None => root,
-    };
-
-    let startup_command = if kind == "claude" {
-        let mut cmd = String::from("claude");
-        if claude_skip_permissions(app) {
-            cmd.push_str(" --dangerously-skip-permissions");
-        }
-        Some(cmd)
-    } else {
-        None
-    };
-
     let id = Uuid::new_v4().to_string();
     let shell = shell::default_shell();
-    let name = if kind == "claude" {
-        "Claude Code".to_string()
-    } else {
-        format!("Terminal {}", store.terminal_count(project_id) + 1)
-    };
 
     pty.create(
         app,
@@ -101,12 +102,17 @@ pub fn create_terminal(
     )
     .map_err(|e| e.to_string())?;
 
-    store.upsert_terminal(
-        project_id,
-        TerminalRecord {
-            id: id.clone(),
-            name: name.clone(),
-            shell,
+    let record = TerminalRecord {
+        id: id.clone(),
+        name: name.clone(),
+        shell,
+    };
+    store.upsert_terminal(project_id, record.clone());
+    let _ = app.emit(
+        "remote:terminal-added",
+        TerminalAdded {
+            project_id: project_id.to_string(),
+            terminal: record,
         },
     );
 
@@ -116,6 +122,69 @@ pub fn create_terminal(
         project_id: project_id.to_string(),
         live: true,
     })
+}
+
+/// Absolute cwd from a project + optional relative subdir.
+fn resolve_cwd(app: &AppHandle, project_id: &str, cwd: Option<&str>) -> Result<String, String> {
+    let root = app
+        .state::<StateStore>()
+        .project_path(project_id)
+        .ok_or_else(|| "project not found".to_string())?;
+    Ok(match cwd.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(rel) => Path::new(&root).join(rel).to_string_lossy().to_string(),
+        None => root,
+    })
+}
+
+/// Spawn a terminal in a project. `kind` is "shell" or "claude". Honors the
+/// Phase 1 skip-permissions setting for Claude launches (AC-3.2). Returns the
+/// created terminal's metadata.
+pub fn create_terminal(
+    app: &AppHandle,
+    project_id: &str,
+    kind: &str,
+    cwd: Option<&str>,
+) -> Result<TermInfo, String> {
+    let full_cwd = resolve_cwd(app, project_id, cwd)?;
+    let (name, startup_command) = if kind == "claude" {
+        ("Claude Code".to_string(), Some(claude_command(app, None)))
+    } else {
+        let n = app.state::<StateStore>().terminal_count(project_id) + 1;
+        (format!("Terminal {n}"), None)
+    };
+    spawn_terminal(app, project_id, name, full_cwd, startup_command)
+}
+
+/// Claude session list for a project (read from ~/.claude transcripts).
+pub fn claude_sessions(app: &AppHandle, project_id: &str) -> Vec<SessionSummary> {
+    let Some(root) = app.state::<StateStore>().project_path(project_id) else {
+        return Vec::new();
+    };
+    let Ok(home) = app.path().home_dir() else {
+        return Vec::new();
+    };
+    crate::claude::list_sessions(&home, &root)
+}
+
+/// Spawn a `claude --resume <id>` terminal (AC-3.5). Rejects invalid ids that
+/// could escape the sessions dir.
+pub fn resume_session(
+    app: &AppHandle,
+    project_id: &str,
+    session_id: &str,
+) -> Result<TermInfo, String> {
+    if !crate::claude::valid_session_id(session_id) {
+        return Err("invalid session id".to_string());
+    }
+    let full_cwd = resolve_cwd(app, project_id, None)?;
+    let startup_command = Some(claude_command(app, Some(session_id)));
+    spawn_terminal(
+        app,
+        project_id,
+        "Claude Code".to_string(),
+        full_cwd,
+        startup_command,
+    )
 }
 
 /// Kill a terminal's PTY and drop its record.

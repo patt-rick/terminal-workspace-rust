@@ -395,6 +395,41 @@ body {
   color: var(--muted);
   font-size: 13px;
 }
+.sess-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sess-row:active {
+  background: var(--panel);
+}
+.sess-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.sess-title {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sess-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.sess-resume {
+  width: auto;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
 .g-add {
   color: var(--green, #9ece6a);
 }

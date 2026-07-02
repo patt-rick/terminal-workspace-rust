@@ -5,6 +5,7 @@
 mod bridge;
 mod client;
 pub mod protocol;
+pub mod ratelimit;
 pub mod server;
 pub mod session;
 pub mod tailscale;
@@ -133,11 +134,15 @@ impl RemoteServer {
         let ctx = server::ServerCtx {
             app: self.app.clone(),
             sessions: self.sessions.clone(),
+            // ~10 /pair attempts burst per IP, refilling 1/6s (10/min sustained).
+            rate_limit: Arc::new(ratelimit::RateLimiter::new(10.0, 1.0 / 6.0)),
         };
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let router = server::router(ctx);
+        let make_service =
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>();
         tauri::async_runtime::spawn(async move {
-            let _ = axum::serve(listener, router)
+            let _ = axum::serve(listener, make_service)
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.await;
                 })

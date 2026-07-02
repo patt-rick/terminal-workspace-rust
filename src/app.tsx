@@ -17,7 +17,8 @@ import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './sta
 import { useUi } from './state/ui'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
-import type { Project, TerminalRecord } from './lib/ipc'
+import { isTauri, type Project, type TerminalRecord } from './lib/ipc'
+import { listen } from '@tauri-apps/api/event'
 
 export default function App() {
   const { projects, selectedProject, addProject } = useProjects()
@@ -122,6 +123,26 @@ export default function App() {
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
   }, [activeTerminalId, clearUnread])
+
+  // A remote web client can create/resume terminals in the Rust core; surface
+  // them in the desktop UI too (AC-3.5) without waiting for a state reload.
+  useEffect(() => {
+    if (!isTauri) return
+    const unlisten = listen<{ projectId: string; terminal: TerminalRecord }>(
+      'remote:terminal-added',
+      (e) => {
+        const { projectId, terminal } = e.payload
+        const ws = useWorkspace.getState()
+        const proj = ws.projects.find((p) => p.id === projectId)
+        if (proj && !proj.terminals.some((t) => t.id === terminal.id)) {
+          ws.addTerminal(projectId, terminal)
+        }
+      }
+    )
+    return () => {
+      void unlisten.then((off) => off())
+    }
+  }, [])
 
   const showEmptyNoProject = !selectedProject
   const showEmptyNoTerminals = !!selectedProject && selectedProject.terminals.length === 0

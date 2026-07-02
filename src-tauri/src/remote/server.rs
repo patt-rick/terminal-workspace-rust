@@ -2,14 +2,15 @@
 //! the tunnel/Tailscale bind modes arrive in later milestones.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -18,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use super::bridge;
 use super::protocol::{output_frame, ClientMsg, ServerMsg};
+use super::ratelimit::RateLimiter;
 use super::session::{PairError, SessionManager, MAX_FAILED};
 use super::{client, RemoteServer};
 use crate::pty::PtyManager;
@@ -26,6 +28,7 @@ use crate::pty::PtyManager;
 pub struct ServerCtx {
     pub app: AppHandle,
     pub sessions: Arc<SessionManager>,
+    pub rate_limit: Arc<RateLimiter>,
 }
 
 pub fn router(ctx: ServerCtx) -> Router {
@@ -50,7 +53,30 @@ struct PairResp {
     token: String,
 }
 
-async fn pair(State(ctx): State<ServerCtx>, Json(req): Json<PairReq>) -> Response {
+/// Best-effort client IP: prefer Cloudflare's forwarded header (the socket is
+/// always 127.0.0.1 behind the tunnel), else the peer address.
+fn client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
+    for h in ["cf-connecting-ip", "x-forwarded-for"] {
+        if let Some(v) = headers.get(h).and_then(|v| v.to_str().ok()) {
+            let first = v.split(',').next().unwrap_or("").trim();
+            if !first.is_empty() {
+                return first.to_string();
+            }
+        }
+    }
+    addr.ip().to_string()
+}
+
+async fn pair(
+    State(ctx): State<ServerCtx>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<PairReq>,
+) -> Response {
+    // Rate-limit per client IP as defense in depth (R3.9).
+    if !ctx.rate_limit.check(&client_ip(&headers, addr)) {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many attempts, slow down").into_response();
+    }
     match ctx.sessions.verify_pair(&req.code) {
         Ok(token) => Json(PairResp { token }).into_response(),
         Err(err) => {
@@ -234,6 +260,22 @@ impl Conn {
                     let _ = out_tx.blocking_send(text(&ServerMsg::GitPushDone { repo_id, ok, output }));
                 });
             }
+            ClientMsg::ClaudeSessions { project_id } => {
+                // Reading every transcript can be heavy; keep it off the runtime.
+                let (app, out_tx) = (self.ctx.app.clone(), self.out_tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    let sessions = bridge::claude_sessions(&app, &project_id);
+                    let _ = out_tx
+                        .blocking_send(text(&ServerMsg::ClaudeSessions { project_id, sessions }));
+                });
+            }
+            ClientMsg::ClaudeResume {
+                project_id,
+                session_id,
+            } => match bridge::resume_session(&self.ctx.app, &project_id, &session_id) {
+                Ok(terminal) => self.send(ServerMsg::TermCreated { terminal }).await,
+                Err(message) => self.send(ServerMsg::Error { message }).await,
+            },
         }
     }
 

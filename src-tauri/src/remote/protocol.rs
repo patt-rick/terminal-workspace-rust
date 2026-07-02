@@ -43,6 +43,13 @@ pub enum ClientMsg {
     GitDiff { repo_id: String },
     #[serde(rename = "git.push")]
     GitPush { repo_id: String },
+    #[serde(rename = "claude.sessions")]
+    ClaudeSessions { project_id: String },
+    #[serde(rename = "claude.resume")]
+    ClaudeResume {
+        project_id: String,
+        session_id: String,
+    },
     Ping,
 }
 
@@ -102,6 +109,11 @@ pub enum ServerMsg {
         repo_id: String,
         ok: bool,
         output: String,
+    },
+    #[serde(rename = "claude.sessions")]
+    ClaudeSessions {
+        project_id: String,
+        sessions: Vec<crate::claude::SessionSummary>,
     },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
@@ -176,6 +188,45 @@ mod tests {
         assert_eq!(v["type"], "term.attached");
         assert_eq!(v["terminalId"], "t1");
         assert_eq!(v["tag"], 7);
+    }
+
+    #[test]
+    fn no_filesystem_or_project_management_endpoints() {
+        // AC-3.10: the remote protocol must not expose file read/write or
+        // project add/remove. These type tags must not deserialize into any
+        // ClientMsg variant.
+        for tag in [
+            "fs.read",
+            "fs.write",
+            "fs.list",
+            "project.add",
+            "project.remove",
+            "settings.set",
+            "invoke",
+        ] {
+            let json = format!(r#"{{"type":"{tag}","path":"/etc/passwd"}}"#);
+            assert!(
+                serde_json::from_str::<ClientMsg>(&json).is_err(),
+                "'{tag}' must not be a valid client message"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_session_messages_deserialize() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"type":"claude.resume","projectId":"p1","sessionId":"s1"}"#)
+                .unwrap();
+        match m {
+            ClientMsg::ClaudeResume {
+                project_id,
+                session_id,
+            } => {
+                assert_eq!(project_id, "p1");
+                assert_eq!(session_id, "s1");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

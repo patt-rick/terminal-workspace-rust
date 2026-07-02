@@ -8,8 +8,10 @@ import {
   type GitInfo,
   type ProjectInfo,
   type RepoInfo,
+  type SessionSummary,
 } from './protocol'
 import { GitSheet } from './git-sheet'
+import { SessionsSheet } from './sessions-sheet'
 
 const TOKEN_KEY = 'tw_remote_token'
 type Phase = 'pair' | 'connecting' | 'ready' | 'evicted' | 'closed'
@@ -59,6 +61,11 @@ export function App() {
   const [gitPushMsg, setGitPushMsg] = useState<string | null>(null)
   const [gitPushing, setGitPushing] = useState(false)
   const gitRepoIdRef = useRef<string | null>(null)
+
+  const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const sessionsProjectRef = useRef<string | null>(null)
 
   const projectsRef = useRef<ProjectInfo[]>([])
   projectsRef.current = projects
@@ -118,6 +125,23 @@ export function App() {
     setGitPushing(true)
     setGitPushMsg(null)
     clientRef.current?.gitPush(gitRepoIdRef.current)
+  }
+
+  const openSessions = (projectId: string) => {
+    sessionsProjectRef.current = projectId
+    setSessions([])
+    setSessionsLoading(true)
+    setSessionsOpen(true)
+    setDrawerOpen(false)
+    clientRef.current?.claudeSessions(projectId)
+  }
+
+  const doResume = (sessionId: string) => {
+    const projectId = sessionsProjectRef.current
+    if (!projectId) return
+    // The server replies with term.created → onCreated attaches automatically.
+    clientRef.current?.claudeResume(projectId, sessionId)
+    setSessionsOpen(false)
   }
 
   const attachTo = useCallback((id: string) => {
@@ -216,6 +240,12 @@ export function App() {
         if (ok && repoId === gitRepoIdRef.current) {
           clientRef.current?.gitStatus(repoId)
           clientRef.current?.gitDiff(repoId)
+        }
+      },
+      onClaudeSessions: (projectId, list) => {
+        if (projectId === sessionsProjectRef.current) {
+          setSessions(list)
+          setSessionsLoading(false)
         }
       },
       onEvicted: () => {
@@ -400,6 +430,7 @@ export function App() {
                 <div className="mk">
                   <button onClick={() => clientRef.current?.create(p.id, 'shell')}>+ Shell</button>
                   <button onClick={() => clientRef.current?.create(p.id, 'claude')}>+ Claude</button>
+                  <button onClick={() => openSessions(p.id)}>⟳ Sessions</button>
                 </div>
               </div>
             ))}
@@ -418,6 +449,15 @@ export function App() {
           onSelectRepo={selectGitRepo}
           onPush={doPush}
           onClose={() => setGitOpen(false)}
+        />
+      )}
+
+      {sessionsOpen && (
+        <SessionsSheet
+          sessions={sessions}
+          loading={sessionsLoading}
+          onResume={doResume}
+          onClose={() => setSessionsOpen(false)}
         />
       )}
 

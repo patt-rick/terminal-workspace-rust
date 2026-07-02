@@ -53,6 +53,14 @@ export interface FileDiff {
   hunks: DiffHunk[]
 }
 
+export interface SessionSummary {
+  sessionId: string
+  title: string
+  messageCount: number
+  lastActive: number
+  gitBranch: string | null
+}
+
 export interface Handlers {
   onState?: (state: StateSnapshot, appVersion: string) => void
   onAttached?: (terminalId: string, tag: number) => void
@@ -68,6 +76,7 @@ export interface Handlers {
   onGitDiff?: (repoId: string, files: FileDiff[]) => void
   onGitPushProgress?: (repoId: string, message: string) => void
   onGitPushDone?: (repoId: string, ok: boolean, output: string) => void
+  onClaudeSessions?: (projectId: string, sessions: SessionSummary[]) => void
   onEvicted?: () => void
   onError?: (message: string) => void
   onClose?: () => void
@@ -149,6 +158,9 @@ export class RemoteClient {
         case 'git.push.done':
           this.h.onGitPushDone?.(m.repoId, m.ok, m.output)
           break
+        case 'claude.sessions':
+          this.h.onClaudeSessions?.(m.projectId, m.sessions)
+          break
         case 'session.evicted':
           this.h.onEvicted?.()
           break
@@ -198,6 +210,12 @@ export class RemoteClient {
   }
   gitPush(repoId: string): void {
     this.send({ type: 'git.push', repoId })
+  }
+  claudeSessions(projectId: string): void {
+    this.send({ type: 'claude.sessions', projectId })
+  }
+  claudeResume(projectId: string, sessionId: string): void {
+    this.send({ type: 'claude.resume', projectId, sessionId })
   }
   ping(): void {
     this.send({ type: 'ping' })
