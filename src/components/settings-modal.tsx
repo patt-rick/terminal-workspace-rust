@@ -237,12 +237,20 @@ const REMOTE_MODES: { id: RemoteMode; label: string; blurb: string }[] = [
       'No account or setup needed. You get a temporary public link + QR each session. The link changes every time.',
   },
   {
+    id: 'tailscale',
+    label: 'Tailscale (advanced)',
+    blurb:
+      'Install the free Tailscale app on this PC and your phone once. Your address never changes and nothing is exposed to the public internet. Recommended for daily use.',
+  },
+  {
     id: 'local',
     label: 'This computer only',
     blurb:
-      'Serves on localhost (127.0.0.1) — reachable only from a browser on this machine. Nothing is exposed to the network. (Tailscale/LAN binding comes later.)',
+      'Serves on localhost (127.0.0.1) — reachable only from a browser on this machine. Nothing is exposed to the network.',
   },
 ]
+
+const DEFAULT_TAILSCALE_PORT = 8765
 
 function RemoteAccessSection() {
   const [status, setStatus] = useState<import('../lib/ipc').RemoteStatus | null>(null)
@@ -252,6 +260,10 @@ function RemoteAccessSection() {
   const [mode, setMode] = useState<RemoteMode>('cloudflare')
   const [progress, setProgress] = useState<string | null>(null)
   const [tunnelDied, setTunnelDied] = useState(false)
+  const [tsInfo, setTsInfo] = useState<import('../lib/ipc').TailscaleInfo | null>(null)
+  const [tsChecked, setTsChecked] = useState(false)
+  const [port, setPort] = useState(DEFAULT_TAILSCALE_PORT)
+  const [bindAll, setBindAll] = useState(false)
 
   const refresh = () => {
     if (!isTauri) {
@@ -289,6 +301,29 @@ function RemoteAccessSection() {
     }
   }, [])
 
+  // Detect the tailnet address when the user picks Tailscale mode, so we can show
+  // the reachable address or fall back to setup instructions (AC-3.8).
+  useEffect(() => {
+    if (!isTauri || mode !== 'tailscale' || (status?.running ?? false)) return
+    let cancelled = false
+    setTsChecked(false)
+    ipc.remote
+      .detectTailscale()
+      .then((info) => {
+        if (cancelled) return
+        setTsInfo(info)
+        setTsChecked(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTsInfo(null)
+        setTsChecked(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, status?.running])
+
   if (!supported) {
     return (
       <Section title="Remote Access">
@@ -308,7 +343,10 @@ function RemoteAccessSection() {
     setTunnelDied(false)
     setProgress(startMode === 'cloudflare' ? 'Setting up tunnel…' : null)
     try {
-      const info = await ipc.remote.start(startMode)
+      // Tailscale uses a stable, user-chosen port; the others take any free port.
+      const startPort = startMode === 'tailscale' ? port : undefined
+      const startBindAll = startMode === 'tailscale' ? bindAll : false
+      const info = await ipc.remote.start(startMode, startPort, startBindAll)
       setStatus({
         running: true,
         mode: info.mode,
@@ -355,13 +393,14 @@ function RemoteAccessSection() {
 
       {running ? (
         <div className="flex flex-col gap-2.5">
-          {status?.mode === 'cloudflare' && status.url && !tunnelDied && (
+          {status?.mode !== 'local' && status?.url && !tunnelDied && (
             <div className="flex items-center gap-3">
               <div className="rounded-md bg-white p-2">
                 <QRCodeSVG value={status.url} size={132} marginSize={0} />
               </div>
               <div className="text-xs text-muted">
                 Scan with your phone camera, then enter the pairing code below.
+                {status?.mode === 'tailscale' && ' Your phone must be on the same tailnet.'}
               </div>
             </div>
           )}
@@ -440,10 +479,22 @@ function RemoteAccessSection() {
               </label>
             ))}
           </div>
+
+          {mode === 'tailscale' && (
+            <TailscaleSetup
+              info={tsInfo}
+              checked={tsChecked}
+              port={port}
+              onPort={setPort}
+              bindAll={bindAll}
+              onBindAll={setBindAll}
+            />
+          )}
+
           <button
             type="button"
             onClick={() => void start(mode)}
-            disabled={busy}
+            disabled={busy || (mode === 'tailscale' && (!tsChecked || !tsInfo))}
             className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
           >
             {busy ? progress ?? 'Starting…' : 'Start Remote Session'}
@@ -452,6 +503,84 @@ function RemoteAccessSection() {
       )}
       {error && <div className="text-xs text-danger">{error}</div>}
     </Section>
+  )
+}
+
+function TailscaleSetup({
+  info,
+  checked,
+  port,
+  onPort,
+  bindAll,
+  onBindAll,
+}: {
+  info: import('../lib/ipc').TailscaleInfo | null
+  checked: boolean
+  port: number
+  onPort: (v: number) => void
+  bindAll: boolean
+  onBindAll: (v: boolean) => void
+}) {
+  if (!checked) {
+    return <div className="text-xs text-muted">Checking for Tailscale…</div>
+  }
+
+  if (!info) {
+    return (
+      <div className="flex flex-col gap-1.5 rounded-md border border-border bg-foreground/5 px-2.5 py-2 text-xs">
+        <div className="font-medium text-foreground">Tailscale isn’t set up yet</div>
+        <ol className="ml-4 list-decimal text-muted [&>li]:mt-0.5">
+          <li>
+            Install Tailscale on this PC and your phone from{' '}
+            <code className="font-mono">tailscale.com/download</code>.
+          </li>
+          <li>Sign in on both devices with the same account.</li>
+          <li>Come back here and pick Tailscale again — your address will appear.</li>
+        </ol>
+      </div>
+    )
+  }
+
+  const host = info.dnsName ?? info.ip
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-foreground/5 px-2.5 py-2 text-xs">
+      <Row label="Tailnet address">
+        <span className="font-mono text-foreground/80">{host}</span>
+      </Row>
+      {info.dnsName && (
+        <Row label="IP">
+          <span className="font-mono text-muted">{info.ip}</span>
+        </Row>
+      )}
+      <Row label="Port">
+        <input
+          type="number"
+          min={1}
+          max={65535}
+          value={port}
+          onChange={(e) => onPort(Number(e.target.value) || DEFAULT_TAILSCALE_PORT)}
+          className="w-24 rounded border border-border bg-transparent px-2 py-0.5 text-right font-mono text-foreground"
+        />
+      </Row>
+      <label className="flex cursor-pointer items-start gap-2 text-muted">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={bindAll}
+          onChange={(e) => onBindAll(e.target.checked)}
+        />
+        <span>
+          Also expose on my local network (bind <code className="font-mono">0.0.0.0</code>).{' '}
+          <span className="text-danger">
+            Anyone on your Wi-Fi/LAN can then reach the pairing screen — only enable on a trusted
+            network.
+          </span>
+        </span>
+      </label>
+      <div className="text-muted">
+        Will serve at <span className="font-mono">http://{host}:{port}</span>.
+      </div>
+    </div>
   )
 }
 

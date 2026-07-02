@@ -7,6 +7,7 @@ mod client;
 pub mod protocol;
 pub mod server;
 pub mod session;
+pub mod tailscale;
 pub mod tunnel;
 
 use parking_lot::Mutex;
@@ -20,6 +21,7 @@ use session::SessionManager;
 /// Connectivity mode chosen at start time.
 pub const MODE_CLOUDFLARE: &str = "cloudflare";
 pub const MODE_LOCAL: &str = "local";
+pub const MODE_TAILSCALE: &str = "tailscale";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -77,22 +79,55 @@ impl RemoteServer {
         self.inner.lock().is_some()
     }
 
-    /// Bind 127.0.0.1:<port> (0 = OS-assigned), spawn the server, and — in
-    /// Cloudflare mode — bring up a `cloudflared` quick tunnel and use its public
-    /// URL. Always binds 127.0.0.1 (R3.6): only the tunnel can reach it publicly.
-    /// Returns the bound port, the user-facing URL, and a fresh pairing code.
-    pub async fn start(&self, port: u16, mode: &str) -> Result<StartInfo, String> {
+    /// Start remote access in the given mode.
+    ///
+    /// Bind address by mode (R3.6): Cloudflare and local bind `127.0.0.1` (only
+    /// the tunnel, or this machine, can reach it); Tailscale binds the tailnet
+    /// interface, or `0.0.0.0` when `bind_all` is set (an explicit opt-in the UI
+    /// warns about). We never silently bind `0.0.0.0`. Returns the bound port,
+    /// the user-facing URL, and a fresh pairing code.
+    pub async fn start(&self, port: u16, mode: &str, bind_all: bool) -> Result<StartInfo, String> {
+        use std::net::{IpAddr, Ipv4Addr};
+
         if self.is_running() {
             return Err("remote access already running".into());
         }
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+
+        // Tailscale needs the tailnet address resolved before we can bind it.
+        let ts_info = if mode == MODE_TAILSCALE {
+            let info = tokio::task::spawn_blocking(tailscale::detect)
+                .await
+                .ok()
+                .flatten()
+                .ok_or_else(|| {
+                    "Tailscale isn't running on this machine. Install Tailscale, sign in, then \
+                     start remote access again."
+                        .to_string()
+                })?;
+            Some(info)
+        } else {
+            None
+        };
+
+        let bind_ip: IpAddr = match mode {
+            MODE_TAILSCALE if bind_all => Ipv4Addr::UNSPECIFIED.into(),
+            MODE_TAILSCALE => ts_info
+                .as_ref()
+                .unwrap()
+                .ip
+                .parse()
+                .map_err(|_| "invalid tailnet address".to_string())?,
+            _ => Ipv4Addr::LOCALHOST.into(),
+        };
+
+        let listener = tokio::net::TcpListener::bind((bind_ip, port))
             .await
             .map_err(|e| format!("bind failed: {e}"))?;
         let actual = listener
             .local_addr()
             .map_err(|e| e.to_string())?
             .port();
-        let local_url = format!("http://127.0.0.1:{actual}");
+        let local_url = format!("http://{bind_ip}:{actual}");
 
         let code = self.sessions.new_code();
         let ctx = server::ServerCtx {
@@ -111,8 +146,8 @@ impl RemoteServer {
 
         // Bring up the tunnel *after* the server is listening. If it fails, tear
         // the just-started server back down so we don't leak it.
-        let (tunnel, url) = if mode == MODE_CLOUDFLARE {
-            match tunnel::Tunnel::spawn(self.app.clone(), actual).await {
+        let (tunnel, url) = match mode {
+            MODE_CLOUDFLARE => match tunnel::Tunnel::spawn(self.app.clone(), actual).await {
                 Ok(t) => {
                     let url = t.url.clone();
                     (Some(t), url)
@@ -122,9 +157,12 @@ impl RemoteServer {
                     self.sessions.reset();
                     return Err(e);
                 }
+            },
+            MODE_TAILSCALE => {
+                let host = ts_info.as_ref().unwrap().host();
+                (None, format!("http://{host}:{actual}"))
             }
-        } else {
-            (None, local_url.clone())
+            _ => (None, local_url.clone()),
         };
 
         *self.inner.lock() = Some(Running {

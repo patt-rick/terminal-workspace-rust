@@ -61,7 +61,7 @@ pub fn run() {
                     // Dev autostart binds localhost only (no tunnel) for LAN testing.
                     tauri::async_runtime::spawn(async move {
                         let server = handle.state::<remote::RemoteServer>();
-                        match server.start(port, remote::MODE_LOCAL).await {
+                        match server.start(port, remote::MODE_LOCAL, false).await {
                             Ok(info) => {
                                 eprintln!("REMOTE_READY url={} code={}", info.url, info.pairing_code)
                             }
@@ -146,6 +146,8 @@ pub fn run() {
             commands::remote_status,
             #[cfg(feature = "remote-access")]
             commands::remote_regenerate_code,
+            #[cfg(feature = "remote-access")]
+            commands::remote_detect_tailscale,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

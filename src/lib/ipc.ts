@@ -251,7 +251,14 @@ export interface DetectedGhAccount {
 }
 
 /** Connectivity mode for remote access. */
-export type RemoteMode = 'cloudflare' | 'local'
+export type RemoteMode = 'cloudflare' | 'local' | 'tailscale'
+
+export interface TailscaleInfo {
+  /** This machine's tailnet IPv4 address. */
+  ip: string
+  /** MagicDNS name, when resolvable. */
+  dnsName: string | null
+}
 
 export interface RemoteStatus {
   running: boolean
@@ -436,9 +443,10 @@ export const ipc = {
   // cargo feature; calls reject with "command not found" otherwise).
   remote: {
     status: () => invoke<RemoteStatus>('remote_status'),
-    start: (mode?: RemoteMode, port?: number) =>
-      invoke<RemoteStartInfo>('remote_start', { mode, port }),
+    start: (mode?: RemoteMode, port?: number, bindAll?: boolean) =>
+      invoke<RemoteStartInfo>('remote_start', { mode, port, bindAll }),
     stop: () => invoke<void>('remote_stop'),
     regenerateCode: () => invoke<string | null>('remote_regenerate_code'),
+    detectTailscale: () => invoke<TailscaleInfo | null>('remote_detect_tailscale'),
   },
 }

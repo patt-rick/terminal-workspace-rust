@@ -785,12 +785,22 @@ pub async fn remote_start(
     server: State<'_, crate::remote::RemoteServer>,
     port: Option<u16>,
     mode: Option<String>,
+    bind_all: Option<bool>,
 ) -> AppResult<crate::remote::StartInfo> {
     let mode = mode.unwrap_or_else(|| crate::remote::MODE_CLOUDFLARE.to_string());
     server
-        .start(port.unwrap_or(0), &mode)
+        .start(port.unwrap_or(0), &mode, bind_all.unwrap_or(false))
         .await
         .map_err(AppError::Msg)
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub async fn remote_detect_tailscale() -> Option<crate::remote::tailscale::TailscaleInfo> {
+    tokio::task::spawn_blocking(crate::remote::tailscale::detect)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(feature = "remote-access")]
