@@ -37,7 +37,7 @@ pub fn router(ctx: ServerCtx) -> Router {
 }
 
 async fn index() -> Html<&'static str> {
-    Html(client::TEST_CLIENT)
+    Html(client::WEB_CLIENT)
 }
 
 #[derive(Deserialize)]
