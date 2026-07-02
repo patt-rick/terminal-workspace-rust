@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
+use crate::git::discover::RepoInfo;
 use crate::git::{FileDiff, GitInfo};
 use crate::github::{
     self, DeviceFlowStart, DevicePoll, GithubSettings, GithubStore, PullRequestDetail,
@@ -265,9 +266,81 @@ pub struct PushResult {
     pub output: String,
 }
 
+/// Resolve a picker `repo_id` to its absolute working directory.
+fn repo_root(store: &StateStore, repo_id: &str) -> AppResult<String> {
+    store
+        .repo_path(repo_id)
+        .ok_or_else(|| AppError::Msg("repo not found".to_string()))
+}
+
+/// Discover (or revalidate) the git repos under a project. `refresh=false`
+/// returns the cached list with stale entries (missing `.git`) pruned; `true`
+/// runs a full recursive rescan. Both persist the result.
 #[tauri::command]
-pub async fn git_info(store: State<'_, StateStore>, project_id: String) -> AppResult<GitInfo> {
+pub async fn git_discover_repos(
+    store: State<'_, StateStore>,
+    project_id: String,
+    refresh: bool,
+) -> AppResult<Vec<RepoInfo>> {
     let root = project_root(&store, &project_id)?;
+    let cached = store.get_repos(&project_id);
+
+    if !refresh && !cached.is_empty() {
+        // Cheap focus revalidation: drop repos whose `.git` vanished.
+        let valid: Vec<RepoInfo> = cached
+            .into_iter()
+            .filter(|r| Path::new(&r.path).join(".git").exists())
+            .collect();
+        store.set_repos(&project_id, valid.clone());
+        return Ok(valid);
+    }
+
+    let pid = project_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::git::discover::discover_repos(&pid, Path::new(&root))
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?;
+    if result.capped {
+        eprintln!(
+            "git_discover_repos: directory-visit cap hit for project {project_id}; results may be incomplete"
+        );
+    }
+    store.set_repos(&project_id, result.repos.clone());
+    Ok(result.repos)
+}
+
+#[tauri::command]
+pub fn git_selected_repo(store: State<StateStore>, project_id: String) -> Option<String> {
+    store.selected_repo(&project_id)
+}
+
+#[tauri::command]
+pub fn git_set_selected_repo(store: State<StateStore>, project_id: String, repo_id: String) {
+    store.set_selected_repo(project_id, repo_id);
+}
+
+/// Per-repo working-tree dirty flags (repo_id → dirty) for the picker dots and
+/// the aggregate Git-tab indicator. Computed off the main thread.
+#[tauri::command]
+pub async fn git_dirty_flags(
+    store: State<'_, StateStore>,
+    project_id: String,
+) -> AppResult<std::collections::HashMap<String, bool>> {
+    let repos = store.get_repos(&project_id);
+    tauri::async_runtime::spawn_blocking(move || -> std::collections::HashMap<String, bool> {
+        repos
+            .into_iter()
+            .map(|r| (r.id, crate::git::is_dirty(Path::new(&r.path))))
+            .collect()
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn git_info(store: State<'_, StateStore>, repo_id: String) -> AppResult<GitInfo> {
+    let root = repo_root(&store, &repo_id)?;
     tauri::async_runtime::spawn_blocking(move || crate::git::get_info(Path::new(&root)))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))
@@ -276,10 +349,10 @@ pub async fn git_info(store: State<'_, StateStore>, project_id: String) -> AppRe
 #[tauri::command]
 pub async fn git_push(
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     branch: String,
 ) -> AppResult<PushResult> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     let (ok, output) = tauri::async_runtime::spawn_blocking(move || {
         crate::git::push(Path::new(&root), &branch)
     })
@@ -289,8 +362,8 @@ pub async fn git_push(
 }
 
 #[tauri::command]
-pub async fn git_diff(store: State<'_, StateStore>, project_id: String) -> AppResult<Vec<FileDiff>> {
-    let root = project_root(&store, &project_id)?;
+pub async fn git_diff(store: State<'_, StateStore>, repo_id: String) -> AppResult<Vec<FileDiff>> {
+    let root = repo_root(&store, &repo_id)?;
     tauri::async_runtime::spawn_blocking(move || crate::git::diff(Path::new(&root)).map_err(AppError::Msg))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))?
@@ -659,9 +732,9 @@ pub fn identity_set_config(
 pub fn identity_resolve(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
 ) -> AppResult<Resolution> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     let info = crate::git::get_info(Path::new(&root));
     // Git identity only applies to git repos. For a non-repo project there is
     // nothing to resolve (and applying would fail in `Repository::discover`), so
@@ -677,10 +750,10 @@ pub fn identity_resolve(
 pub fn identity_apply(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
     account_id: String,
 ) -> AppResult<ApplyResult> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     ids.apply(&root, &account_id)
 }
 
@@ -688,9 +761,9 @@ pub fn identity_apply(
 pub fn identity_current(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
 ) -> AppResult<CurrentIdentity> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     Ok(ids.current(&root))
 }
 

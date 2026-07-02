@@ -9,6 +9,7 @@ import {
   type WorkflowRunSummary,
 } from '../../lib/ipc'
 import { useIdentity } from '../../state/identity'
+import { useRepos } from '../../state/repos'
 import { useUi } from '../../state/ui'
 
 type Section = 'prs' | 'actions'
@@ -89,15 +90,23 @@ function PushAccountSection({ projectId }: { projectId: string }) {
   const appliedTick = useIdentity((s) => s.appliedTick)
   const openPicker = useIdentity((s) => s.openPicker)
   const openSettings = useUi((s) => s.openSettings)
+  const repos = useRepos((s) => s.reposByProject[projectId])
+  const selectedId = useRepos((s) => s.selectedByProject[projectId] ?? null)
   const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
+
+  const selectedRepo = repos?.find((r) => r.id === selectedId) ?? null
 
   useEffect(() => {
     if (!loaded) void load()
   }, [loaded, load])
 
   useEffect(() => {
-    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
-  }, [projectId, appliedTick])
+    if (!selectedId) {
+      setIdentity(null)
+      return
+    }
+    ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+  }, [selectedId, appliedTick])
 
   if (!identity?.isRepo) return null
 
@@ -141,7 +150,16 @@ function PushAccountSection({ projectId }: { projectId: string }) {
         </div>
         <button
           type="button"
-          onClick={() => openPicker(projectId, identity.accountId)}
+          onClick={() =>
+            selectedId &&
+            openPicker([
+              {
+                repoId: selectedId,
+                label: selectedRepo ? selectedRepo.relativePath || selectedRepo.name : '',
+                suggestedId: identity.accountId,
+              },
+            ])
+          }
           className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5"
         >
           Change

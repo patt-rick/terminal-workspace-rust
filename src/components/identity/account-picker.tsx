@@ -3,43 +3,53 @@ import { ipc } from '../../lib/ipc'
 import { useIdentity } from '../../state/identity'
 import { useUi } from '../../state/ui'
 
+/**
+ * Account chooser for one or more repos. A single repo renders one radio group;
+ * multiple unmapped repos (e.g. on project switch) are batched into one dialog
+ * with a per-repo account selector, instead of N sequential popups.
+ */
 export function AccountPicker() {
-  const projectId = useIdentity((s) => s.pickerProjectId)
-  const suggestedId = useIdentity((s) => s.pickerSuggestedId)
+  const repos = useIdentity((s) => s.pickerRepos)
   const accounts = useIdentity((s) => s.accounts)
   const close = useIdentity((s) => s.closePicker)
   const openSettings = useUi((s) => s.openSettings)
   const markApplied = useIdentity((s) => s.markApplied)
 
-  const [selected, setSelected] = useState<string | null>(null)
+  // repoId -> chosen accountId
+  const [choices, setChoices] = useState<Record<string, string | null>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Reset selection whenever the picker (re)opens.
+  // Seed choices with each repo's suggestion whenever the picker (re)opens.
   useEffect(() => {
-    if (projectId) {
-      setSelected(suggestedId ?? accounts[0]?.id ?? null)
-      setError(null)
-    }
-  }, [projectId, suggestedId, accounts])
+    if (!repos) return
+    const seeded: Record<string, string | null> = {}
+    for (const r of repos) seeded[r.repoId] = r.suggestedId ?? accounts[0]?.id ?? null
+    setChoices(seeded)
+    setError(null)
+  }, [repos, accounts])
 
-  if (!projectId) return null
+  if (!repos) return null
+  const multi = repos.length > 1
 
   const onApply = async (): Promise<void> => {
-    if (!selected) return
     setBusy(true)
     setError(null)
     try {
-      await ipc.identity.apply(projectId, selected)
+      for (const r of repos) {
+        const accountId = choices[r.repoId]
+        if (accountId) await ipc.identity.apply(r.repoId, accountId)
+      }
       markApplied()
       close()
     } catch (e) {
-      // Surface the failure instead of silently leaving the popup open.
       setError(String(e))
     } finally {
       setBusy(false)
     }
   }
+
+  const anyChosen = repos.some((r) => choices[r.repoId])
 
   return (
     <div
@@ -47,10 +57,12 @@ export function AccountPicker() {
       onClick={close}
     >
       <div
-        className="w-[24rem] rounded-lg border border-border bg-surface p-4 shadow-xl"
+        className="w-[26rem] rounded-lg border border-border bg-surface p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="mb-2 text-sm font-semibold">Account for this repo</h2>
+        <h2 className="mb-2 text-sm font-semibold">
+          {multi ? `GitHub account for ${repos.length} repos` : 'Account for this repo'}
+        </h2>
 
         {accounts.length === 0 ? (
           <div className="space-y-3">
@@ -68,22 +80,34 @@ export function AccountPicker() {
           </div>
         ) : (
           <>
-            <div className="space-y-1">
-              {accounts.map((a) => (
-                <label
-                  key={a.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-foreground/5"
-                >
-                  <input
-                    type="radio"
-                    checked={selected === a.id}
-                    onChange={() => setSelected(a.id)}
-                  />
-                  <span className="min-w-0">
-                    <span className="text-sm font-medium">{a.label}</span>
-                    <span className="ml-2 text-xs text-muted">{a.login}</span>
-                  </span>
-                </label>
+            <div className="max-h-72 space-y-3 overflow-auto">
+              {repos.map((r) => (
+                <div key={r.repoId}>
+                  {multi && (
+                    <div className="mb-1 truncate text-[11px] font-medium text-foreground/70">
+                      {r.label}
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    {accounts.map((a) => (
+                      <label
+                        key={a.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-foreground/5"
+                      >
+                        <input
+                          type="radio"
+                          name={`repo-${r.repoId}`}
+                          checked={choices[r.repoId] === a.id}
+                          onChange={() => setChoices((c) => ({ ...c, [r.repoId]: a.id }))}
+                        />
+                        <span className="min-w-0">
+                          <span className="text-sm font-medium">{a.label}</span>
+                          <span className="ml-2 text-xs text-muted">{a.login}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
             <div className="mt-3 flex items-center justify-between">
@@ -103,15 +127,15 @@ export function AccountPicker() {
                   onClick={close}
                   className="rounded border border-border px-3 py-1 text-xs hover:bg-foreground/5"
                 >
-                  Cancel
+                  {multi ? 'Skip' : 'Cancel'}
                 </button>
                 <button
                   type="button"
-                  disabled={!selected || busy}
+                  disabled={!anyChosen || busy}
                   onClick={() => void onApply()}
                   className="rounded bg-accent px-3 py-1 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
                 >
-                  {busy ? 'Applying…' : 'Apply'}
+                  {busy ? 'Applying…' : multi ? 'Apply all' : 'Apply'}
                 </button>
               </div>
             </div>

@@ -1,6 +1,14 @@
 import { create } from 'zustand'
 import { ipc, type Account, type IdentityConfig } from '../lib/ipc'
 
+/** A repo awaiting an account choice in the (possibly batched) picker. */
+export interface PickerRepo {
+  repoId: string
+  /** Display label (relative path or repo name). */
+  label: string
+  suggestedId: string | null
+}
+
 interface IdentityState {
   accounts: Account[]
   config: IdentityConfig
@@ -8,9 +16,9 @@ interface IdentityState {
   /** bumped after any apply so dependent views (the badge) refresh */
   appliedTick: number
 
-  // UI flags (shared across the picker and badge)
-  pickerProjectId: string | null
-  pickerSuggestedId: string | null
+  // UI state (shared across the picker and badge). Non-empty = picker open; it
+  // lists one row per repo (a single-item list is the "one repo" case).
+  pickerRepos: PickerRepo[] | null
 
   load: () => Promise<void>
   saveAccount: (account: Account) => Promise<void>
@@ -20,7 +28,7 @@ interface IdentityState {
   setConfig: (config: IdentityConfig) => Promise<void>
   markApplied: () => void
 
-  openPicker: (projectId: string, suggestedId?: string | null) => void
+  openPicker: (repos: PickerRepo[]) => void
   closePicker: () => void
 }
 
@@ -29,8 +37,7 @@ export const useIdentity = create<IdentityState>((set, get) => ({
   config: { defaultAccountId: null, unmappedBehavior: 'ask' },
   loaded: false,
   appliedTick: 0,
-  pickerProjectId: null,
-  pickerSuggestedId: null,
+  pickerRepos: null,
 
   load: async () => {
     const [accounts, config] = await Promise.all([
@@ -75,7 +82,6 @@ export const useIdentity = create<IdentityState>((set, get) => ({
 
   markApplied: () => set((s) => ({ appliedTick: s.appliedTick + 1 })),
 
-  openPicker: (projectId, suggestedId = null) =>
-    set({ pickerProjectId: projectId, pickerSuggestedId: suggestedId }),
-  closePicker: () => set({ pickerProjectId: null, pickerSuggestedId: null }),
+  openPicker: (repos) => set({ pickerRepos: repos.length > 0 ? repos : null }),
+  closePicker: () => set({ pickerRepos: null }),
 }))

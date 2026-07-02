@@ -53,6 +53,17 @@ export type ReadResult =
   | { kind: 'binary' }
   | { kind: 'tooLarge' }
 
+export interface RepoInfo {
+  id: string
+  /** Absolute working-directory path (opaque to the UI). */
+  path: string
+  /** Display path relative to the project root; empty for a root-level repo. */
+  relativePath: string
+  name: string
+  isSubmodule: boolean
+  parentRepoId: string | null
+}
+
 export interface GitInfo {
   isRepo: boolean
   branch: string | null
@@ -315,10 +326,18 @@ export const ipc = {
   },
 
   git: {
-    info: (projectId: string) => invoke<GitInfo>('git_info', { projectId }),
-    push: (projectId: string, branch: string) =>
-      invoke<{ ok: boolean; output: string }>('git_push', { projectId, branch }),
-    diff: (projectId: string) => invoke<FileDiff[]>('git_diff', { projectId }),
+    discoverRepos: (projectId: string, refresh = false) =>
+      invoke<RepoInfo[]>('git_discover_repos', { projectId, refresh }),
+    selectedRepo: (projectId: string) =>
+      invoke<string | null>('git_selected_repo', { projectId }),
+    setSelectedRepo: (projectId: string, repoId: string) =>
+      invoke<void>('git_set_selected_repo', { projectId, repoId }),
+    dirtyFlags: (projectId: string) =>
+      invoke<Record<string, boolean>>('git_dirty_flags', { projectId }),
+    info: (repoId: string) => invoke<GitInfo>('git_info', { repoId }),
+    push: (repoId: string, branch: string) =>
+      invoke<{ ok: boolean; output: string }>('git_push', { repoId, branch }),
+    diff: (repoId: string) => invoke<FileDiff[]>('git_diff', { repoId }),
   },
 
   github: {
@@ -377,12 +396,12 @@ export const ipc = {
         defaultAccountId: config.defaultAccountId,
         unmappedBehavior: config.unmappedBehavior,
       }),
-    resolve: (projectId: string) =>
-      invoke<IdentityResolution>('identity_resolve', { projectId }),
-    apply: (projectId: string, accountId: string) =>
-      invoke<ApplyResult>('identity_apply', { projectId, accountId }),
-    current: (projectId: string) =>
-      invoke<CurrentIdentity>('identity_current', { projectId }),
+    resolve: (repoId: string) =>
+      invoke<IdentityResolution>('identity_resolve', { repoId }),
+    apply: (repoId: string, accountId: string) =>
+      invoke<ApplyResult>('identity_apply', { repoId, accountId }),
+    current: (repoId: string) =>
+      invoke<CurrentIdentity>('identity_current', { repoId }),
     applyGlobal: (accountId: string) =>
       invoke<void>('identity_apply_global', { accountId }),
     detectGhAccounts: () =>

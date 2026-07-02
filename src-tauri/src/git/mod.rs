@@ -1,3 +1,5 @@
+pub mod discover;
+
 use git2::{BranchType, DiffOptions, Patch, Repository};
 use serde::Serialize;
 use std::path::Path;
@@ -99,6 +101,20 @@ pub fn get_info(root: &Path) -> GitInfo {
     }
 
     info
+}
+
+/// Cheap working-tree dirty check for a single repo (opens exactly at `root`, no
+/// upward walk, so a submodule can't report its parent's state).
+pub fn is_dirty(root: &Path) -> bool {
+    let repo = match Repository::open(root) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true);
+    repo.statuses(Some(&mut opts))
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn push(root: &Path, branch: &str) -> (bool, String) {

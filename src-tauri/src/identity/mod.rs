@@ -640,4 +640,47 @@ mod tests {
         assert_eq!(cur.remote_login, None);
         assert_eq!(cur.account_id, None);
     }
+
+    #[test]
+    fn multi_repo_applies_distinct_identities_and_skips_ssh() {
+        // R2.13 mixed case: sub-repos mapped to different accounts, one SSH repo.
+        // Each repo keeps its own identity; SSH routing is skipped, others rewrite.
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        let c = tempdir().unwrap();
+        git2::Repository::init(a.path())
+            .unwrap()
+            .remote("origin", "https://github.com/acme/back.git")
+            .unwrap();
+        git2::Repository::init(b.path())
+            .unwrap()
+            .remote("origin", "https://github.com/acme/front.git")
+            .unwrap();
+        git2::Repository::init(c.path())
+            .unwrap()
+            .remote("origin", "git@github.com:acme/infra.git")
+            .unwrap();
+
+        let alpha = acct("a1", "alpha");
+        let beta = acct("a2", "beta");
+
+        assert!(!apply_identity(a.path(), &alpha).unwrap());
+        assert!(!apply_identity(b.path(), &beta).unwrap());
+        assert!(apply_identity(c.path(), &alpha).unwrap()); // SSH -> routing skipped
+
+        let ca = current_identity(a.path(), Some("a1".to_string()));
+        let cb = current_identity(b.path(), Some("a2".to_string()));
+        assert_eq!(ca.email.as_deref(), Some("a1@example.com"));
+        assert_eq!(ca.remote_login.as_deref(), Some("alpha"));
+        assert_eq!(cb.email.as_deref(), Some("a2@example.com"));
+        assert_eq!(cb.remote_login.as_deref(), Some("beta"));
+
+        // SSH repo: user config set but origin url unchanged (no embedded login).
+        let rc = git2::Repository::open(c.path()).unwrap();
+        assert_eq!(
+            rc.find_remote("origin").unwrap().url().unwrap(),
+            "git@github.com:acme/infra.git"
+        );
+        assert_eq!(current_identity(c.path(), None).remote_login, None);
+    }
 }

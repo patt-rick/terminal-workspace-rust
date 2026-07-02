@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ipc, type CurrentIdentity, type FileDiff, type GitInfo } from '../../lib/ipc'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ipc, type CurrentIdentity, type FileDiff, type GitInfo, type RepoInfo } from '../../lib/ipc'
 import { useDiffView } from '../../state/diff'
 import { useIdentity } from '../../state/identity'
+import { useRepos } from '../../state/repos'
 
 const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
+
+/** Picker label: the relative path, or the repo name for a root-level repo. */
+const repoLabel = (r: RepoInfo): string => r.relativePath || r.name
 
 const accountLabel = (
   identity: CurrentIdentity | null,
@@ -45,7 +49,92 @@ const statusGlyph = (status: string): string => {
   }
 }
 
+function RepoPicker({
+  repos,
+  selectedId,
+  dirty,
+  onSelect,
+}: {
+  repos: RepoInfo[]
+  selectedId: string | null
+  dirty: Record<string, boolean>
+  onSelect: (repoId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const selected = repos.find((r) => r.id === selectedId) ?? null
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  // One repo: a static label, preserving the original single-repo appearance.
+  if (repos.length <= 1) {
+    if (!selected) return null
+    return (
+      <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] text-muted">
+        <span className="truncate">{repoLabel(selected)}</span>
+        {dirty[selected.id] && <span className="text-warning">●</span>}
+      </div>
+    )
+  }
+
+  return (
+    <div ref={ref} className="relative px-3 pb-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-foreground/80 hover:bg-foreground/5"
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{selected ? repoLabel(selected) : 'Select repo'}</span>
+          {selected?.isSubmodule && <span className="text-[9px] text-link">sub</span>}
+          {selected && dirty[selected.id] && <span className="text-warning">●</span>}
+        </span>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute left-3 right-3 z-20 mt-1 max-h-60 overflow-auto rounded-md border border-border bg-surface py-1 shadow-xl">
+          {repos.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => {
+                onSelect(r.id)
+                setOpen(false)
+              }}
+              className={`flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11px] hover:bg-foreground/5 ${
+                r.id === selectedId ? 'text-foreground' : 'text-foreground/70'
+              }`}
+              style={r.isSubmodule ? { paddingLeft: '1.25rem' } : undefined}
+            >
+              <span className="truncate">{repoLabel(r)}</span>
+              {r.isSubmodule && <span className="text-[9px] text-link">sub</span>}
+              {dirty[r.id] && <span className="ml-auto text-warning">●</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function GitPanel({ projectId }: { projectId: string }) {
+  const discovered = useRepos((s) => s.reposByProject[projectId])
+  const repos = discovered ?? EMPTY_REPOS
+  const selectedId = useRepos((s) => s.selectedByProject[projectId] ?? null)
+  const dirty = useRepos((s) => s.dirtyByProject[projectId] ?? EMPTY_DIRTY)
+  const loadRepos = useRepos((s) => s.load)
+  const selectRepo = useRepos((s) => s.select)
+  const refreshDirty = useRepos((s) => s.refreshDirty)
+
   const [info, setInfo] = useState<GitInfo | null>(null)
   const [diffs, setDiffs] = useState<FileDiff[]>([])
   const [loading, setLoading] = useState(true)
@@ -57,34 +146,60 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const openPicker = useIdentity((s) => s.openPicker)
   const show = useDiffView((s) => s.show)
   const active = useDiffView((s) => s.active)
+  const closeDiff = useDiffView((s) => s.close)
+
+  const selectedRepo = useMemo(
+    () => repos.find((r) => r.id === selectedId) ?? null,
+    [repos, selectedId]
+  )
+
+  // Discover repos (cached) whenever the project changes.
+  useEffect(() => {
+    void loadRepos(projectId)
+  }, [projectId, loadRepos])
 
   const refresh = useCallback(() => {
+    if (!selectedId) {
+      setInfo(null)
+      setDiffs([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     Promise.all([
-      ipc.git.info(projectId).catch(() => null),
-      ipc.git.diff(projectId).catch(() => [] as FileDiff[]),
+      ipc.git.info(selectedId).catch(() => null),
+      ipc.git.diff(selectedId).catch(() => [] as FileDiff[]),
     ])
       .then(([i, d]) => {
         setInfo(i)
         setDiffs(d)
       })
       .finally(() => setLoading(false))
-    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
-  }, [projectId])
+    ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+    void refreshDirty(projectId)
+  }, [selectedId, projectId, refreshDirty])
 
   useEffect(refresh, [refresh])
 
   // Refresh the badge when an account is applied elsewhere (picker / auto-apply).
   useEffect(() => {
-    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
-  }, [projectId, appliedTick])
+    if (!selectedId) return
+    ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+  }, [selectedId, appliedTick])
+
+  const onSelectRepo = (repoId: string): void => {
+    if (repoId === selectedId) return
+    // The diff viewer shows one repo at a time — drop a diff from another repo.
+    if (active && active.repoId !== repoId) closeDiff()
+    selectRepo(projectId, repoId)
+  }
 
   const onPush = async (): Promise<void> => {
-    if (!info?.branch) return
+    if (!info?.branch || !selectedId) return
     setPushing(true)
     setPushMsg(null)
     try {
-      const res = await ipc.git.push(projectId, info.branch)
+      const res = await ipc.git.push(selectedId, info.branch)
       setPushMsg(res.ok ? 'Pushed.' : res.output || 'Push failed')
       if (res.ok) refresh()
     } catch (e) {
@@ -94,15 +209,53 @@ export function GitPanel({ projectId }: { projectId: string }) {
     }
   }
 
-  if (loading && !info) {
+  // Repos not discovered yet for this project — avoid flashing the empty state.
+  if (!discovered) {
     return <div className="px-3 py-3 text-xs text-muted">Loading…</div>
   }
+
+  if (repos.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+        <div className="text-xs text-muted">No repository here.</div>
+        <div className="text-[11px] text-muted/70">
+          Nested repos are detected automatically — add a folder containing git repos.
+        </div>
+        <button
+          type="button"
+          onClick={() => void loadRepos(projectId, true)}
+          className="mt-1 rounded border border-border px-2 py-0.5 text-[11px] text-foreground/70 hover:bg-foreground/5"
+        >
+          Rescan
+        </button>
+      </div>
+    )
+  }
+
+  const picker = (
+    <RepoPicker repos={repos} selectedId={selectedId} dirty={dirty} onSelect={onSelectRepo} />
+  )
+
+  if (loading && !info) {
+    return (
+      <div className="flex h-full flex-col">
+        {picker}
+        <div className="px-3 py-3 text-xs text-muted">Loading…</div>
+      </div>
+    )
+  }
   if (!info?.isRepo) {
-    return <div className="px-3 py-3 text-xs text-muted">Not a git repository</div>
+    return (
+      <div className="flex h-full flex-col">
+        {picker}
+        <div className="px-3 py-3 text-xs text-muted">Not a git repository</div>
+      </div>
+    )
   }
 
   return (
     <div className="flex h-full flex-col">
+      {picker}
       <div className="flex h-9 flex-shrink-0 items-center justify-between px-3">
         <div className="flex min-w-0 items-center gap-1.5 text-xs">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 text-muted">
@@ -118,7 +271,16 @@ export function GitPanel({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => openPicker(projectId, identity?.accountId ?? null)}
+            onClick={() =>
+              selectedRepo &&
+              openPicker([
+                {
+                  repoId: selectedRepo.id,
+                  label: repoLabel(selectedRepo),
+                  suggestedId: identity?.accountId ?? null,
+                },
+              ])
+            }
             title="Switch GitHub account for this repo"
             className="max-w-[8rem] truncate rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground/70 hover:bg-foreground/5"
           >
@@ -160,11 +322,11 @@ export function GitPanel({ projectId }: { projectId: string }) {
           <div className="px-2 py-1 text-xs text-muted">Working tree clean</div>
         ) : (
           diffs.map((f) => {
-            const isActive = active?.file.path === f.path
+            const isActive = active?.repoId === selectedId && active?.file.path === f.path
             return (
               <div
                 key={f.path}
-                onClick={() => show(projectId, f)}
+                onClick={() => selectedId && show(projectId, selectedId, f)}
                 className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 ${
                   isActive ? 'bg-accent/15' : 'hover:bg-foreground/5'
                 }`}
@@ -184,3 +346,7 @@ export function GitPanel({ projectId }: { projectId: string }) {
     </div>
   )
 }
+
+// Stable empty references so selector-derived defaults don't re-render forever.
+const EMPTY_REPOS: RepoInfo[] = []
+const EMPTY_DIRTY: Record<string, boolean> = {}
