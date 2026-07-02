@@ -4,7 +4,9 @@ import { useSettings } from '../state/settings'
 import { useUpdater } from '../state/updater'
 import { useActiveTheme, useThemeList } from '../themes/theme-provider'
 import { parseThemeJson } from '../themes/validate'
-import { ipc, isTauri } from '../lib/ipc'
+import { listen } from '@tauri-apps/api/event'
+import { QRCodeSVG } from 'qrcode.react'
+import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -227,11 +229,29 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   )
 }
 
+const REMOTE_MODES: { id: RemoteMode; label: string; blurb: string }[] = [
+  {
+    id: 'cloudflare',
+    label: 'Quick Start (Cloudflare)',
+    blurb:
+      'No account or setup needed. You get a temporary public link + QR each session. The link changes every time.',
+  },
+  {
+    id: 'local',
+    label: 'This computer only',
+    blurb:
+      'Serves on localhost (127.0.0.1) — reachable only from a browser on this machine. Nothing is exposed to the network. (Tailscale/LAN binding comes later.)',
+  },
+]
+
 function RemoteAccessSection() {
   const [status, setStatus] = useState<import('../lib/ipc').RemoteStatus | null>(null)
   const [supported, setSupported] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<RemoteMode>('cloudflare')
+  const [progress, setProgress] = useState<string | null>(null)
+  const [tunnelDied, setTunnelDied] = useState(false)
 
   const refresh = () => {
     if (!isTauri) {
@@ -243,11 +263,31 @@ function RemoteAccessSection() {
       .then((s) => {
         setStatus(s)
         setSupported(true)
+        if (s.running && s.mode) setMode(s.mode)
       })
       .catch(() => setSupported(false))
   }
 
   useEffect(refresh, [])
+
+  // Backend push events: cloudflared setup progress and tunnel death (R3.11).
+  useEffect(() => {
+    if (!isTauri) return
+    const unlisten = [
+      listen<string>('remote:cloudflared-progress', (e) => setProgress(e.payload)),
+      listen('remote:tunnel-died', () => {
+        setTunnelDied(true)
+        setProgress(null)
+      }),
+      listen<string>('remote:auto-stopped', (e) => {
+        setError(`Remote access stopped: ${e.payload}`)
+        refresh()
+      }),
+    ]
+    return () => {
+      unlisten.forEach((p) => void p.then((off) => off()))
+    }
+  }, [])
 
   if (!supported) {
     return (
@@ -262,16 +302,27 @@ function RemoteAccessSection() {
 
   const running = status?.running ?? false
 
-  const start = async () => {
+  const start = async (startMode: RemoteMode) => {
     setBusy(true)
     setError(null)
+    setTunnelDied(false)
+    setProgress(startMode === 'cloudflare' ? 'Setting up tunnel…' : null)
     try {
-      const info = await ipc.remote.start()
-      setStatus({ running: true, port: info.port, url: info.url, pairingCode: info.pairingCode, connectedSince: null })
+      const info = await ipc.remote.start(startMode)
+      setStatus({
+        running: true,
+        mode: info.mode,
+        port: info.port,
+        url: info.url,
+        localUrl: info.localUrl,
+        pairingCode: info.pairingCode,
+        connectedSince: null,
+      })
     } catch (e) {
       setError(String(e))
     } finally {
       setBusy(false)
+      setProgress(null)
     }
   }
 
@@ -279,10 +330,16 @@ function RemoteAccessSection() {
     setBusy(true)
     try {
       await ipc.remote.stop()
+      setTunnelDied(false)
       refresh()
     } finally {
       setBusy(false)
     }
+  }
+
+  const restartTunnel = async () => {
+    await ipc.remote.stop().catch(() => {})
+    await start('cloudflare')
   }
 
   const regenerate = async () => {
@@ -293,13 +350,44 @@ function RemoteAccessSection() {
   return (
     <Section title="Remote Access">
       <div className="text-xs text-muted">
-        Control your terminals from a browser over a local server (localhost only for now).
+        Control your terminals from a phone or another computer over the web.
       </div>
+
       {running ? (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2.5">
+          {status?.mode === 'cloudflare' && status.url && !tunnelDied && (
+            <div className="flex items-center gap-3">
+              <div className="rounded-md bg-white p-2">
+                <QRCodeSVG value={status.url} size={132} marginSize={0} />
+              </div>
+              <div className="text-xs text-muted">
+                Scan with your phone camera, then enter the pairing code below.
+              </div>
+            </div>
+          )}
+
+          {tunnelDied && (
+            <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">
+              <span>The Cloudflare tunnel disconnected.</span>
+              <button
+                type="button"
+                onClick={() => void restartTunnel()}
+                disabled={busy}
+                className="ml-auto rounded border border-danger/50 px-2 py-0.5 font-medium hover:bg-danger/10 disabled:opacity-50"
+              >
+                Restart tunnel
+              </button>
+            </div>
+          )}
+
           <Row label="URL">
-            <span className="font-mono text-xs text-foreground/80">{status?.url}</span>
+            <span className="font-mono text-xs text-foreground/80 break-all">{status?.url}</span>
           </Row>
+          {status?.mode === 'cloudflare' && status.localUrl && (
+            <Row label="Local URL">
+              <span className="font-mono text-xs text-muted">{status.localUrl}</span>
+            </Row>
+          )}
           <Row label="Pairing code">
             <span className="flex items-center gap-2">
               <span className="font-mono text-base tracking-widest text-foreground">
@@ -329,14 +417,38 @@ function RemoteAccessSection() {
           </div>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => void start()}
-          disabled={busy}
-          className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
-        >
-          {busy ? 'Starting…' : 'Start Remote Session'}
-        </button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
+            {REMOTE_MODES.map((m) => (
+              <label
+                key={m.id}
+                className={`flex cursor-pointer gap-2 rounded-md border px-2.5 py-2 text-xs ${
+                  mode === m.id ? 'border-accent bg-accent/5' : 'border-border hover:bg-foreground/5'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="remote-mode"
+                  className="mt-0.5"
+                  checked={mode === m.id}
+                  onChange={() => setMode(m.id)}
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-medium text-foreground">{m.label}</span>
+                  <span className="text-muted">{m.blurb}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => void start(mode)}
+            disabled={busy}
+            className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy ? progress ?? 'Starting…' : 'Start Remote Session'}
+          </button>
+        </div>
       )}
       {error && <div className="text-xs text-danger">{error}</div>}
     </Section>

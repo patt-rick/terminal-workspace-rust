@@ -51,7 +51,25 @@ pub fn run() {
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(PtyManager::new());
             #[cfg(feature = "remote-access")]
-            app.manage(remote::RemoteServer::new(app.handle().clone()));
+            {
+                app.manage(remote::RemoteServer::new(app.handle().clone()));
+                // Headless/dev auto-start for testing: set TW_REMOTE_AUTOSTART=<port>
+                // to start remote access at launch and print the URL + pairing code.
+                if let Ok(port) = std::env::var("TW_REMOTE_AUTOSTART") {
+                    let handle = app.handle().clone();
+                    let port: u16 = port.parse().unwrap_or(8899);
+                    // Dev autostart binds localhost only (no tunnel) for LAN testing.
+                    tauri::async_runtime::spawn(async move {
+                        let server = handle.state::<remote::RemoteServer>();
+                        match server.start(port, remote::MODE_LOCAL).await {
+                            Ok(info) => {
+                                eprintln!("REMOTE_READY url={} code={}", info.url, info.pairing_code)
+                            }
+                            Err(e) => eprintln!("REMOTE_START_FAILED {e}"),
+                        }
+                    });
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

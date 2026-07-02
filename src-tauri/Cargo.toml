@@ -72,6 +72,7 @@ remote-access = [
     "tokio/sync",
     "tokio/time",
     "tokio/io-util",
+    "tokio/process",
 ]
 
 [profile.release]

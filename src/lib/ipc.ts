@@ -250,10 +250,17 @@ export interface DetectedGhAccount {
   email: string | null
 }
 
+/** Connectivity mode for remote access. */
+export type RemoteMode = 'cloudflare' | 'local'
+
 export interface RemoteStatus {
   running: boolean
+  mode: RemoteMode | null
   port: number | null
+  /** User-facing URL to scan/share (tunnel URL in Cloudflare mode, else local). */
   url: string | null
+  /** Always the 127.0.0.1 URL the server binds. */
+  localUrl: string | null
   pairingCode: string | null
   /** Unix-epoch ms the current session connected, if any. */
   connectedSince: number | null
@@ -261,7 +268,9 @@ export interface RemoteStatus {
 
 export interface RemoteStartInfo {
   port: number
+  mode: RemoteMode
   url: string
+  localUrl: string
   pairingCode: string
 }
 
@@ -427,7 +436,8 @@ export const ipc = {
   // cargo feature; calls reject with "command not found" otherwise).
   remote: {
     status: () => invoke<RemoteStatus>('remote_status'),
-    start: (port?: number) => invoke<RemoteStartInfo>('remote_start', { port }),
+    start: (mode?: RemoteMode, port?: number) =>
+      invoke<RemoteStartInfo>('remote_start', { mode, port }),
     stop: () => invoke<void>('remote_stop'),
     regenerateCode: () => invoke<string | null>('remote_regenerate_code'),
   },

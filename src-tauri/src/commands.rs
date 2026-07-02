@@ -784,8 +784,13 @@ pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
 pub async fn remote_start(
     server: State<'_, crate::remote::RemoteServer>,
     port: Option<u16>,
+    mode: Option<String>,
 ) -> AppResult<crate::remote::StartInfo> {
-    server.start(port.unwrap_or(0)).await.map_err(AppError::Msg)
+    let mode = mode.unwrap_or_else(|| crate::remote::MODE_CLOUDFLARE.to_string());
+    server
+        .start(port.unwrap_or(0), &mode)
+        .await
+        .map_err(AppError::Msg)
 }
 
 #[cfg(feature = "remote-access")]
