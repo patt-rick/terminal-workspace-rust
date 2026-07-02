@@ -203,6 +203,20 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           />
         </Section>
 
+        <Section title="Claude Code">
+          <Row label="Always skip permissions">
+            <Toggle
+              checked={terminal.claudeSkipPermissions}
+              onChange={(v) => updateTerminal({ claudeSkipPermissions: v })}
+            />
+          </Row>
+          <div className="text-xs text-muted">
+            Starts Claude Code with{' '}
+            <code className="font-mono">--dangerously-skip-permissions</code>. Claude will not ask
+            for permission before running tools. Only enable this if you understand the risk.
+          </div>
+        </Section>
+
         <AccountsSection />
 
         <UpdatesSection />
