@@ -29,6 +29,45 @@ const tokenStore = {
 // reopening lands you where you left off.
 const LAST_TERM_KEY = 'tw_last_term'
 
+const b64urlToBytes = (b64url: string): Uint8Array => {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/')
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+}
+
+/// Subscribe this browser for Web Push (closed-app notifications) and register
+/// the subscription with the desktop. Reconciles a stale subscription when the
+/// desktop's VAPID key changed (it regenerates per desktop-app launch).
+async function ensurePushSubscription(
+  vapidKey: string,
+  register: (endpoint: string, p256dh: string, auth: string) => void
+): Promise<void> {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+  if (Notification.permission !== 'granted') return
+  const reg = await navigator.serviceWorker.ready
+  const appKey = b64urlToBytes(vapidKey)
+  let sub = await reg.pushManager.getSubscription()
+  if (sub) {
+    const cur = sub.options.applicationServerKey
+      ? new Uint8Array(sub.options.applicationServerKey)
+      : new Uint8Array()
+    const same = cur.length === appKey.length && cur.every((b, i) => b === appKey[i])
+    if (!same) {
+      await sub.unsubscribe().catch(() => {})
+      sub = null
+    }
+  }
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appKey.buffer as ArrayBuffer,
+    })
+  }
+  const json = sub.toJSON()
+  if (json.endpoint && json.keys?.p256dh && json.keys?.auth) {
+    register(json.endpoint, json.keys.p256dh, json.keys.auth)
+  }
+}
+
 // Dark theme matching the desktop default. Following the desktop's *active*
 // theme (sent in hello.ok) is a later refinement.
 const XTERM_THEME = {
@@ -187,11 +226,18 @@ export function App() {
   // Create the client once and connect if a token is already stored.
   useEffect(() => {
     const client = new RemoteClient({
-      onState: (state) => {
+      onState: (state, _version, vapidKey) => {
         setProjects(state.projects)
         setStatus('connected')
         setReconnecting(false)
         setPhase('ready')
+        // Register for closed-app push notifications (best-effort; needs HTTPS
+        // + granted notification permission).
+        if (vapidKey) {
+          void ensurePushSubscription(vapidKey, (endpoint, p256dh, auth) =>
+            clientRef.current?.pushSubscribe(endpoint, p256dh, auth)
+          ).catch(() => {})
+        }
         const id = curIdRef.current
         if (id) {
           // Reconnect on a live page: the server has no memory of the previous

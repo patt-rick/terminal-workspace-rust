@@ -5,6 +5,7 @@
 mod bridge;
 mod client;
 pub mod protocol;
+pub mod push;
 pub mod ratelimit;
 pub mod server;
 pub mod session;
@@ -12,11 +13,13 @@ pub mod tailscale;
 pub mod tunnel;
 
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-use tauri::AppHandle;
+use tauri::{AppHandle, Listener, Manager};
 
+use push::PushManager;
 use session::SessionManager;
 
 /// Connectivity mode chosen at start time.
@@ -61,6 +64,8 @@ struct Running {
     hint: Option<String>,
     /// A `tailscale serve` HTTPS front is active and must be torn down on stop.
     serve_active: bool,
+    /// Global bell/working listeners feeding Web Push; unlistened on stop.
+    push_listeners: Vec<tauri::EventId>,
     shutdown: tokio::sync::oneshot::Sender<()>,
     /// Kept alive for the session; dropping it kills `cloudflared`.
     _tunnel: Option<tunnel::Tunnel>,
@@ -70,6 +75,8 @@ struct Running {
 pub struct RemoteServer {
     inner: Mutex<Option<Running>>,
     sessions: Arc<SessionManager>,
+    /// Web Push (VAPID keys + subscription). None if keygen failed.
+    push: Option<Arc<PushManager>>,
     app: AppHandle,
 }
 
@@ -78,6 +85,7 @@ impl RemoteServer {
         Self {
             inner: Mutex::new(None),
             sessions: Arc::new(SessionManager::new()),
+            push: PushManager::new().map(Arc::new),
             app,
         }
     }
@@ -164,11 +172,16 @@ impl RemoteServer {
         let local_url = format!("http://{bind_ip}:{actual}");
 
         let code = self.sessions.new_code();
+        // Live-WebSocket count: pushes are only sent when this is zero (a
+        // connected client shows notifications via its own service worker).
+        let sockets = Arc::new(AtomicUsize::new(0));
         let ctx = server::ServerCtx {
             app: self.app.clone(),
             sessions: self.sessions.clone(),
             // ~10 /pair attempts burst per IP, refilling 1/6s (10/min sustained).
             rate_limit: Arc::new(ratelimit::RateLimiter::new(10.0, 1.0 / 6.0)),
+            push: self.push.clone(),
+            sockets: sockets.clone(),
         };
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let router = server::router(ctx);
@@ -214,6 +227,10 @@ impl RemoteServer {
         };
 
         let serve_active = serve_url.is_some();
+        let push_listeners = match &self.push {
+            Some(push) => register_push_listeners(&self.app, push.clone(), sockets),
+            None => Vec::new(),
+        };
         *self.inner.lock() = Some(Running {
             port: actual,
             mode: mode.to_string(),
@@ -221,6 +238,7 @@ impl RemoteServer {
             local_url: local_url.clone(),
             hint: hint.clone(),
             serve_active,
+            push_listeners,
             shutdown,
             _tunnel: tunnel,
         });
@@ -242,6 +260,12 @@ impl RemoteServer {
                 // CLI call; keep it off whatever thread called stop().
                 std::thread::spawn(tailscale::serve_stop);
             }
+            for id in running.push_listeners {
+                self.app.unlisten(id);
+            }
+        }
+        if let Some(push) = &self.push {
+            push.clear_subscription();
         }
         self.sessions.reset();
     }
@@ -282,4 +306,75 @@ impl RemoteServer {
             },
         }
     }
+}
+
+#[derive(Deserialize)]
+struct WorkingEvt {
+    id: String,
+    working: bool,
+}
+
+#[derive(Deserialize)]
+struct BellEvt {
+    id: String,
+}
+
+/// Terminal display name for notification text (best-effort).
+fn terminal_name(app: &AppHandle, terminal_id: &str) -> String {
+    app.state::<crate::state::StateStore>()
+        .snapshot()
+        .projects
+        .iter()
+        .flat_map(|p| p.terminals.iter())
+        .find(|t| t.id == terminal_id)
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| "Terminal".to_string())
+}
+
+/// Listen for bell/working transitions while remote access is running, and
+/// deliver them as Web Push when no client is connected (the phone's PWA is
+/// closed or suspended). A connected client gets these over its socket instead.
+fn register_push_listeners(
+    app: &AppHandle,
+    push: Arc<PushManager>,
+    sockets: Arc<AtomicUsize>,
+) -> Vec<tauri::EventId> {
+    let mut ids = Vec::new();
+
+    let (a, p, s) = (app.clone(), push.clone(), sockets.clone());
+    ids.push(app.listen("terminals:bell", move |ev| {
+        let Ok(evt) = serde_json::from_str::<BellEvt>(ev.payload()) else {
+            return;
+        };
+        if s.load(Ordering::Relaxed) == 0 && p.has_subscription() {
+            let title = terminal_name(&a, &evt.id);
+            let p = p.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(why) = p.send(&title, "Bell").await {
+                    eprintln!("web push failed: {why}");
+                }
+            });
+        }
+    }));
+
+    let a = app.clone();
+    ids.push(app.listen("terminals:working", move |ev| {
+        let Ok(evt) = serde_json::from_str::<WorkingEvt>(ev.payload()) else {
+            return;
+        };
+        // Always track durations; only send when it was a long-running task and
+        // nobody is connected to see it live.
+        let push_worthy = push.note_working(&evt.id, evt.working);
+        if push_worthy && sockets.load(Ordering::Relaxed) == 0 && push.has_subscription() {
+            let title = terminal_name(&a, &evt.id);
+            let p = push.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(why) = p.send(&title, "Finished").await {
+                    eprintln!("web push failed: {why}");
+                }
+            });
+        }
+    }));
+
+    ids
 }

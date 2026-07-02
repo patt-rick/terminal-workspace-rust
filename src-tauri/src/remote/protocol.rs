@@ -50,6 +50,15 @@ pub enum ClientMsg {
         project_id: String,
         session_id: String,
     },
+    /// Register the browser's push subscription for closed-app notifications.
+    #[serde(rename = "push.subscribe")]
+    PushSubscribe {
+        endpoint: String,
+        p256dh: String,
+        auth: String,
+    },
+    #[serde(rename = "push.unsubscribe")]
+    PushUnsubscribe,
     Ping,
 }
 
@@ -61,6 +70,8 @@ pub enum ServerMsg {
     HelloOk {
         state: StateSnapshot,
         app_version: String,
+        /// VAPID applicationServerKey (b64url) for Web Push, when available.
+        vapid_public_key: Option<String>,
     },
     #[serde(rename = "hello.err")]
     HelloErr { message: String },
@@ -246,6 +257,7 @@ mod tests {
                 ServerMsg::HelloOk {
                     state: StateSnapshot { projects: vec![] },
                     app_version: "0".into(),
+                    vapid_public_key: None,
                 },
                 "hello.ok",
             ),
@@ -362,6 +374,8 @@ mod tests {
             r#"{"type":"git.push","repoId":"r"}"#,
             r#"{"type":"claude.sessions","projectId":"p"}"#,
             r#"{"type":"claude.resume","projectId":"p","sessionId":"s"}"#,
+            r#"{"type":"push.subscribe","endpoint":"https://e","p256dh":"k","auth":"a"}"#,
+            r#"{"type":"push.unsubscribe"}"#,
             r#"{"type":"ping"}"#,
         ];
         for json in cases {

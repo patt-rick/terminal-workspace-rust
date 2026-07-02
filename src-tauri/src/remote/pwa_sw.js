@@ -48,6 +48,24 @@ self.addEventListener('fetch', (event) => {
   )
 })
 
+// Web Push: the desktop app pushes {title, body} when no client is connected —
+// this is what delivers notifications while the PWA is fully closed.
+self.addEventListener('push', (event) => {
+  let data = { title: 'Terminal Workspace', body: '' }
+  try {
+    data = event.data.json()
+  } catch {
+    // keep defaults
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Terminal Workspace', {
+      body: data.body || '',
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+    })
+  )
+})
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   event.waitUntil(

@@ -19,16 +19,36 @@ use tokio::task::JoinHandle;
 
 use super::bridge;
 use super::protocol::{output_frame, ClientMsg, ServerMsg};
+use super::push::{PushManager, PushSubscription};
 use super::ratelimit::RateLimiter;
 use super::session::{PairError, SessionManager, MAX_FAILED};
 use super::{client, RemoteServer};
 use crate::pty::PtyManager;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
 pub struct ServerCtx {
     pub app: AppHandle,
     pub sessions: Arc<SessionManager>,
     pub rate_limit: Arc<RateLimiter>,
+    /// Web Push manager (None when keygen failed).
+    pub push: Option<Arc<PushManager>>,
+    /// Live authenticated WebSocket count; pushes only fire when it's zero.
+    pub sockets: Arc<AtomicUsize>,
+}
+
+/// Drop-safe live-socket counter (decrements even if the task is cancelled).
+struct SocketGuard(Arc<AtomicUsize>);
+impl SocketGuard {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self(counter)
+    }
+}
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub fn router(ctx: ServerCtx) -> Router {
@@ -309,6 +329,20 @@ impl Conn {
                 Ok(terminal) => self.send(ServerMsg::TermCreated { terminal }).await,
                 Err(message) => self.send(ServerMsg::Error { message }).await,
             },
+            ClientMsg::PushSubscribe {
+                endpoint,
+                p256dh,
+                auth,
+            } => {
+                if let Some(push) = &self.ctx.push {
+                    push.set_subscription(PushSubscription { endpoint, p256dh, auth });
+                }
+            }
+            ClientMsg::PushUnsubscribe => {
+                if let Some(push) = &self.ctx.push {
+                    push.clear_subscription();
+                }
+            }
         }
     }
 
@@ -388,10 +422,12 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
     let hello_ok = ServerMsg::HelloOk {
         state: bridge::state_snapshot(&ctx.app),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
+        vapid_public_key: ctx.push.as_ref().map(|p| p.vapid_public_key()),
     };
     if socket.send(text(&hello_ok)).await.is_err() {
         return;
     }
+    let _socket_guard = SocketGuard::new(ctx.sockets.clone());
 
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(256);
     let listener_ids = spawn_state_forwarders(&ctx.app, out_tx.clone());

@@ -65,7 +65,7 @@ export interface SessionSummary {
 }
 
 export interface Handlers {
-  onState?: (state: StateSnapshot, appVersion: string) => void
+  onState?: (state: StateSnapshot, appVersion: string, vapidPublicKey: string | null) => void
   onAttached?: (terminalId: string, tag: number) => void
   onSnapshot?: (terminalId: string, tag: number, bytes: Uint8Array) => void
   onOutput?: (tag: number, bytes: Uint8Array) => void
@@ -179,7 +179,7 @@ export class RemoteClient {
       const m = JSON.parse(ev.data)
       switch (m.type) {
         case 'hello.ok':
-          this.h.onState?.(m.state, m.appVersion)
+          this.h.onState?.(m.state, m.appVersion, m.vapidPublicKey ?? null)
           break
         case 'hello.err':
           this.stopped = true
@@ -317,6 +317,12 @@ export class RemoteClient {
   }
   claudeResume(projectId: string, sessionId: string): void {
     this.send({ type: 'claude.resume', projectId, sessionId })
+  }
+  pushSubscribe(endpoint: string, p256dh: string, auth: string): void {
+    this.send({ type: 'push.subscribe', endpoint, p256dh, auth })
+  }
+  pushUnsubscribe(): void {
+    this.send({ type: 'push.unsubscribe' })
   }
   ping(): void {
     this.send({ type: 'ping' })

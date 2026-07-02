@@ -53,6 +53,9 @@ git2 = { version = "0.19", default-features = false, features = ["vendored-libgi
 axum = { version = "0.7", features = ["ws"], optional = true }
 base64 = { version = "0.22", optional = true }
 rand = { version = "0.8", optional = true }
+# Web Push crypto (VAPID ES256 + RFC 8291 aes128gcm). Already in the tree via
+# rustls, so this adds no new download — important on the filtered dev network.
+ring = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -72,6 +75,7 @@ remote-access = [
     "dep:axum",
     "dep:base64",
     "dep:rand",
+    "dep:ring",
     "tokio/rt-multi-thread",
     "tokio/net",
     "tokio/sync",
