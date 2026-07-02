@@ -690,6 +690,33 @@ pub async fn claude_sessions_list(
         .map_err(|e| AppError::Msg(e.to_string()))
 }
 
+fn claude_settings_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {
+    Ok(home_dir(app)?.join(".claude").join("settings.json"))
+}
+
+/// Whether the attention hooks are installed in the user's Claude settings.
+#[tauri::command]
+pub fn claude_hooks_status(app: AppHandle) -> AppResult<bool> {
+    Ok(crate::claude::hooks::is_installed(&claude_settings_path(&app)?))
+}
+
+/// Opt-in: install the Notification/Stop hooks (marker-based, preserves any
+/// existing user hooks).
+#[tauri::command]
+pub fn claude_hooks_enable(app: AppHandle) -> AppResult<()> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    let spool = crate::claude::hooks::spool_dir(&data_dir);
+    crate::claude::hooks::install(&claude_settings_path(&app)?, &spool).map_err(AppError::Msg)
+}
+
+#[tauri::command]
+pub fn claude_hooks_disable(app: AppHandle) -> AppResult<()> {
+    crate::claude::hooks::uninstall(&claude_settings_path(&app)?).map_err(AppError::Msg)
+}
+
 #[tauri::command]
 pub fn claude_session_delete(
     app: AppHandle,

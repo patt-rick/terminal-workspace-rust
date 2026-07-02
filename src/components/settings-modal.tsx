@@ -217,6 +217,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <code className="font-mono">--dangerously-skip-permissions</code>. Claude will not ask
             for permission before running tools. Only enable this if you understand the risk.
           </div>
+          <ClaudeHooksToggle />
         </Section>
 
         <AccountsSection />
@@ -226,6 +227,47 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         <UpdatesSection />
       </div>
     </div>
+  )
+}
+
+function ClaudeHooksToggle() {
+  const [installed, setInstalled] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isTauri) return
+    ipc.claude
+      .hooksStatus()
+      .then(setInstalled)
+      .catch(() => setInstalled(null))
+  }, [])
+
+  const toggle = async (v: boolean) => {
+    setError(null)
+    try {
+      if (v) await ipc.claude.hooksEnable()
+      else await ipc.claude.hooksDisable()
+      setInstalled(v)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  if (installed === null && !isTauri) return null
+
+  return (
+    <>
+      <Row label="Attention hooks">
+        <Toggle checked={installed ?? false} onChange={(v) => void toggle(v)} />
+      </Row>
+      <div className="text-xs text-muted">
+        Adds Notification/Stop hooks to <code className="font-mono">~/.claude/settings.json</code>{' '}
+        so the app knows exactly when Claude needs your permission, is waiting for input, or has
+        finished — powering precise badges and phone notifications. Your existing hooks are left
+        untouched.
+      </div>
+      {error && <div className="text-xs text-danger">{error}</div>}
+    </>
   )
 }
 

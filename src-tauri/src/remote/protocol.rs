@@ -98,6 +98,14 @@ pub enum ServerMsg {
     /// A terminal's PTY exited.
     #[serde(rename = "state.exit")]
     StateExit { terminal_id: String },
+    /// A terminal needs the user, with a reason: "needs-permission" |
+    /// "waiting-input" | "finished" | "failed" | "notify".
+    #[serde(rename = "state.attention")]
+    StateAttention {
+        terminal_id: String,
+        reason: String,
+        message: Option<String>,
+    },
     #[serde(rename = "git.repos")]
     GitRepos {
         project_id: String,
@@ -302,6 +310,14 @@ mod tests {
                     terminal_id: "t".into(),
                 },
                 "state.exit",
+            ),
+            (
+                ServerMsg::StateAttention {
+                    terminal_id: "t".into(),
+                    reason: "needs-permission".into(),
+                    message: None,
+                },
+                "state.attention",
             ),
             (
                 ServerMsg::GitRepos {

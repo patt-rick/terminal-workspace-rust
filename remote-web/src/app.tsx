@@ -102,6 +102,7 @@ export function App() {
   const [reconnecting, setReconnecting] = useState(false)
   const [pairError, setPairError] = useState<string | null>(null)
   const [working, setWorking] = useState<Set<string>>(new Set())
+  const [attention, setAttention] = useState<Record<string, string>>({})
   const [toast, setToast] = useState<string | null>(null)
 
   const [gitOpen, setGitOpen] = useState(false)
@@ -215,6 +216,12 @@ export function App() {
     curIdRef.current = id
     curTagRef.current = null
     setCurrentId(id)
+    setAttention((a) => {
+      if (!(id in a)) return a
+      const next = { ...a }
+      delete next[id]
+      return next
+    })
     localStorage.setItem(LAST_TERM_KEY, id)
     termRef.current?.reset()
     client.attach(id)
@@ -306,6 +313,23 @@ export function App() {
         }
       },
       onBell: (tid) => notify(termName(tid), 'Bell'),
+      onAttention: (tid, reason, message) => {
+        setAttention((a) => ({ ...a, [tid]: reason }))
+        // Notify unless you're already looking at this terminal.
+        if (tid !== curIdRef.current || document.hidden) {
+          const body =
+            reason === 'needs-permission'
+              ? message ?? 'Needs your permission'
+              : reason === 'waiting-input'
+                ? `Waiting for input${message ? `: ${message}` : ''}`
+                : reason === 'failed'
+                  ? `Command failed${message ? ` — ${message}` : ''}`
+                  : reason === 'finished'
+                    ? 'Finished'
+                    : (message ?? reason)
+          notify(termName(tid), body)
+        }
+      },
       onExit: (tid) => {
         setWorking((s) => {
           const n = new Set(s)
@@ -551,6 +575,18 @@ export function App() {
                     onClick={() => attachTo(t.id)}
                   >
                     {working.has(t.id) && <span className="spin">◐</span>}
+                    {attention[t.id] && (
+                      <span
+                        className={`att-dot ${
+                          attention[t.id] === 'needs-permission' || attention[t.id] === 'failed'
+                            ? 'att-red'
+                            : attention[t.id] === 'finished'
+                              ? 'att-green'
+                              : 'att-amber'
+                        }`}
+                        title={attention[t.id]}
+                      />
+                    )}
                     <span className={`name ${t.live ? '' : 'dead'}`}>{t.name}</span>
                     <button
                       className="x"

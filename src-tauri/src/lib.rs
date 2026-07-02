@@ -24,6 +24,11 @@ use settings::SettingsStore;
 use state::StateStore;
 use tauri::Manager;
 
+/// `--hook-sink` mode entry (see main.rs): copy stdin into the spool dir.
+pub fn hook_sink(spool: &std::path::Path) {
+    claude::hooks::run_sink(spool);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -56,6 +61,14 @@ pub fn run() {
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(PtyManager::new());
+            // Claude hook events (Notification/Stop) land in the spool dir; the
+            // watcher routes them to terminals as attention events. Cheap no-op
+            // polling when hooks aren't installed.
+            #[cfg(feature = "remote-access")]
+            claude::hooks::start_watcher(
+                app.handle().clone(),
+                claude::hooks::spool_dir(&data_dir),
+            );
             #[cfg(feature = "remote-access")]
             {
                 app.manage(remote::RemoteServer::new(app.handle().clone()));
@@ -134,6 +147,9 @@ pub fn run() {
             commands::github_dispatch_workflow,
             commands::claude_sessions_list,
             commands::claude_session_delete,
+            commands::claude_hooks_status,
+            commands::claude_hooks_enable,
+            commands::claude_hooks_disable,
             commands::identity_list_accounts,
             commands::identity_get_config,
             commands::identity_save_account,

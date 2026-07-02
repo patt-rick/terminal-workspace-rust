@@ -160,6 +160,13 @@ struct IdEvt {
     id: String,
 }
 
+#[derive(Deserialize)]
+struct AttentionEvt {
+    id: String,
+    reason: String,
+    message: Option<String>,
+}
+
 /// Forward Rust-side terminal state (working/bell/exit) Tauri events to this
 /// client as `state.*` messages. Returns the listener ids to unlisten on close.
 fn spawn_state_forwarders(app: &AppHandle, out_tx: mpsc::Sender<Message>) -> Vec<tauri::EventId> {
@@ -180,6 +187,17 @@ fn spawn_state_forwarders(app: &AppHandle, out_tx: mpsc::Sender<Message>) -> Vec
     ids.push(app.listen("terminals:bell", move |ev| {
         if let Ok(p) = serde_json::from_str::<IdEvt>(ev.payload()) {
             let _ = tx.try_send(text(&ServerMsg::StateBell { terminal_id: p.id }));
+        }
+    }));
+
+    let tx = out_tx.clone();
+    ids.push(app.listen("terminals:attention", move |ev| {
+        if let Ok(p) = serde_json::from_str::<AttentionEvt>(ev.payload()) {
+            let _ = tx.try_send(text(&ServerMsg::StateAttention {
+                terminal_id: p.id,
+                reason: p.reason,
+                message: p.message,
+            }));
         }
     }));
 

@@ -47,6 +47,9 @@ pub struct PushManager {
     vapid_public_b64: String,
     subscription: Mutex<Option<PushSubscription>>,
     working_since: Mutex<HashMap<String, Instant>>,
+    /// Per-terminal last-push time — hook events and title heuristics can both
+    /// fire for the same moment; one notification is enough.
+    last_push: Mutex<HashMap<String, Instant>>,
     http: reqwest::Client,
 }
 
@@ -63,6 +66,7 @@ impl PushManager {
             vapid_public_b64: public,
             subscription: Mutex::new(None),
             working_since: Mutex::new(HashMap::new()),
+            last_push: Mutex::new(HashMap::new()),
             http: reqwest::Client::new(),
         })
     }
@@ -84,6 +88,21 @@ impl PushManager {
 
     pub fn has_subscription(&self) -> bool {
         self.subscription.lock().is_some()
+    }
+
+    /// Debounce pushes per terminal: true = go ahead (and records the time),
+    /// false = a push for this terminal fired within the last 5s, skip.
+    pub fn allow_push(&self, terminal_id: &str) -> bool {
+        let mut map = self.last_push.lock();
+        let now = Instant::now();
+        if map
+            .get(terminal_id)
+            .is_some_and(|t| now.duration_since(*t) < Duration::from_secs(5))
+        {
+            return false;
+        }
+        map.insert(terminal_id.to_string(), now);
+        true
     }
 
     /// Track a working-state transition; returns true if a `working=false`

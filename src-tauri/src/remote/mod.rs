@@ -346,7 +346,7 @@ fn register_push_listeners(
         let Ok(evt) = serde_json::from_str::<BellEvt>(ev.payload()) else {
             return;
         };
-        if s.load(Ordering::Relaxed) == 0 && p.has_subscription() {
+        if s.load(Ordering::Relaxed) == 0 && p.has_subscription() && p.allow_push(&evt.id) {
             let title = terminal_name(&a, &evt.id);
             let p = p.clone();
             tauri::async_runtime::spawn(async move {
@@ -357,23 +357,66 @@ fn register_push_listeners(
         }
     }));
 
-    let a = app.clone();
+    let (a, p, s) = (app.clone(), push.clone(), sockets.clone());
     ids.push(app.listen("terminals:working", move |ev| {
         let Ok(evt) = serde_json::from_str::<WorkingEvt>(ev.payload()) else {
             return;
         };
         // Always track durations; only send when it was a long-running task and
         // nobody is connected to see it live.
-        let push_worthy = push.note_working(&evt.id, evt.working);
-        if push_worthy && sockets.load(Ordering::Relaxed) == 0 && push.has_subscription() {
+        let push_worthy = p.note_working(&evt.id, evt.working);
+        if push_worthy
+            && s.load(Ordering::Relaxed) == 0
+            && p.has_subscription()
+            && p.allow_push(&evt.id)
+        {
             let title = terminal_name(&a, &evt.id);
-            let p = push.clone();
+            let p = p.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(why) = p.send(&title, "Finished").await {
                     eprintln!("web push failed: {why}");
                 }
             });
         }
+    }));
+
+    // Typed attention (Claude hooks, failed commands, prompt waits, OSC
+    // notifications) — the most precise "needs you" signal, pushed verbatim.
+    let a = app.clone();
+    ids.push(app.listen("terminals:attention", move |ev| {
+        #[derive(Deserialize)]
+        struct AttentionEvt {
+            id: String,
+            reason: String,
+            message: Option<String>,
+        }
+        let Ok(evt) = serde_json::from_str::<AttentionEvt>(ev.payload()) else {
+            return;
+        };
+        if sockets.load(Ordering::Relaxed) != 0 || !push.has_subscription() {
+            return;
+        }
+        if !push.allow_push(&evt.id) {
+            return;
+        }
+        let body = match (evt.reason.as_str(), evt.message) {
+            ("needs-permission", Some(m)) => m,
+            ("needs-permission", None) => "Needs your permission".to_string(),
+            ("waiting-input", Some(m)) => format!("Waiting for input: {m}"),
+            ("waiting-input", None) => "Waiting for your input".to_string(),
+            ("failed", Some(m)) => format!("Command failed — {m}"),
+            ("failed", None) => "Command failed".to_string(),
+            ("finished", _) => "Finished".to_string(),
+            (_, Some(m)) => m,
+            (_, None) => return,
+        };
+        let title = terminal_name(&a, &evt.id);
+        let p = push.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(why) = p.send(&title, &body).await {
+                eprintln!("web push failed: {why}");
+            }
+        });
     }));
 
     ids

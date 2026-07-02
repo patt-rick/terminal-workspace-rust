@@ -74,6 +74,8 @@ export interface Handlers {
   onWorking?: (terminalId: string, working: boolean) => void
   onBell?: (terminalId: string) => void
   onExit?: (terminalId: string) => void
+  /** Typed "needs you": needs-permission | waiting-input | finished | failed | notify. */
+  onAttention?: (terminalId: string, reason: string, message: string | null) => void
   onGitRepos?: (projectId: string, repos: RepoInfo[]) => void
   onGitStatus?: (repoId: string, info: GitInfo) => void
   onGitDiff?: (repoId: string, files: FileDiff[]) => void
@@ -205,6 +207,9 @@ export class RemoteClient {
           break
         case 'state.exit':
           this.h.onExit?.(m.terminalId)
+          break
+        case 'state.attention':
+          this.h.onAttention?.(m.terminalId, m.reason, m.message ?? null)
           break
         case 'git.repos':
           this.h.onGitRepos?.(m.projectId, m.repos)

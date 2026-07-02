@@ -430,6 +430,21 @@ body {
   font-size: 13px;
   flex-shrink: 0;
 }
+.att-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.att-red {
+  background: var(--danger, #f7768e);
+}
+.att-amber {
+  background: var(--warning, #e0af68);
+}
+.att-green {
+  background: var(--green, #9ece6a);
+}
 .reconnbar {
   flex-shrink: 0;
   background: var(--warning, #e0af68);

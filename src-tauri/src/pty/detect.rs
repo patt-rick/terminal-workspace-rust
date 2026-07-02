@@ -16,6 +16,12 @@
 pub enum DetectEvent {
     Working(bool),
     Bell,
+    /// OSC 133;D carried an exit code — lets the UI distinguish "finished"
+    /// from "failed" for plain shell commands.
+    CommandDone { exit_code: Option<i32> },
+    /// An explicit tool notification: OSC 9;<message> (iTerm2 style) or
+    /// OSC 777;notify;<title>;<body>.
+    Notify { message: String },
 }
 
 #[derive(Default)]
@@ -38,6 +44,11 @@ pub struct ShellDetector {
 const OSC_CAP: usize = 8192;
 
 impl ShellDetector {
+    /// Current working state (for the prompt-silence sweeper).
+    pub fn is_working(&self) -> bool {
+        self.working
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<DetectEvent> {
         let mut events = Vec::new();
         for &b in bytes {
@@ -101,6 +112,11 @@ impl ShellDetector {
             "9" => {
                 if let Some(working) = parse_conemu_progress(rest) {
                     self.set_working(working, events);
+                } else if !rest.is_empty() && !rest.starts_with("4;") && rest != "4" {
+                    // iTerm2-style plain notification: OSC 9;<message>.
+                    events.push(DetectEvent::Notify {
+                        message: rest.to_string(),
+                    });
                 }
             }
             "133" => {
@@ -108,6 +124,28 @@ impl ShellDetector {
                     self.set_working(true, events);
                 } else if rest.starts_with('D') {
                     self.set_working(false, events);
+                    // OSC 133;D;<exit-code> — surface success/failure.
+                    let exit_code = rest[1..]
+                        .strip_prefix(';')
+                        .and_then(|c| c.split(';').next())
+                        .and_then(|c| c.trim().parse::<i32>().ok());
+                    events.push(DetectEvent::CommandDone { exit_code });
+                }
+            }
+            "777" => {
+                // OSC 777;notify;<title>;<body>
+                let mut parts = rest.splitn(3, ';');
+                if parts.next() == Some("notify") {
+                    let title = parts.next().unwrap_or("");
+                    let body = parts.next().unwrap_or("");
+                    let message = if body.is_empty() {
+                        title.to_string()
+                    } else {
+                        format!("{title}: {body}")
+                    };
+                    if !message.is_empty() {
+                        events.push(DetectEvent::Notify { message });
+                    }
                 }
             }
             _ => {}
@@ -201,7 +239,63 @@ mod tests {
     fn osc133_brackets_command() {
         let mut d = ShellDetector::default();
         assert_eq!(d.feed(&osc("133;C")), vec![DetectEvent::Working(true)]);
-        assert_eq!(d.feed(&osc("133;D;0")), vec![DetectEvent::Working(false)]);
+        assert_eq!(
+            d.feed(&osc("133;D;0")),
+            vec![
+                DetectEvent::Working(false),
+                DetectEvent::CommandDone { exit_code: Some(0) }
+            ]
+        );
+    }
+
+    #[test]
+    fn osc133_done_reports_failure_code_and_absent_code() {
+        let mut d = ShellDetector::default();
+        d.feed(&osc("133;C"));
+        assert_eq!(
+            d.feed(&osc("133;D;127")),
+            vec![
+                DetectEvent::Working(false),
+                DetectEvent::CommandDone {
+                    exit_code: Some(127)
+                }
+            ]
+        );
+        // No code at all.
+        d.feed(&osc("133;C"));
+        assert_eq!(
+            d.feed(&osc("133;D")),
+            vec![
+                DetectEvent::Working(false),
+                DetectEvent::CommandDone { exit_code: None }
+            ]
+        );
+    }
+
+    #[test]
+    fn osc9_plain_message_is_a_notification_but_progress_is_not() {
+        let mut d = ShellDetector::default();
+        assert_eq!(
+            d.feed(&osc("9;Build finished!")),
+            vec![DetectEvent::Notify {
+                message: "Build finished!".into()
+            }]
+        );
+        // Progress form must not double as a notification.
+        assert_eq!(d.feed(&osc("9;4;1;50")), vec![DetectEvent::Working(true)]);
+    }
+
+    #[test]
+    fn osc777_notify_combines_title_and_body() {
+        let mut d = ShellDetector::default();
+        assert_eq!(
+            d.feed(&osc("777;notify;Deploy;Production is live")),
+            vec![DetectEvent::Notify {
+                message: "Deploy: Production is live".into()
+            }]
+        );
+        // Non-notify 777 payloads are ignored.
+        assert_eq!(d.feed(&osc("777;other;x")), vec![]);
     }
 
     #[test]

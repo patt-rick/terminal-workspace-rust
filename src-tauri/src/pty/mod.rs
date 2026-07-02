@@ -43,7 +43,19 @@ struct OutputState {
     detector: detect::ShellDetector,
     #[cfg(feature = "remote-access")]
     pending: Vec<detect::DetectEvent>,
+    // Prompt-silence heuristic inputs: when did output last arrive, what does
+    // the tail look like, and have we already flagged this silence period.
+    #[cfg(feature = "remote-access")]
+    last_output: Option<std::time::Instant>,
+    #[cfg(feature = "remote-access")]
+    tail: Vec<u8>,
+    #[cfg(feature = "remote-access")]
+    prompt_flagged: bool,
 }
+
+/// How much trailing output the prompt heuristic inspects.
+#[cfg(feature = "remote-access")]
+const TAIL_CAP: usize = 256;
 
 impl OutputState {
     fn on_data(&mut self, bytes: &[u8]) {
@@ -51,6 +63,16 @@ impl OutputState {
         if self.ring.len() > RING_CAP {
             let excess = self.ring.len() - RING_CAP;
             self.ring.drain(..excess);
+        }
+        #[cfg(feature = "remote-access")]
+        {
+            self.last_output = Some(std::time::Instant::now());
+            self.prompt_flagged = false;
+            self.tail.extend_from_slice(bytes);
+            if self.tail.len() > TAIL_CAP {
+                let excess = self.tail.len() - TAIL_CAP;
+                self.tail.drain(..excess);
+            }
         }
         // Feed remote subscribers raw bytes (xterm.js reassembles split UTF-8
         // across writes). A full/lagged receiver just drops frames — never blocks.
@@ -95,6 +117,49 @@ struct PtyHandle {
     /// PTY to the phone's dimensions; on detach we snap back to this (R3.14).
     #[cfg(feature = "remote-access")]
     local_size: (u16, u16),
+    /// Claude session id parsed from the startup command (`--session-id` /
+    /// `--resume`), used to route Claude-hook events back to this terminal.
+    #[cfg(feature = "remote-access")]
+    session_id: Option<String>,
+}
+
+/// Extract the Claude session id from a startup command, if present.
+#[cfg(feature = "remote-access")]
+fn extract_claude_session(cmd: &str) -> Option<String> {
+    let mut tokens = cmd.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        if tok == "--session-id" || tok == "--resume" {
+            return tokens.next().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// If the output tail's last non-empty line looks like an interactive prompt,
+/// return it (trimmed). Deliberately conservative — this only runs when a
+/// command is mid-flight and has been silent for a while.
+#[cfg(feature = "remote-access")]
+fn prompt_like_tail(tail: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(tail);
+    let line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())?
+        .to_string();
+    let lower = line.to_lowercase();
+    let looks_prompt = lower.contains("password")
+        || lower.contains("passphrase")
+        || lower.contains("(y/n)")
+        || lower.contains("[y/n]")
+        || lower.contains("(yes/no)")
+        || line.ends_with('?')
+        || line.ends_with(':');
+    if looks_prompt {
+        Some(line)
+    } else {
+        None
+    }
 }
 
 /// Resize a PTY master, clamping to a 1x1 floor.
@@ -119,6 +184,8 @@ pub struct CreateOpts {
 #[derive(Default)]
 pub struct PtyManager {
     entries: Arc<Mutex<HashMap<String, PtyHandle>>>,
+    #[cfg(feature = "remote-access")]
+    sweeper_started: std::sync::atomic::AtomicBool,
 }
 
 impl PtyManager {
@@ -184,8 +251,15 @@ impl PtyManager {
                 out: out.clone(),
                 #[cfg(feature = "remote-access")]
                 local_size: (opts.cols, opts.rows),
+                #[cfg(feature = "remote-access")]
+                session_id: opts
+                    .startup_command
+                    .as_deref()
+                    .and_then(extract_claude_session),
             },
         );
+        #[cfg(feature = "remote-access")]
+        self.ensure_sweeper(app);
 
         let entries = self.entries.clone();
         let app = app.clone();
@@ -228,6 +302,52 @@ impl PtyManager {
     #[cfg(feature = "remote-access")]
     pub fn has(&self, id: &str) -> bool {
         self.entries.lock().contains_key(id)
+    }
+
+    /// Terminal backing a Claude session id, if any (routes hook events).
+    #[cfg(feature = "remote-access")]
+    pub fn terminal_for_session(&self, session_id: &str) -> Option<String> {
+        self.entries
+            .lock()
+            .iter()
+            .find(|(_, h)| h.session_id.as_deref() == Some(session_id))
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Start the prompt-silence sweeper once: a terminal that is mid-command
+    /// (OSC 133;C seen, no D yet) but has produced no output for a while, with a
+    /// prompt-looking tail, is probably waiting for input (sudo, y/n, wizards).
+    #[cfg(feature = "remote-access")]
+    fn ensure_sweeper(&self, app: &AppHandle) {
+        use std::sync::atomic::Ordering;
+        if self.sweeper_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let entries = self.entries.clone();
+        let app = app.clone();
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(2));
+            let mut flagged: Vec<(String, String)> = Vec::new();
+            {
+                let map = entries.lock();
+                for (id, handle) in map.iter() {
+                    let mut out = handle.out.lock();
+                    let silent_long = out
+                        .last_output
+                        .is_some_and(|t| t.elapsed() >= Duration::from_secs(10));
+                    if !out.detector.is_working() || !silent_long || out.prompt_flagged {
+                        continue;
+                    }
+                    if let Some(line) = prompt_like_tail(&out.tail) {
+                        out.prompt_flagged = true; // once per silence period
+                        flagged.push((id.clone(), line));
+                    }
+                }
+            }
+            for (id, line) in flagged {
+                emit_attention(&app, &id, "waiting-input", Some(line));
+            }
+        });
     }
 
     /// Subscribe a remote client to a terminal's live output. Returns the current
@@ -326,6 +446,31 @@ struct IdPayload {
     id: String,
 }
 
+#[cfg(feature = "remote-access")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttentionPayload {
+    id: String,
+    /// Why the terminal wants the user: "failed" | "notify" | "waiting-input"
+    /// | "needs-permission" | "finished" (the latter two come from Claude hooks).
+    reason: String,
+    message: Option<String>,
+}
+
+/// A terminal needs the user, with a machine-readable reason. Consumed by the
+/// desktop sidebar, the remote server, and Web Push.
+#[cfg(feature = "remote-access")]
+pub fn emit_attention(app: &AppHandle, id: &str, reason: &str, message: Option<String>) {
+    let _ = app.emit(
+        "terminals:attention",
+        AttentionPayload {
+            id: id.to_string(),
+            reason: reason.to_string(),
+            message,
+        },
+    );
+}
+
 /// Emit a detected working/bell transition as a Tauri event. Consumed by the
 /// remote server (forwarded to web clients) and available to the desktop.
 #[cfg(feature = "remote-access")]
@@ -342,6 +487,18 @@ fn emit_detect_event(app: &AppHandle, id: &str, ev: detect::DetectEvent) {
         }
         detect::DetectEvent::Bell => {
             let _ = app.emit("terminals:bell", IdPayload { id: id.to_string() });
+        }
+        detect::DetectEvent::CommandDone { exit_code } => {
+            // Success is covered by the working=false transition; only failures
+            // are attention-worthy.
+            if let Some(code) = exit_code {
+                if code != 0 {
+                    emit_attention(app, id, "failed", Some(format!("exited with code {code}")));
+                }
+            }
+        }
+        detect::DetectEvent::Notify { message } => {
+            emit_attention(app, id, "notify", Some(message));
         }
     }
 }
@@ -403,4 +560,46 @@ fn reader_loop(
         .unwrap_or(0);
     let _ = app.emit("terminals:exit", ExitPayload { id: id.clone(), exit_code: code });
     entries.lock().remove(&id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn extracts_session_id_from_launch_and_resume_commands() {
+        assert_eq!(
+            extract_claude_session("claude --session-id abc-123"),
+            Some("abc-123".into())
+        );
+        assert_eq!(
+            extract_claude_session("claude --resume xyz --dangerously-skip-permissions"),
+            Some("xyz".into())
+        );
+        assert_eq!(
+            extract_claude_session("claude --dangerously-skip-permissions --session-id s1"),
+            Some("s1".into())
+        );
+        assert_eq!(extract_claude_session("claude"), None);
+        assert_eq!(extract_claude_session("npm run dev"), None);
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn prompt_tail_detection_is_conservative() {
+        let hit = |s: &str| prompt_like_tail(s.as_bytes());
+        assert!(hit("sudo password for user:").is_some());
+        assert!(hit("Overwrite? (y/n)").is_some());
+        assert!(hit("Do you want to continue? [Y/n]").is_some());
+        assert!(hit("Enter passphrase for key:").is_some());
+        assert!(hit("Which framework do you prefer?").is_some());
+        // Plain output must not match.
+        assert!(hit("Compiling foo v0.1.0").is_none());
+        assert!(hit("Done in 3.2s").is_none());
+        assert!(hit("").is_none());
+        // Last non-empty line wins.
+        assert!(hit("lots of output\nmore output\nContinue? (y/n)\n").is_some());
+        assert!(hit("Continue? (y/n)\nresolved automatically\n").is_none());
+    }
 }

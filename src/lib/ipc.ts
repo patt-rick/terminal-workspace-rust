@@ -417,6 +417,9 @@ export const ipc = {
       invoke<ClaudeSession[]>('claude_sessions_list', { projectId }),
     deleteSession: (projectId: string, sessionId: string) =>
       invoke<void>('claude_session_delete', { projectId, sessionId }),
+    hooksStatus: () => invoke<boolean>('claude_hooks_status'),
+    hooksEnable: () => invoke<void>('claude_hooks_enable'),
+    hooksDisable: () => invoke<void>('claude_hooks_disable'),
   },
 
   identity: {
