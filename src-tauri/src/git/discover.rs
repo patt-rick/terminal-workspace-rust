@@ -58,7 +58,16 @@ fn repo_id(project_id: &str, abs_path: &str) -> String {
 }
 
 fn norm(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let s = path.to_string_lossy().replace('\\', "/");
+    // git2's workdir() returns a trailing separator; strip it so a repo's path
+    // (and thus its id) is identical whether it's discovered as a root, a nested,
+    // or an enclosing repo.
+    let trimmed = s.trim_end_matches('/');
+    if trimmed.is_empty() {
+        s
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// `path` relative to `root` with forward slashes; empty when `path` is not
