@@ -219,9 +219,127 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
         <AccountsSection />
 
+        <RemoteAccessSection />
+
         <UpdatesSection />
       </div>
     </div>
+  )
+}
+
+function RemoteAccessSection() {
+  const [status, setStatus] = useState<import('../lib/ipc').RemoteStatus | null>(null)
+  const [supported, setSupported] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = () => {
+    if (!isTauri) {
+      setSupported(false)
+      return
+    }
+    ipc.remote
+      .status()
+      .then((s) => {
+        setStatus(s)
+        setSupported(true)
+      })
+      .catch(() => setSupported(false))
+  }
+
+  useEffect(refresh, [])
+
+  if (!supported) {
+    return (
+      <Section title="Remote Access">
+        <div className="text-xs text-muted">
+          Not available in this build. Run with the <code className="font-mono">remote-access</code>{' '}
+          feature to enable.
+        </div>
+      </Section>
+    )
+  }
+
+  const running = status?.running ?? false
+
+  const start = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const info = await ipc.remote.start()
+      setStatus({ running: true, port: info.port, url: info.url, pairingCode: info.pairingCode, connectedSince: null })
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const stop = async () => {
+    setBusy(true)
+    try {
+      await ipc.remote.stop()
+      refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const regenerate = async () => {
+    const code = await ipc.remote.regenerateCode().catch(() => null)
+    if (code) setStatus((s) => (s ? { ...s, pairingCode: code } : s))
+  }
+
+  return (
+    <Section title="Remote Access">
+      <div className="text-xs text-muted">
+        Control your terminals from a browser over a local server (localhost only for now).
+      </div>
+      {running ? (
+        <div className="flex flex-col gap-1.5">
+          <Row label="URL">
+            <span className="font-mono text-xs text-foreground/80">{status?.url}</span>
+          </Row>
+          <Row label="Pairing code">
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-base tracking-widest text-foreground">
+                {status?.pairingCode ?? '——————'}
+              </span>
+              <button
+                type="button"
+                onClick={() => void regenerate()}
+                className="rounded border border-border px-2 py-0.5 text-[11px] text-foreground/70 hover:bg-foreground/5"
+              >
+                New code
+              </button>
+            </span>
+          </Row>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted">
+              {status?.connectedSince ? 'A device is connected.' : 'Waiting for a device to pair…'}
+            </span>
+            <button
+              type="button"
+              onClick={() => void stop()}
+              disabled={busy}
+              className="ml-auto rounded-md border border-danger/40 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            >
+              Stop Remote Access
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void start()}
+          disabled={busy}
+          className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? 'Starting…' : 'Start Remote Session'}
+        </button>
+      )}
+      {error && <div className="text-xs text-danger">{error}</div>}
+    </Section>
   )
 }
 

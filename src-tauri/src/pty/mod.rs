@@ -32,6 +32,10 @@ struct OutputState {
     ring: Vec<u8>,
     carry: Vec<u8>,
     channel: Option<Channel<String>>,
+    // Raw-byte fan-out to remote subscribers, installed lazily on first remote
+    // attach. Independent of `channel`, so the desktop stream is never disturbed.
+    #[cfg(feature = "remote-access")]
+    remote_tx: Option<tokio::sync::broadcast::Sender<Vec<u8>>>,
 }
 
 impl OutputState {
@@ -40,6 +44,12 @@ impl OutputState {
         if self.ring.len() > RING_CAP {
             let excess = self.ring.len() - RING_CAP;
             self.ring.drain(..excess);
+        }
+        // Feed remote subscribers raw bytes (xterm.js reassembles split UTF-8
+        // across writes). A full/lagged receiver just drops frames — never blocks.
+        #[cfg(feature = "remote-access")]
+        if let Some(tx) = &self.remote_tx {
+            let _ = tx.send(bytes.to_vec());
         }
         if self.channel.is_none() {
             return;
@@ -170,11 +180,44 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) {
+        self.write_bytes(id, data.as_bytes());
+    }
+
+    pub fn write_bytes(&self, id: &str, data: &[u8]) {
         if let Some(handle) = self.entries.lock().get(id) {
             let mut w = handle.writer.lock();
-            let _ = w.write_all(data.as_bytes());
+            let _ = w.write_all(data);
             let _ = w.flush();
         }
+    }
+
+    /// True if a live PTY exists for this id (the entry is removed on exit).
+    #[cfg(feature = "remote-access")]
+    pub fn has(&self, id: &str) -> bool {
+        self.entries.lock().contains_key(id)
+    }
+
+    /// Subscribe a remote client to a terminal's live output. Returns the current
+    /// scrollback snapshot (raw bytes) plus a receiver for subsequent output,
+    /// captured atomically under the output lock so nothing is lost or doubled.
+    #[cfg(feature = "remote-access")]
+    pub fn subscribe_remote(
+        &self,
+        id: &str,
+    ) -> Option<(Vec<u8>, tokio::sync::broadcast::Receiver<Vec<u8>>)> {
+        let entries = self.entries.lock();
+        let handle = entries.get(id)?;
+        let mut out = handle.out.lock();
+        let snapshot = out.ring.clone();
+        let rx = match &out.remote_tx {
+            Some(tx) => tx.subscribe(),
+            None => {
+                let (tx, rx) = tokio::sync::broadcast::channel(1024);
+                out.remote_tx = Some(tx);
+                rx
+            }
+        };
+        Some((snapshot, rx))
     }
 
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {

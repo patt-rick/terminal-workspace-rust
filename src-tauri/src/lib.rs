@@ -12,6 +12,8 @@ mod git;
 mod github;
 mod identity;
 mod pty;
+#[cfg(feature = "remote-access")]
+mod remote;
 mod settings;
 mod state;
 
@@ -48,6 +50,8 @@ pub fn run() {
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(PtyManager::new());
+            #[cfg(feature = "remote-access")]
+            app.manage(remote::RemoteServer::new(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -116,6 +120,14 @@ pub fn run() {
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,
+            #[cfg(feature = "remote-access")]
+            commands::remote_start,
+            #[cfg(feature = "remote-access")]
+            commands::remote_stop,
+            #[cfg(feature = "remote-access")]
+            commands::remote_status,
+            #[cfg(feature = "remote-access")]
+            commands::remote_regenerate_code,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -124,6 +136,8 @@ pub fn run() {
             // recreated fresh from persisted state on next launch.
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 app_handle.state::<PtyManager>().dispose_all();
+                #[cfg(feature = "remote-access")]
+                app_handle.state::<remote::RemoteServer>().stop();
             }
         });
 }

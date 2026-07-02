@@ -777,6 +777,35 @@ pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     crate::identity::detect_gh_accounts()
 }
 
+// ---------- remote access (feature-gated) ----------
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub async fn remote_start(
+    server: State<'_, crate::remote::RemoteServer>,
+    port: Option<u16>,
+) -> AppResult<crate::remote::StartInfo> {
+    server.start(port.unwrap_or(0)).await.map_err(AppError::Msg)
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_stop(server: State<crate::remote::RemoteServer>) {
+    server.stop();
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_status(server: State<crate::remote::RemoteServer>) -> crate::remote::RemoteStatus {
+    server.status()
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_regenerate_code(server: State<crate::remote::RemoteServer>) -> Option<String> {
+    server.regenerate_code()
+}
+
 // ---------- helpers ----------
 
 fn open_os_terminal(path: &str) -> AppResult<()> {

@@ -250,6 +250,21 @@ export interface DetectedGhAccount {
   email: string | null
 }
 
+export interface RemoteStatus {
+  running: boolean
+  port: number | null
+  url: string | null
+  pairingCode: string | null
+  /** Unix-epoch ms the current session connected, if any. */
+  connectedSince: number | null
+}
+
+export interface RemoteStartInfo {
+  port: number
+  url: string
+  pairingCode: string
+}
+
 /** True when running inside the Tauri webview (false in a plain browser/dev). */
 export const isTauri =
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -406,5 +421,14 @@ export const ipc = {
       invoke<void>('identity_apply_global', { accountId }),
     detectGhAccounts: () =>
       invoke<DetectedGhAccount[]>('identity_detect_gh_accounts'),
+  },
+
+  // Remote access (only present when the app is built with the `remote-access`
+  // cargo feature; calls reject with "command not found" otherwise).
+  remote: {
+    status: () => invoke<RemoteStatus>('remote_status'),
+    start: (port?: number) => invoke<RemoteStartInfo>('remote_start', { port }),
+    stop: () => invoke<void>('remote_stop'),
+    regenerateCode: () => invoke<string | null>('remote_regenerate_code'),
   },
 }

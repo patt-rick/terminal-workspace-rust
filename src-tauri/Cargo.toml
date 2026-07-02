@@ -49,12 +49,30 @@ ignore = "0.4"
 # git: libgit2 (vendored so no system lib is required); push shells out to git CLI
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 
+# --- remote access (feature-gated; see the `remote-access` feature) ---
+axum = { version = "0.7", features = ["ws"], optional = true }
+base64 = { version = "0.22", optional = true }
+rand = { version = "0.8", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 
 [features]
 # this feature is used for production builds or when a dev server is not specified
 custom-protocol = ["tauri/custom-protocol"]
+
+# Remote access (embedded server, pairing, web client). Kept behind a flag until
+# the milestone series completes; enable with `--features remote-access`.
+remote-access = [
+    "dep:axum",
+    "dep:base64",
+    "dep:rand",
+    "tokio/rt-multi-thread",
+    "tokio/net",
+    "tokio/sync",
+    "tokio/time",
+    "tokio/io-util",
+]
 
 [profile.release]
 panic = "abort"
