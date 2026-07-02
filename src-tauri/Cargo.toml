@@ -1,6 +1,6 @@
 [package]
 name = "terminal-workspace"
-version = "0.2.1"
+version = "0.3.0"
 description = "Multi-project, multi-terminal workspace IDE built with Tauri and Rust"
 authors = ["patt-rick"]
 edition = "2021"
@@ -58,11 +58,16 @@ rand = { version = "0.8", optional = true }
 tempfile = "3"
 
 [features]
+# Remote access ships enabled as of 0.3.0 (Phase 3 complete). The feature only
+# makes the Remote Access UI functional; nothing binds a socket until the user
+# starts a session. Build lean with `--no-default-features` if desired.
+default = ["remote-access"]
+
 # this feature is used for production builds or when a dev server is not specified
 custom-protocol = ["tauri/custom-protocol"]
 
-# Remote access (embedded server, pairing, web client). Kept behind a flag until
-# the milestone series completes; enable with `--features remote-access`.
+# Remote access (embedded server, pairing, web client, Cloudflare tunnel,
+# Tailscale mode). Enabled by default; see the `default` feature above.
 remote-access = [
     "dep:axum",
     "dep:base64",
