@@ -53,6 +53,17 @@ export type ReadResult =
   | { kind: 'binary' }
   | { kind: 'tooLarge' }
 
+export interface RepoInfo {
+  id: string
+  /** Absolute working-directory path (opaque to the UI). */
+  path: string
+  /** Display path relative to the project root; empty for a root-level repo. */
+  relativePath: string
+  name: string
+  isSubmodule: boolean
+  parentRepoId: string | null
+}
+
 export interface GitInfo {
   isRepo: boolean
   branch: string | null
@@ -182,7 +193,7 @@ export interface WorkflowRunDetail extends WorkflowRunSummary {
 }
 
 export interface CreatePullRequestInput {
-  projectId: string
+  repoId: string
   title: string
   body: string
   head: string
@@ -237,6 +248,40 @@ export interface DetectedGhAccount {
   active: boolean
   name: string | null
   email: string | null
+}
+
+/** Connectivity mode for remote access. */
+export type RemoteMode = 'cloudflare' | 'local' | 'tailscale'
+
+export interface TailscaleInfo {
+  /** This machine's tailnet IPv4 address. */
+  ip: string
+  /** MagicDNS name, when resolvable. */
+  dnsName: string | null
+}
+
+export interface RemoteStatus {
+  running: boolean
+  mode: RemoteMode | null
+  port: number | null
+  /** User-facing URL to scan/share (tunnel URL in Cloudflare mode, else local). */
+  url: string | null
+  /** Always the 127.0.0.1 URL the server binds. */
+  localUrl: string | null
+  pairingCode: string | null
+  /** Unix-epoch ms the current session connected, if any. */
+  connectedSince: number | null
+  /** Non-fatal setup advice (e.g. how to unlock HTTPS in Tailscale mode). */
+  hint: string | null
+}
+
+export interface RemoteStartInfo {
+  port: number
+  mode: RemoteMode
+  url: string
+  localUrl: string
+  pairingCode: string
+  hint: string | null
 }
 
 /** True when running inside the Tauri webview (false in a plain browser/dev). */
@@ -315,10 +360,18 @@ export const ipc = {
   },
 
   git: {
-    info: (projectId: string) => invoke<GitInfo>('git_info', { projectId }),
-    push: (projectId: string, branch: string) =>
-      invoke<{ ok: boolean; output: string }>('git_push', { projectId, branch }),
-    diff: (projectId: string) => invoke<FileDiff[]>('git_diff', { projectId }),
+    discoverRepos: (projectId: string, refresh = false) =>
+      invoke<RepoInfo[]>('git_discover_repos', { projectId, refresh }),
+    selectedRepo: (projectId: string) =>
+      invoke<string | null>('git_selected_repo', { projectId }),
+    setSelectedRepo: (projectId: string, repoId: string) =>
+      invoke<void>('git_set_selected_repo', { projectId, repoId }),
+    dirtyFlags: (projectId: string) =>
+      invoke<Record<string, boolean>>('git_dirty_flags', { projectId }),
+    info: (repoId: string) => invoke<GitInfo>('git_info', { repoId }),
+    push: (repoId: string, branch: string) =>
+      invoke<{ ok: boolean; output: string }>('git_push', { repoId, branch }),
+    diff: (repoId: string) => invoke<FileDiff[]>('git_diff', { repoId }),
   },
 
   github: {
@@ -329,34 +382,34 @@ export const ipc = {
     signOut: () => invoke<GithubSettings>('github_sign_out'),
     deviceStart: () => invoke<DeviceFlowStart>('github_device_start'),
     devicePoll: (deviceCode: string) => invoke<DevicePoll>('github_device_poll', { deviceCode }),
-    listPullRequests: (projectId: string, state: 'open' | 'closed' | 'all' = 'open') =>
-      invoke<PullRequestSummary[]>('github_list_prs', { projectId, state }),
-    getPullRequest: (projectId: string, number: number) =>
-      invoke<PullRequestDetail>('github_get_pr', { projectId, number }),
+    listPullRequests: (repoId: string, state: 'open' | 'closed' | 'all' = 'open') =>
+      invoke<PullRequestSummary[]>('github_list_prs', { repoId, state }),
+    getPullRequest: (repoId: string, number: number) =>
+      invoke<PullRequestDetail>('github_get_pr', { repoId, number }),
     createPullRequest: (input: CreatePullRequestInput) =>
       invoke<PullRequestSummary>('github_create_pr', { input }),
-    mergePullRequest: (projectId: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
-      invoke<void>('github_merge_pr', { projectId, number, method }),
-    commentPullRequest: (projectId: string, number: number, body: string) =>
-      invoke<void>('github_comment_pr', { projectId, number, body }),
-    listWorkflows: (projectId: string) =>
-      invoke<WorkflowSummary[]>('github_list_workflows', { projectId }),
-    listRuns: (projectId: string, branch?: string) =>
-      invoke<WorkflowRunSummary[]>('github_list_runs', { projectId, branch }),
-    getRun: (projectId: string, runId: number) =>
-      invoke<WorkflowRunDetail>('github_get_run', { projectId, runId }),
-    rerunRun: (projectId: string, runId: number) =>
-      invoke<void>('github_rerun_run', { projectId, runId }),
-    rerunFailed: (projectId: string, runId: number) =>
-      invoke<void>('github_rerun_failed', { projectId, runId }),
-    cancelRun: (projectId: string, runId: number) =>
-      invoke<void>('github_cancel_run', { projectId, runId }),
+    mergePullRequest: (repoId: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
+      invoke<void>('github_merge_pr', { repoId, number, method }),
+    commentPullRequest: (repoId: string, number: number, body: string) =>
+      invoke<void>('github_comment_pr', { repoId, number, body }),
+    listWorkflows: (repoId: string) =>
+      invoke<WorkflowSummary[]>('github_list_workflows', { repoId }),
+    listRuns: (repoId: string, branch?: string) =>
+      invoke<WorkflowRunSummary[]>('github_list_runs', { repoId, branch }),
+    getRun: (repoId: string, runId: number) =>
+      invoke<WorkflowRunDetail>('github_get_run', { repoId, runId }),
+    rerunRun: (repoId: string, runId: number) =>
+      invoke<void>('github_rerun_run', { repoId, runId }),
+    rerunFailed: (repoId: string, runId: number) =>
+      invoke<void>('github_rerun_failed', { repoId, runId }),
+    cancelRun: (repoId: string, runId: number) =>
+      invoke<void>('github_cancel_run', { repoId, runId }),
     dispatchWorkflow: (
-      projectId: string,
+      repoId: string,
       workflowId: number,
       gitRef: string,
       inputs?: Record<string, string>
-    ) => invoke<void>('github_dispatch_workflow', { projectId, workflowId, gitRef, inputs }),
+    ) => invoke<void>('github_dispatch_workflow', { repoId, workflowId, gitRef, inputs }),
   },
 
   claude: {
@@ -364,6 +417,9 @@ export const ipc = {
       invoke<ClaudeSession[]>('claude_sessions_list', { projectId }),
     deleteSession: (projectId: string, sessionId: string) =>
       invoke<void>('claude_session_delete', { projectId, sessionId }),
+    hooksStatus: () => invoke<boolean>('claude_hooks_status'),
+    hooksEnable: () => invoke<void>('claude_hooks_enable'),
+    hooksDisable: () => invoke<void>('claude_hooks_disable'),
   },
 
   identity: {
@@ -377,15 +433,26 @@ export const ipc = {
         defaultAccountId: config.defaultAccountId,
         unmappedBehavior: config.unmappedBehavior,
       }),
-    resolve: (projectId: string) =>
-      invoke<IdentityResolution>('identity_resolve', { projectId }),
-    apply: (projectId: string, accountId: string) =>
-      invoke<ApplyResult>('identity_apply', { projectId, accountId }),
-    current: (projectId: string) =>
-      invoke<CurrentIdentity>('identity_current', { projectId }),
+    resolve: (repoId: string) =>
+      invoke<IdentityResolution>('identity_resolve', { repoId }),
+    apply: (repoId: string, accountId: string) =>
+      invoke<ApplyResult>('identity_apply', { repoId, accountId }),
+    current: (repoId: string) =>
+      invoke<CurrentIdentity>('identity_current', { repoId }),
     applyGlobal: (accountId: string) =>
       invoke<void>('identity_apply_global', { accountId }),
     detectGhAccounts: () =>
       invoke<DetectedGhAccount[]>('identity_detect_gh_accounts'),
+  },
+
+  // Remote access (only present when the app is built with the `remote-access`
+  // cargo feature; calls reject with "command not found" otherwise).
+  remote: {
+    status: () => invoke<RemoteStatus>('remote_status'),
+    start: (mode?: RemoteMode, port?: number, bindAll?: boolean) =>
+      invoke<RemoteStartInfo>('remote_start', { mode, port, bindAll }),
+    stop: () => invoke<void>('remote_stop'),
+    regenerateCode: () => invoke<string | null>('remote_regenerate_code'),
+    detectTailscale: () => invoke<TailscaleInfo | null>('remote_detect_tailscale'),
   },
 }

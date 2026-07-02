@@ -4,8 +4,10 @@ import App from './app'
 import { ThemeProvider } from './themes/theme-provider'
 import { applyTheme, resolveTheme } from './themes'
 import {
+  EDITOR_DEFAULTS,
   readStoredSettings,
   setSettingsBackendSync,
+  TERMINAL_DEFAULTS,
   useSettings,
   type Settings,
 } from './state/settings'
@@ -29,7 +31,14 @@ async function bootstrap(): Promise<void> {
   try {
     const remote = (await ipc.settings.get()) as Settings | null
     if (remote && remote.themeId && remote.editor && remote.terminal) {
-      const merged: Settings = { ...remote, customThemes: remote.customThemes ?? [] }
+      // Deep-merge defaults so fields added in newer versions (absent from an
+      // older on-disk settings.json) hydrate to their default rather than undefined.
+      const merged: Settings = {
+        ...remote,
+        editor: { ...EDITOR_DEFAULTS, ...remote.editor },
+        terminal: { ...TERMINAL_DEFAULTS, ...remote.terminal },
+        customThemes: remote.customThemes ?? [],
+      }
       useSettings.getState().replaceAll(merged)
       applyTheme(resolveTheme(merged.themeId, merged.customThemes))
     }

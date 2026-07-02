@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
 import { useSettings } from './settings'
+import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
+
+// Re-exported so existing importers keep working; the implementation lives in
+// claude-command.ts so it can be unit tested without Tauri imports.
+export { linkClaudeSession }
 
 export const SIDEBAR_MIN_WIDTH = 180
 export const SIDEBAR_MAX_WIDTH = 480
@@ -324,24 +329,6 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
     }),
 }))
 
-/**
- * If `command` is a bare `claude` invocation with no resume/continue/session-id
- * flag, append `--session-id <uuid>` and return that id so the app can track
- * which session the terminal is running. Otherwise returns the command unchanged.
- */
-export function linkClaudeSession(command: string): {
-  startupCommand: string
-  sessionId?: string
-} {
-  const trimmed = command.trim()
-  if (!/^claude(\s|$)/.test(trimmed)) return { startupCommand: command }
-  if (/(^|\s)(--resume|-r|--continue|-c|--session-id)(\s|=|$)/.test(trimmed)) {
-    return { startupCommand: command }
-  }
-  const sessionId = crypto.randomUUID()
-  return { startupCommand: `${trimmed} --session-id ${sessionId}`, sessionId }
-}
-
 /** Create a terminal for a project, applying the configured startup command. */
 export async function createProjectTerminal(
   projectId: string,
@@ -350,6 +337,15 @@ export async function createProjectTerminal(
   let startupCommand =
     opts?.startupCommand ?? (useSettings.getState().terminal.startupCommand.trim() || undefined)
   let claudeSessionId = opts?.claudeSessionId
+  // Global "always skip permissions" setting: applied centrally here so every
+  // spawn path (chooser, ⇧T/⇧D shortcuts, empty-state button, resume) inherits
+  // it. Already-flagged commands (⇧D) are untouched — the flag is never doubled.
+  if (startupCommand) {
+    startupCommand = applyClaudeSkipPermissions(
+      startupCommand,
+      useSettings.getState().terminal.claudeSkipPermissions
+    )
+  }
   // Fresh `claude` launches get a generated session id so they show as "open"
   // in the Sessions panel. Resume launches already carry an explicit id.
   if (startupCommand && !claudeSessionId) {

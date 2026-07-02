@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
+use crate::git::discover::RepoInfo;
 use crate::git::{FileDiff, GitInfo};
 use crate::github::{
     self, DeviceFlowStart, DevicePoll, GithubSettings, GithubStore, PullRequestDetail,
@@ -265,9 +266,81 @@ pub struct PushResult {
     pub output: String,
 }
 
+/// Resolve a picker `repo_id` to its absolute working directory.
+fn repo_root(store: &StateStore, repo_id: &str) -> AppResult<String> {
+    store
+        .repo_path(repo_id)
+        .ok_or_else(|| AppError::Msg("repo not found".to_string()))
+}
+
+/// Discover (or revalidate) the git repos under a project. `refresh=false`
+/// returns the cached list with stale entries (missing `.git`) pruned; `true`
+/// runs a full recursive rescan. Both persist the result.
 #[tauri::command]
-pub async fn git_info(store: State<'_, StateStore>, project_id: String) -> AppResult<GitInfo> {
+pub async fn git_discover_repos(
+    store: State<'_, StateStore>,
+    project_id: String,
+    refresh: bool,
+) -> AppResult<Vec<RepoInfo>> {
     let root = project_root(&store, &project_id)?;
+    let cached = store.get_repos(&project_id);
+
+    if !refresh && !cached.is_empty() {
+        // Cheap focus revalidation: drop repos whose `.git` vanished.
+        let valid: Vec<RepoInfo> = cached
+            .into_iter()
+            .filter(|r| Path::new(&r.path).join(".git").exists())
+            .collect();
+        store.set_repos(&project_id, valid.clone());
+        return Ok(valid);
+    }
+
+    let pid = project_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::git::discover::discover_repos(&pid, Path::new(&root))
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?;
+    if result.capped {
+        eprintln!(
+            "git_discover_repos: directory-visit cap hit for project {project_id}; results may be incomplete"
+        );
+    }
+    store.set_repos(&project_id, result.repos.clone());
+    Ok(result.repos)
+}
+
+#[tauri::command]
+pub fn git_selected_repo(store: State<StateStore>, project_id: String) -> Option<String> {
+    store.selected_repo(&project_id)
+}
+
+#[tauri::command]
+pub fn git_set_selected_repo(store: State<StateStore>, project_id: String, repo_id: String) {
+    store.set_selected_repo(project_id, repo_id);
+}
+
+/// Per-repo working-tree dirty flags (repo_id → dirty) for the picker dots and
+/// the aggregate Git-tab indicator. Computed off the main thread.
+#[tauri::command]
+pub async fn git_dirty_flags(
+    store: State<'_, StateStore>,
+    project_id: String,
+) -> AppResult<std::collections::HashMap<String, bool>> {
+    let repos = store.get_repos(&project_id);
+    tauri::async_runtime::spawn_blocking(move || -> std::collections::HashMap<String, bool> {
+        repos
+            .into_iter()
+            .map(|r| (r.id, crate::git::is_dirty(Path::new(&r.path))))
+            .collect()
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn git_info(store: State<'_, StateStore>, repo_id: String) -> AppResult<GitInfo> {
+    let root = repo_root(&store, &repo_id)?;
     tauri::async_runtime::spawn_blocking(move || crate::git::get_info(Path::new(&root)))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))
@@ -276,10 +349,10 @@ pub async fn git_info(store: State<'_, StateStore>, project_id: String) -> AppRe
 #[tauri::command]
 pub async fn git_push(
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     branch: String,
 ) -> AppResult<PushResult> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     let (ok, output) = tauri::async_runtime::spawn_blocking(move || {
         crate::git::push(Path::new(&root), &branch)
     })
@@ -289,8 +362,8 @@ pub async fn git_push(
 }
 
 #[tauri::command]
-pub async fn git_diff(store: State<'_, StateStore>, project_id: String) -> AppResult<Vec<FileDiff>> {
-    let root = project_root(&store, &project_id)?;
+pub async fn git_diff(store: State<'_, StateStore>, repo_id: String) -> AppResult<Vec<FileDiff>> {
+    let root = repo_root(&store, &repo_id)?;
     tauri::async_runtime::spawn_blocking(move || crate::git::diff(Path::new(&root)).map_err(AppError::Msg))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))?
@@ -298,12 +371,17 @@ pub async fn git_diff(store: State<'_, StateStore>, project_id: String) -> AppRe
 
 // ---------- github ----------
 
-fn repo_slug(store: &StateStore, project_id: &str) -> AppResult<(String, String)> {
-    let root = project_root(store, project_id)?;
-    let info = crate::git::get_info(Path::new(&root));
+/// Resolve a Phase 2 `repo_id` to its GitHub `(owner, repo)` slug, parsed from
+/// that repo's origin (Phase 4 / R4.1: GitHub operations target the picker-
+/// selected sub-repo, not the project root).
+fn repo_slug_by_id(store: &StateStore, repo_id: &str) -> AppResult<(String, String)> {
+    let path = store
+        .repo_path(repo_id)
+        .ok_or_else(|| AppError::Msg("repo not found".to_string()))?;
+    let info = crate::git::get_info(Path::new(&path));
     let gh = info
         .github_repo
-        .ok_or_else(|| AppError::Msg("project has no github remote".to_string()))?;
+        .ok_or_else(|| AppError::Msg("repo has no github remote".to_string()))?;
     Ok((gh.owner, gh.repo))
 }
 
@@ -354,11 +432,11 @@ pub async fn github_device_poll(
 pub async fn github_list_prs(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     state: Option<String>,
 ) -> AppResult<Vec<PullRequestSummary>> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let st = state.unwrap_or_else(|| "open".to_string());
     let path = format!("/repos/{owner}/{repo}/pulls?state={st}&per_page=50&sort=updated&direction=desc");
     let v = github::api(&token, Method::GET, &path, None).await?;
@@ -371,11 +449,11 @@ pub async fn github_list_prs(
 pub async fn github_get_pr(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     number: u64,
 ) -> AppResult<PullRequestDetail> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let pr = github::api(&token, Method::GET, &format!("/repos/{owner}/{repo}/pulls/{number}"), None).await?;
     let comments = github::api(
         &token,
@@ -393,7 +471,7 @@ pub async fn github_get_pr(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePrInput {
-    pub project_id: String,
+    pub repo_id: String,
     pub title: String,
     pub body: String,
     pub head: String,
@@ -408,7 +486,7 @@ pub async fn github_create_pr(
     input: CreatePrInput,
 ) -> AppResult<PullRequestSummary> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &input.project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &input.repo_id)?;
     let body = json!({
         "title": input.title, "body": input.body,
         "head": input.head, "base": input.base, "draft": input.draft,
@@ -421,12 +499,12 @@ pub async fn github_create_pr(
 pub async fn github_merge_pr(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     number: u64,
     method: String,
 ) -> AppResult<()> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     github::api(
         &token,
         Method::PUT,
@@ -441,12 +519,12 @@ pub async fn github_merge_pr(
 pub async fn github_comment_pr(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     number: u64,
     body: String,
 ) -> AppResult<()> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     github::api(
         &token,
         Method::POST,
@@ -461,10 +539,10 @@ pub async fn github_comment_pr(
 pub async fn github_list_workflows(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
 ) -> AppResult<Vec<WorkflowSummary>> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let v = github::api(&token, Method::GET, &format!("/repos/{owner}/{repo}/actions/workflows"), None).await?;
     Ok(v["workflows"]
         .as_array()
@@ -476,11 +554,11 @@ pub async fn github_list_workflows(
 pub async fn github_list_runs(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     branch: Option<String>,
 ) -> AppResult<Vec<WorkflowRunSummary>> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let mut path = format!("/repos/{owner}/{repo}/actions/runs?per_page=30");
     if let Some(br) = branch {
         path.push_str(&format!("&branch={br}"));
@@ -496,11 +574,11 @@ pub async fn github_list_runs(
 pub async fn github_get_run(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     run_id: u64,
 ) -> AppResult<WorkflowRunDetail> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let run = github::api(&token, Method::GET, &format!("/repos/{owner}/{repo}/actions/runs/{run_id}"), None).await?;
     let jobs = github::api(
         &token,
@@ -518,12 +596,12 @@ pub async fn github_get_run(
 async fn run_action(
     gh: &GithubStore,
     store: &StateStore,
-    project_id: &str,
+    repo_id: &str,
     run_id: u64,
     action: &str,
 ) -> AppResult<()> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(store, project_id)?;
+    let (owner, repo) = repo_slug_by_id(store, repo_id)?;
     github::api(
         &token,
         Method::POST,
@@ -538,43 +616,43 @@ async fn run_action(
 pub async fn github_rerun_run(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     run_id: u64,
 ) -> AppResult<()> {
-    run_action(&gh, &store, &project_id, run_id, "rerun").await
+    run_action(&gh, &store, &repo_id, run_id, "rerun").await
 }
 
 #[tauri::command]
 pub async fn github_rerun_failed(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     run_id: u64,
 ) -> AppResult<()> {
-    run_action(&gh, &store, &project_id, run_id, "rerun-failed-jobs").await
+    run_action(&gh, &store, &repo_id, run_id, "rerun-failed-jobs").await
 }
 
 #[tauri::command]
 pub async fn github_cancel_run(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     run_id: u64,
 ) -> AppResult<()> {
-    run_action(&gh, &store, &project_id, run_id, "cancel").await
+    run_action(&gh, &store, &repo_id, run_id, "cancel").await
 }
 
 #[tauri::command]
 pub async fn github_dispatch_workflow(
     gh: State<'_, GithubStore>,
     store: State<'_, StateStore>,
-    project_id: String,
+    repo_id: String,
     workflow_id: u64,
     git_ref: String,
     inputs: Option<Value>,
 ) -> AppResult<()> {
     let token = gh.require_token()?;
-    let (owner, repo) = repo_slug(&store, &project_id)?;
+    let (owner, repo) = repo_slug_by_id(&store, &repo_id)?;
     let mut body = json!({ "ref": git_ref });
     if let Some(i) = inputs {
         body["inputs"] = i;
@@ -610,6 +688,33 @@ pub async fn claude_sessions_list(
     tauri::async_runtime::spawn_blocking(move || crate::claude::list_sessions(&home, &root))
         .await
         .map_err(|e| AppError::Msg(e.to_string()))
+}
+
+fn claude_settings_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {
+    Ok(home_dir(app)?.join(".claude").join("settings.json"))
+}
+
+/// Whether the attention hooks are installed in the user's Claude settings.
+#[tauri::command]
+pub fn claude_hooks_status(app: AppHandle) -> AppResult<bool> {
+    Ok(crate::claude::hooks::is_installed(&claude_settings_path(&app)?))
+}
+
+/// Opt-in: install the Notification/Stop hooks (marker-based, preserves any
+/// existing user hooks).
+#[tauri::command]
+pub fn claude_hooks_enable(app: AppHandle) -> AppResult<()> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    let spool = crate::claude::hooks::spool_dir(&data_dir);
+    crate::claude::hooks::install(&claude_settings_path(&app)?, &spool).map_err(AppError::Msg)
+}
+
+#[tauri::command]
+pub fn claude_hooks_disable(app: AppHandle) -> AppResult<()> {
+    crate::claude::hooks::uninstall(&claude_settings_path(&app)?).map_err(AppError::Msg)
 }
 
 #[tauri::command]
@@ -659,9 +764,9 @@ pub fn identity_set_config(
 pub fn identity_resolve(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
 ) -> AppResult<Resolution> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     let info = crate::git::get_info(Path::new(&root));
     // Git identity only applies to git repos. For a non-repo project there is
     // nothing to resolve (and applying would fail in `Repository::discover`), so
@@ -677,10 +782,10 @@ pub fn identity_resolve(
 pub fn identity_apply(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
     account_id: String,
 ) -> AppResult<ApplyResult> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     ids.apply(&root, &account_id)
 }
 
@@ -688,9 +793,9 @@ pub fn identity_apply(
 pub fn identity_current(
     ids: State<IdentityStore>,
     store: State<StateStore>,
-    project_id: String,
+    repo_id: String,
 ) -> AppResult<CurrentIdentity> {
-    let root = project_root(&store, &project_id)?;
+    let root = repo_root(&store, &repo_id)?;
     Ok(ids.current(&root))
 }
 
@@ -702,6 +807,50 @@ pub fn identity_apply_global(ids: State<IdentityStore>, account_id: String) -> A
 #[tauri::command]
 pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     crate::identity::detect_gh_accounts()
+}
+
+// ---------- remote access (feature-gated) ----------
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub async fn remote_start(
+    server: State<'_, crate::remote::RemoteServer>,
+    port: Option<u16>,
+    mode: Option<String>,
+    bind_all: Option<bool>,
+) -> AppResult<crate::remote::StartInfo> {
+    let mode = mode.unwrap_or_else(|| crate::remote::MODE_CLOUDFLARE.to_string());
+    server
+        .start(port.unwrap_or(0), &mode, bind_all.unwrap_or(false))
+        .await
+        .map_err(AppError::Msg)
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub async fn remote_detect_tailscale() -> Option<crate::remote::tailscale::TailscaleInfo> {
+    tokio::task::spawn_blocking(crate::remote::tailscale::detect)
+        .await
+        .ok()
+        .flatten()
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_stop(server: State<crate::remote::RemoteServer>) {
+    server.stop();
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_status(server: State<crate::remote::RemoteServer>) -> crate::remote::RemoteStatus {
+    server.status()
+}
+
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_regenerate_code(server: State<crate::remote::RemoteServer>) -> Option<String> {
+    server.regenerate_code()
 }
 
 // ---------- helpers ----------

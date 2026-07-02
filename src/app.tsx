@@ -17,7 +17,8 @@ import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './sta
 import { useUi } from './state/ui'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
-import type { Project, TerminalRecord } from './lib/ipc'
+import { isTauri, type Project, type TerminalRecord } from './lib/ipc'
+import { listen } from '@tauri-apps/api/event'
 
 export default function App() {
   const { projects, selectedProject, addProject } = useProjects()
@@ -122,6 +123,61 @@ export default function App() {
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
   }, [activeTerminalId, clearUnread])
+
+  // Typed attention from the Rust core (Claude hooks, failed commands, prompt
+  // waits): notify + unread-dot when the terminal isn't front-and-center.
+  useEffect(() => {
+    if (!isTauri) return
+    const unlisten = listen<{ id: string; reason: string; message: string | null }>(
+      'terminals:attention',
+      (e) => {
+        const { id, reason, message } = e.payload
+        const ws = useWorkspace.getState()
+        const proj = ws.projects.find((p) => p.terminals.some((t) => t.id === id))
+        const term = proj?.terminals.find((t) => t.id === id)
+        if (!proj || !term) return
+        const isVisible =
+          proj.id === useWorkspace.getState().selectedProjectId &&
+          id === useWorkspace.getState().activeTerminalByProject[proj.id]
+        if (isVisible && document.hasFocus()) return // you're already looking at it
+        ws.bumpUnread(id)
+        const body =
+          reason === 'needs-permission'
+            ? (message ?? 'Claude needs your permission')
+            : reason === 'waiting-input'
+              ? `${term.name} is waiting for input${message ? `: ${message}` : ''}`
+              : reason === 'failed'
+                ? `${term.name}: command failed${message ? ` — ${message}` : ''}`
+                : reason === 'finished'
+                  ? `${term.name} finished`
+                  : (message ?? reason)
+        void notify(proj.name, body)
+      }
+    )
+    return () => {
+      void unlisten.then((off) => off())
+    }
+  }, [])
+
+  // A remote web client can create/resume terminals in the Rust core; surface
+  // them in the desktop UI too (AC-3.5) without waiting for a state reload.
+  useEffect(() => {
+    if (!isTauri) return
+    const unlisten = listen<{ projectId: string; terminal: TerminalRecord }>(
+      'remote:terminal-added',
+      (e) => {
+        const { projectId, terminal } = e.payload
+        const ws = useWorkspace.getState()
+        const proj = ws.projects.find((p) => p.id === projectId)
+        if (proj && !proj.terminals.some((t) => t.id === terminal.id)) {
+          ws.addTerminal(projectId, terminal)
+        }
+      }
+    )
+    return () => {
+      void unlisten.then((off) => off())
+    }
+  }, [])
 
   const showEmptyNoProject = !selectedProject
   const showEmptyNoTerminals = !!selectedProject && selectedProject.terminals.length === 0

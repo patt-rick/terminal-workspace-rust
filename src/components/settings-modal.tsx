@@ -4,7 +4,9 @@ import { useSettings } from '../state/settings'
 import { useUpdater } from '../state/updater'
 import { useActiveTheme, useThemeList } from '../themes/theme-provider'
 import { parseThemeJson } from '../themes/validate'
-import { ipc, isTauri } from '../lib/ipc'
+import { listen } from '@tauri-apps/api/event'
+import { QRCodeSVG } from 'qrcode.react'
+import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -203,9 +205,426 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           />
         </Section>
 
+        <Section title="Claude Code">
+          <Row label="Always skip permissions">
+            <Toggle
+              checked={terminal.claudeSkipPermissions}
+              onChange={(v) => updateTerminal({ claudeSkipPermissions: v })}
+            />
+          </Row>
+          <div className="text-xs text-muted">
+            Starts Claude Code with{' '}
+            <code className="font-mono">--dangerously-skip-permissions</code>. Claude will not ask
+            for permission before running tools. Only enable this if you understand the risk.
+          </div>
+          <ClaudeHooksToggle />
+        </Section>
+
         <AccountsSection />
 
+        <RemoteAccessSection />
+
         <UpdatesSection />
+      </div>
+    </div>
+  )
+}
+
+function ClaudeHooksToggle() {
+  const [installed, setInstalled] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isTauri) return
+    ipc.claude
+      .hooksStatus()
+      .then(setInstalled)
+      .catch(() => setInstalled(null))
+  }, [])
+
+  const toggle = async (v: boolean) => {
+    setError(null)
+    try {
+      if (v) await ipc.claude.hooksEnable()
+      else await ipc.claude.hooksDisable()
+      setInstalled(v)
+    } catch (e) {
+      setError(String(e))
+    }
+  }
+
+  if (installed === null && !isTauri) return null
+
+  return (
+    <>
+      <Row label="Attention hooks">
+        <Toggle checked={installed ?? false} onChange={(v) => void toggle(v)} />
+      </Row>
+      <div className="text-xs text-muted">
+        Adds Notification/Stop hooks to <code className="font-mono">~/.claude/settings.json</code>{' '}
+        so the app knows exactly when Claude needs your permission, is waiting for input, or has
+        finished — powering precise badges and phone notifications. Your existing hooks are left
+        untouched.
+      </div>
+      {error && <div className="text-xs text-danger">{error}</div>}
+    </>
+  )
+}
+
+const REMOTE_MODES: { id: RemoteMode; label: string; blurb: string }[] = [
+  {
+    id: 'cloudflare',
+    label: 'Quick Start (Cloudflare)',
+    blurb:
+      'No account or setup needed. You get a temporary public link + QR each session. The link changes every time.',
+  },
+  {
+    id: 'tailscale',
+    label: 'Tailscale (advanced)',
+    blurb:
+      'Install the free Tailscale app on this PC and your phone once. Your address never changes and nothing is exposed to the public internet. Recommended for daily use.',
+  },
+  {
+    id: 'local',
+    label: 'This computer only',
+    blurb:
+      'Serves on localhost (127.0.0.1) — reachable only from a browser on this machine. Nothing is exposed to the network.',
+  },
+]
+
+const DEFAULT_TAILSCALE_PORT = 8765
+
+function RemoteAccessSection() {
+  const [status, setStatus] = useState<import('../lib/ipc').RemoteStatus | null>(null)
+  const [supported, setSupported] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<RemoteMode>('cloudflare')
+  const [progress, setProgress] = useState<string | null>(null)
+  const [tunnelDied, setTunnelDied] = useState(false)
+  const [tsInfo, setTsInfo] = useState<import('../lib/ipc').TailscaleInfo | null>(null)
+  const [tsChecked, setTsChecked] = useState(false)
+  const [port, setPort] = useState(DEFAULT_TAILSCALE_PORT)
+  const [bindAll, setBindAll] = useState(false)
+
+  const refresh = () => {
+    if (!isTauri) {
+      setSupported(false)
+      return
+    }
+    ipc.remote
+      .status()
+      .then((s) => {
+        setStatus(s)
+        setSupported(true)
+        if (s.running && s.mode) setMode(s.mode)
+      })
+      .catch(() => setSupported(false))
+  }
+
+  useEffect(refresh, [])
+
+  // Backend push events: cloudflared setup progress and tunnel death (R3.11).
+  useEffect(() => {
+    if (!isTauri) return
+    const unlisten = [
+      listen<string>('remote:cloudflared-progress', (e) => setProgress(e.payload)),
+      listen('remote:tunnel-died', () => {
+        setTunnelDied(true)
+        setProgress(null)
+      }),
+      listen<string>('remote:auto-stopped', (e) => {
+        setError(`Remote access stopped: ${e.payload}`)
+        refresh()
+      }),
+    ]
+    return () => {
+      unlisten.forEach((p) => void p.then((off) => off()))
+    }
+  }, [])
+
+  // Detect the tailnet address when the user picks Tailscale mode, so we can show
+  // the reachable address or fall back to setup instructions (AC-3.8).
+  useEffect(() => {
+    if (!isTauri || mode !== 'tailscale' || (status?.running ?? false)) return
+    let cancelled = false
+    setTsChecked(false)
+    ipc.remote
+      .detectTailscale()
+      .then((info) => {
+        if (cancelled) return
+        setTsInfo(info)
+        setTsChecked(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTsInfo(null)
+        setTsChecked(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, status?.running])
+
+  if (!supported) {
+    return (
+      <Section title="Remote Access">
+        <div className="text-xs text-muted">
+          Not available in this build. Run with the <code className="font-mono">remote-access</code>{' '}
+          feature to enable.
+        </div>
+      </Section>
+    )
+  }
+
+  const running = status?.running ?? false
+
+  const start = async (startMode: RemoteMode) => {
+    setBusy(true)
+    setError(null)
+    setTunnelDied(false)
+    setProgress(startMode === 'cloudflare' ? 'Setting up tunnel…' : null)
+    try {
+      // Tailscale uses a stable, user-chosen port; the others take any free port.
+      const startPort = startMode === 'tailscale' ? port : undefined
+      const startBindAll = startMode === 'tailscale' ? bindAll : false
+      const info = await ipc.remote.start(startMode, startPort, startBindAll)
+      setStatus({
+        running: true,
+        mode: info.mode,
+        port: info.port,
+        url: info.url,
+        localUrl: info.localUrl,
+        pairingCode: info.pairingCode,
+        connectedSince: null,
+        hint: info.hint,
+      })
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  const stop = async () => {
+    setBusy(true)
+    try {
+      await ipc.remote.stop()
+      setTunnelDied(false)
+      refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const restartTunnel = async () => {
+    await ipc.remote.stop().catch(() => {})
+    await start('cloudflare')
+  }
+
+  const regenerate = async () => {
+    const code = await ipc.remote.regenerateCode().catch(() => null)
+    if (code) setStatus((s) => (s ? { ...s, pairingCode: code } : s))
+  }
+
+  return (
+    <Section title="Remote Access">
+      <div className="text-xs text-muted">
+        Control your terminals from a phone or another computer over the web.
+      </div>
+
+      {running ? (
+        <div className="flex flex-col gap-2.5">
+          {status?.mode !== 'local' && status?.url && !tunnelDied && (
+            <div className="flex items-center gap-3">
+              <div className="rounded-md bg-white p-2">
+                <QRCodeSVG value={status.url} size={132} marginSize={0} />
+              </div>
+              <div className="text-xs text-muted">
+                Scan with your phone camera, then enter the pairing code below.
+                {status?.mode === 'tailscale' && ' Your phone must be on the same tailnet.'}
+              </div>
+            </div>
+          )}
+
+          {tunnelDied && (
+            <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">
+              <span>The Cloudflare tunnel disconnected.</span>
+              <button
+                type="button"
+                onClick={() => void restartTunnel()}
+                disabled={busy}
+                className="ml-auto rounded border border-danger/50 px-2 py-0.5 font-medium hover:bg-danger/10 disabled:opacity-50"
+              >
+                Restart tunnel
+              </button>
+            </div>
+          )}
+
+          <Row label="URL">
+            <span className="font-mono text-xs text-foreground/80 break-all">{status?.url}</span>
+          </Row>
+          {status?.hint && <div className="text-xs text-warning">{status.hint}</div>}
+          {status?.mode === 'cloudflare' && status.localUrl && (
+            <Row label="Local URL">
+              <span className="font-mono text-xs text-muted">{status.localUrl}</span>
+            </Row>
+          )}
+          <Row label="Pairing code">
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-base tracking-widest text-foreground">
+                {status?.pairingCode ?? '——————'}
+              </span>
+              <button
+                type="button"
+                onClick={() => void regenerate()}
+                className="rounded border border-border px-2 py-0.5 text-[11px] text-foreground/70 hover:bg-foreground/5"
+              >
+                New code
+              </button>
+            </span>
+          </Row>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted">
+              {status?.connectedSince
+                ? `Connected since ${new Date(status.connectedSince).toLocaleTimeString()}`
+                : 'Waiting for a device to pair…'}
+            </span>
+            <button
+              type="button"
+              onClick={() => void stop()}
+              disabled={busy}
+              className="ml-auto rounded-md border border-danger/40 px-2.5 py-1 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            >
+              Stop Remote Access
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
+            {REMOTE_MODES.map((m) => (
+              <label
+                key={m.id}
+                className={`flex cursor-pointer gap-2 rounded-md border px-2.5 py-2 text-xs ${
+                  mode === m.id ? 'border-accent bg-accent/5' : 'border-border hover:bg-foreground/5'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="remote-mode"
+                  className="mt-0.5"
+                  checked={mode === m.id}
+                  onChange={() => setMode(m.id)}
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-medium text-foreground">{m.label}</span>
+                  <span className="text-muted">{m.blurb}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {mode === 'tailscale' && (
+            <TailscaleSetup
+              info={tsInfo}
+              checked={tsChecked}
+              port={port}
+              onPort={setPort}
+              bindAll={bindAll}
+              onBindAll={setBindAll}
+            />
+          )}
+
+          <button
+            type="button"
+            onClick={() => void start(mode)}
+            disabled={busy || (mode === 'tailscale' && (!tsChecked || !tsInfo))}
+            className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {busy ? progress ?? 'Starting…' : 'Start Remote Session'}
+          </button>
+        </div>
+      )}
+      {error && <div className="text-xs text-danger">{error}</div>}
+    </Section>
+  )
+}
+
+function TailscaleSetup({
+  info,
+  checked,
+  port,
+  onPort,
+  bindAll,
+  onBindAll,
+}: {
+  info: import('../lib/ipc').TailscaleInfo | null
+  checked: boolean
+  port: number
+  onPort: (v: number) => void
+  bindAll: boolean
+  onBindAll: (v: boolean) => void
+}) {
+  if (!checked) {
+    return <div className="text-xs text-muted">Checking for Tailscale…</div>
+  }
+
+  if (!info) {
+    return (
+      <div className="flex flex-col gap-1.5 rounded-md border border-border bg-foreground/5 px-2.5 py-2 text-xs">
+        <div className="font-medium text-foreground">Tailscale isn’t set up yet</div>
+        <ol className="ml-4 list-decimal text-muted [&>li]:mt-0.5">
+          <li>
+            Install Tailscale on this PC and your phone from{' '}
+            <code className="font-mono">tailscale.com/download</code>.
+          </li>
+          <li>Sign in on both devices with the same account.</li>
+          <li>Come back here and pick Tailscale again — your address will appear.</li>
+        </ol>
+      </div>
+    )
+  }
+
+  const host = info.dnsName ?? info.ip
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-foreground/5 px-2.5 py-2 text-xs">
+      <Row label="Tailnet address">
+        <span className="font-mono text-foreground/80">{host}</span>
+      </Row>
+      {info.dnsName && (
+        <Row label="IP">
+          <span className="font-mono text-muted">{info.ip}</span>
+        </Row>
+      )}
+      <Row label="Port">
+        <input
+          type="number"
+          min={1}
+          max={65535}
+          value={port}
+          onChange={(e) => onPort(Number(e.target.value) || DEFAULT_TAILSCALE_PORT)}
+          className="w-24 rounded border border-border bg-transparent px-2 py-0.5 text-right font-mono text-foreground"
+        />
+      </Row>
+      <label className="flex cursor-pointer items-start gap-2 text-muted">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={bindAll}
+          onChange={(e) => onBindAll(e.target.checked)}
+        />
+        <span>
+          Also expose on my local network (bind <code className="font-mono">0.0.0.0</code>).{' '}
+          <span className="text-danger">
+            Anyone on your Wi-Fi/LAN can then reach the pairing screen — only enable on a trusted
+            network.
+          </span>
+        </span>
+      </label>
+      <div className="text-muted">
+        Will serve at <span className="font-mono">http://{host}:{port}</span>.
       </div>
     </div>
   )

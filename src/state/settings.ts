@@ -14,6 +14,11 @@ export interface EditorSettings {
 export interface TerminalSettings {
   /** Command run automatically in every new terminal tab. Empty = nothing. */
   startupCommand: string
+  /**
+   * When true, every default Claude Code launch appends
+   * `--dangerously-skip-permissions`. The ⇧D shortcut always adds it regardless.
+   */
+  claudeSkipPermissions: boolean
 }
 
 export const EDITOR_DEFAULTS: EditorSettings = {
@@ -27,6 +32,7 @@ export const EDITOR_DEFAULTS: EditorSettings = {
 
 export const TERMINAL_DEFAULTS: TerminalSettings = {
   startupCommand: '',
+  claudeSkipPermissions: false,
 }
 
 export interface Settings {

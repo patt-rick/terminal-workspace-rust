@@ -2,6 +2,8 @@
 //! the `claude` CLI writes to `~/.claude/projects/<encoded-cwd>/<id>.jsonl`, and
 //! summarize them so the UI can list and resume past sessions.
 
+pub mod hooks;
+
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;

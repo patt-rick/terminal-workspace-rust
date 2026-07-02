@@ -9,6 +9,7 @@ import {
   type WorkflowRunSummary,
 } from '../../lib/ipc'
 import { useIdentity } from '../../state/identity'
+import { useRepos } from '../../state/repos'
 import { useUi } from '../../state/ui'
 
 type Section = 'prs' | 'actions'
@@ -53,6 +54,9 @@ function Authed({
   onChangeSettings: (s: GithubSettings) => void
 }) {
   const [section, setSection] = useState<Section>('prs')
+  // Phase 4: PRs/Actions operate on the picker-selected sub-repo, not the
+  // project root. Falls back to the first discovered repo (repos store default).
+  const repoId = useRepos((s) => s.selectedByProject[projectId] ?? null)
 
   return (
     <div className="flex h-full flex-col">
@@ -76,7 +80,7 @@ function Authed({
         </SectionTab>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {section === 'prs' ? <PrList projectId={projectId} /> : <RunList projectId={projectId} />}
+        {section === 'prs' ? <PrList repoId={repoId} /> : <RunList repoId={repoId} />}
       </div>
     </div>
   )
@@ -89,15 +93,23 @@ function PushAccountSection({ projectId }: { projectId: string }) {
   const appliedTick = useIdentity((s) => s.appliedTick)
   const openPicker = useIdentity((s) => s.openPicker)
   const openSettings = useUi((s) => s.openSettings)
+  const repos = useRepos((s) => s.reposByProject[projectId])
+  const selectedId = useRepos((s) => s.selectedByProject[projectId] ?? null)
   const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
+
+  const selectedRepo = repos?.find((r) => r.id === selectedId) ?? null
 
   useEffect(() => {
     if (!loaded) void load()
   }, [loaded, load])
 
   useEffect(() => {
-    ipc.identity.current(projectId).then(setIdentity).catch(() => setIdentity(null))
-  }, [projectId, appliedTick])
+    if (!selectedId) {
+      setIdentity(null)
+      return
+    }
+    ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+  }, [selectedId, appliedTick])
 
   if (!identity?.isRepo) return null
 
@@ -141,7 +153,16 @@ function PushAccountSection({ projectId }: { projectId: string }) {
         </div>
         <button
           type="button"
-          onClick={() => openPicker(projectId, identity.accountId)}
+          onClick={() =>
+            selectedId &&
+            openPicker([
+              {
+                repoId: selectedId,
+                label: selectedRepo ? selectedRepo.relativePath || selectedRepo.name : '',
+                suggestedId: identity.accountId,
+              },
+            ])
+          }
           className="flex-shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5"
         >
           Change
@@ -190,23 +211,29 @@ const timeAgo = (iso: string): string => {
   return `${Math.floor(s / 86400)}d`
 }
 
-function PrList({ projectId }: { projectId: string }) {
+function PrList({ repoId }: { repoId: string | null }) {
   const [prs, setPrs] = useState<PullRequestSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
+    if (!repoId) {
+      setPrs([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setError(null)
     ipc.github
-      .listPullRequests(projectId, 'open')
+      .listPullRequests(repoId, 'open')
       .then(setPrs)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [projectId])
+  }, [repoId])
 
   useEffect(refresh, [refresh])
 
+  if (!repoId) return <Hint>No repository selected</Hint>
   if (loading) return <Hint>Loading pull requests…</Hint>
   if (error) return <Hint>{error}</Hint>
   if (prs.length === 0) return <Hint>No open pull requests</Hint>
@@ -251,21 +278,26 @@ const conclusionColor = (run: WorkflowRunSummary): string => {
   }
 }
 
-function RunList({ projectId }: { projectId: string }) {
+function RunList({ repoId }: { repoId: string | null }) {
   const [runs, setRuns] = useState<WorkflowRunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState<number | null>(null)
 
   const refresh = useCallback(() => {
+    if (!repoId) {
+      setRuns([])
+      setLoading(false)
+      return
+    }
     setLoading(true)
     setError(null)
     ipc.github
-      .listRuns(projectId)
+      .listRuns(repoId)
       .then(setRuns)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [projectId])
+  }, [repoId])
 
   useEffect(refresh, [refresh])
 
@@ -281,6 +313,7 @@ function RunList({ projectId }: { projectId: string }) {
     }
   }
 
+  if (!repoId) return <Hint>No repository selected</Hint>
   if (loading) return <Hint>Loading runs…</Hint>
   if (error) return <Hint>{error}</Hint>
   if (runs.length === 0) return <Hint>No workflow runs</Hint>
@@ -310,7 +343,7 @@ function RunList({ projectId }: { projectId: string }) {
                 <button
                   type="button"
                   disabled={acting === run.id}
-                  onClick={() => void act(run.id, () => ipc.github.cancelRun(projectId, run.id))}
+                  onClick={() => void act(run.id, () => ipc.github.cancelRun(repoId, run.id))}
                   className="text-danger hover:underline disabled:opacity-50"
                 >
                   Cancel
@@ -319,7 +352,7 @@ function RunList({ projectId }: { projectId: string }) {
                 <button
                   type="button"
                   disabled={acting === run.id}
-                  onClick={() => void act(run.id, () => ipc.github.rerunRun(projectId, run.id))}
+                  onClick={() => void act(run.id, () => ipc.github.rerunRun(repoId, run.id))}
                   className="text-link hover:underline disabled:opacity-50"
                 >
                   Re-run

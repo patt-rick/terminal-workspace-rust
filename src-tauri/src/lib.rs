@@ -12,6 +12,8 @@ mod git;
 mod github;
 mod identity;
 mod pty;
+#[cfg(feature = "remote-access")]
+mod remote;
 mod settings;
 mod state;
 
@@ -21,6 +23,11 @@ use pty::PtyManager;
 use settings::SettingsStore;
 use state::StateStore;
 use tauri::Manager;
+
+/// `--hook-sink` mode entry (see main.rs): copy stdin into the spool dir.
+pub fn hook_sink(spool: &std::path::Path) {
+    claude::hooks::run_sink(spool);
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,16 +45,50 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("resolve app data dir");
+            // TW_DATA_DIR overrides the app-data location (state/settings/etc).
+            // Lets a second, fully isolated instance run for testing without
+            // touching the installed app's data.
+            let data_dir = match std::env::var_os("TW_DATA_DIR") {
+                Some(dir) => std::path::PathBuf::from(dir),
+                None => app
+                    .path()
+                    .app_data_dir()
+                    .expect("resolve app data dir"),
+            };
             std::fs::create_dir_all(&data_dir).ok();
             app.manage(StateStore::load(data_dir.join("state.json")));
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(PtyManager::new());
+            // Claude hook events (Notification/Stop) land in the spool dir; the
+            // watcher routes them to terminals as attention events. Cheap no-op
+            // polling when hooks aren't installed.
+            #[cfg(feature = "remote-access")]
+            claude::hooks::start_watcher(
+                app.handle().clone(),
+                claude::hooks::spool_dir(&data_dir),
+            );
+            #[cfg(feature = "remote-access")]
+            {
+                app.manage(remote::RemoteServer::new(app.handle().clone()));
+                // Headless/dev auto-start for testing: set TW_REMOTE_AUTOSTART=<port>
+                // to start remote access at launch and print the URL + pairing code.
+                if let Ok(port) = std::env::var("TW_REMOTE_AUTOSTART") {
+                    let handle = app.handle().clone();
+                    let port: u16 = port.parse().unwrap_or(8899);
+                    // Dev autostart binds localhost only (no tunnel) for LAN testing.
+                    tauri::async_runtime::spawn(async move {
+                        let server = handle.state::<remote::RemoteServer>();
+                        match server.start(port, remote::MODE_LOCAL, false).await {
+                            Ok(info) => {
+                                eprintln!("REMOTE_READY url={} code={}", info.url, info.pairing_code)
+                            }
+                            Err(e) => eprintln!("REMOTE_START_FAILED {e}"),
+                        }
+                    });
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -79,6 +120,10 @@ pub fn run() {
             commands::fs_duplicate,
             commands::fs_save_temp_paste,
             commands::fs_export_text,
+            commands::git_discover_repos,
+            commands::git_selected_repo,
+            commands::git_set_selected_repo,
+            commands::git_dirty_flags,
             commands::git_info,
             commands::git_push,
             commands::git_diff,
@@ -102,6 +147,9 @@ pub fn run() {
             commands::github_dispatch_workflow,
             commands::claude_sessions_list,
             commands::claude_session_delete,
+            commands::claude_hooks_status,
+            commands::claude_hooks_enable,
+            commands::claude_hooks_disable,
             commands::identity_list_accounts,
             commands::identity_get_config,
             commands::identity_save_account,
@@ -112,6 +160,16 @@ pub fn run() {
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,
+            #[cfg(feature = "remote-access")]
+            commands::remote_start,
+            #[cfg(feature = "remote-access")]
+            commands::remote_stop,
+            #[cfg(feature = "remote-access")]
+            commands::remote_status,
+            #[cfg(feature = "remote-access")]
+            commands::remote_regenerate_code,
+            #[cfg(feature = "remote-access")]
+            commands::remote_detect_tailscale,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -120,6 +178,8 @@ pub fn run() {
             // recreated fresh from persisted state on next launch.
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 app_handle.state::<PtyManager>().dispose_all();
+                #[cfg(feature = "remote-access")]
+                app_handle.state::<remote::RemoteServer>().stop();
             }
         });
 }
