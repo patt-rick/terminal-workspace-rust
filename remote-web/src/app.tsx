@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { pair, RemoteClient, type ProjectInfo } from './protocol'
+import {
+  pair,
+  RemoteClient,
+  type FileDiff,
+  type GitInfo,
+  type ProjectInfo,
+  type RepoInfo,
+} from './protocol'
+import { GitSheet } from './git-sheet'
 
 const TOKEN_KEY = 'tw_remote_token'
 type Phase = 'pair' | 'connecting' | 'ready' | 'evicted' | 'closed'
@@ -43,6 +51,15 @@ export function App() {
   const [working, setWorking] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<string | null>(null)
 
+  const [gitOpen, setGitOpen] = useState(false)
+  const [gitRepos, setGitRepos] = useState<RepoInfo[]>([])
+  const [gitRepoId, setGitRepoId] = useState<string | null>(null)
+  const [gitStatus, setGitStatus] = useState<GitInfo | null>(null)
+  const [gitDiffs, setGitDiffs] = useState<FileDiff[]>([])
+  const [gitPushMsg, setGitPushMsg] = useState<string | null>(null)
+  const [gitPushing, setGitPushing] = useState(false)
+  const gitRepoIdRef = useRef<string | null>(null)
+
   const projectsRef = useRef<ProjectInfo[]>([])
   projectsRef.current = projects
   const workingRef = useRef<Set<string>>(working)
@@ -76,6 +93,32 @@ export function App() {
     const t = setTimeout(() => setToast(null), 4000)
     return () => clearTimeout(t)
   }, [toast])
+
+  const selectGitRepo = useCallback((repoId: string) => {
+    gitRepoIdRef.current = repoId
+    setGitRepoId(repoId)
+    setGitDiffs([])
+    setGitStatus(null)
+    setGitPushMsg(null)
+    clientRef.current?.gitStatus(repoId)
+    clientRef.current?.gitDiff(repoId)
+  }, [])
+
+  const openGit = () => {
+    const projectId =
+      projectsRef.current.find((p) => p.terminals.some((t) => t.id === curIdRef.current))?.id ??
+      projectsRef.current[0]?.id
+    if (!projectId) return
+    setGitOpen(true)
+    clientRef.current?.gitRepos(projectId)
+  }
+
+  const doPush = () => {
+    if (!gitRepoIdRef.current) return
+    setGitPushing(true)
+    setGitPushMsg(null)
+    clientRef.current?.gitPush(gitRepoIdRef.current)
+  }
 
   const attachTo = useCallback((id: string) => {
     const client = clientRef.current
@@ -154,6 +197,26 @@ export function App() {
             terminals: p.terminals.map((t) => (t.id === tid ? { ...t, live: false } : t)),
           }))
         )
+      },
+      onGitRepos: (_projectId, repos) => {
+        setGitRepos(repos)
+        const def = repos.find((r) => r.relativePath === '') ?? repos[0]
+        if (def) selectGitRepo(def.id)
+      },
+      onGitStatus: (repoId, info) => {
+        if (repoId === gitRepoIdRef.current) setGitStatus(info)
+      },
+      onGitDiff: (repoId, files) => {
+        if (repoId === gitRepoIdRef.current) setGitDiffs(files)
+      },
+      onGitPushProgress: (_repoId, message) => setGitPushMsg(message),
+      onGitPushDone: (repoId, ok, output) => {
+        setGitPushing(false)
+        setGitPushMsg(ok ? 'Pushed.' : output || 'Push failed')
+        if (ok && repoId === gitRepoIdRef.current) {
+          clientRef.current?.gitStatus(repoId)
+          clientRef.current?.gitDiff(repoId)
+        }
       },
       onEvicted: () => {
         sessionStorage.removeItem(TOKEN_KEY)
@@ -266,6 +329,9 @@ export function App() {
           {current ? current.name : 'No terminal'}
         </span>
         <span className="status">{status}</span>
+        <button className="iconbtn" onClick={openGit} aria-label="Git">
+          ⎇
+        </button>
       </div>
 
       <div className="termwrap">
@@ -339,6 +405,20 @@ export function App() {
             ))}
           </div>
         </>
+      )}
+
+      {gitOpen && (
+        <GitSheet
+          repos={gitRepos}
+          repoId={gitRepoId}
+          status={gitStatus}
+          diffs={gitDiffs}
+          pushMsg={gitPushMsg}
+          pushing={gitPushing}
+          onSelectRepo={selectGitRepo}
+          onPush={doPush}
+          onClose={() => setGitOpen(false)}
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}

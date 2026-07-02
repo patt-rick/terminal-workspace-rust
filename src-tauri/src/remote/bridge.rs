@@ -3,9 +3,12 @@
 //! "invoke any command" passthrough, and no filesystem or project-management
 //! access (R3.7 / AC-3.10).
 
+use crate::git::discover::RepoInfo;
+use crate::git::{FileDiff, GitInfo};
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::settings::SettingsStore;
 use crate::state::{StateStore, TerminalRecord};
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
@@ -122,6 +125,50 @@ pub fn close_terminal(app: &AppHandle, terminal_id: &str) {
     if let Some(project_id) = project_of_terminal(&store, terminal_id) {
         store.remove_terminal(&project_id, terminal_id);
     }
+}
+
+// ---- git (reuses Phase 2's repo cache + the existing git functions) ----
+
+/// Discovered repos for a project (cached, discovering on first use).
+pub fn git_repos(app: &AppHandle, project_id: &str) -> Vec<RepoInfo> {
+    let store = app.state::<StateStore>();
+    let cached = store.get_repos(project_id);
+    if !cached.is_empty() {
+        return cached;
+    }
+    match store.project_path(project_id) {
+        Some(root) => {
+            let repos = crate::git::discover::discover_repos(project_id, Path::new(&root)).repos;
+            store.set_repos(project_id, repos.clone());
+            repos
+        }
+        None => Vec::new(),
+    }
+}
+
+pub fn git_status(app: &AppHandle, repo_id: &str) -> Option<GitInfo> {
+    let path = app.state::<StateStore>().repo_path(repo_id)?;
+    Some(crate::git::get_info(Path::new(&path)))
+}
+
+pub fn git_diff(app: &AppHandle, repo_id: &str) -> Result<Vec<FileDiff>, String> {
+    let path = app
+        .state::<StateStore>()
+        .repo_path(repo_id)
+        .ok_or_else(|| "repo not found".to_string())?;
+    crate::git::diff(Path::new(&path))
+}
+
+/// Push the repo's current branch (upstream set on first push, matching desktop).
+pub fn git_push(app: &AppHandle, repo_id: &str) -> (bool, String) {
+    let Some(path) = app.state::<StateStore>().repo_path(repo_id) else {
+        return (false, "repo not found".to_string());
+    };
+    let info = crate::git::get_info(Path::new(&path));
+    let Some(branch) = info.branch else {
+        return (false, "no branch to push".to_string());
+    };
+    crate::git::push(Path::new(&path), &branch)
 }
 
 fn project_of_terminal(store: &StateStore, terminal_id: &str) -> Option<String> {

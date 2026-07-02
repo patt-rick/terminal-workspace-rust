@@ -35,11 +35,19 @@ pub enum ClientMsg {
     },
     #[serde(rename = "term.close")]
     TermClose { terminal_id: String },
+    #[serde(rename = "git.repos")]
+    GitRepos { project_id: String },
+    #[serde(rename = "git.status")]
+    GitStatus { repo_id: String },
+    #[serde(rename = "git.diff")]
+    GitDiff { repo_id: String },
+    #[serde(rename = "git.push")]
+    GitPush { repo_id: String },
     Ping,
 }
 
 /// Messages the server pushes to the client.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerMsg {
     #[serde(rename = "hello.ok")]
@@ -72,6 +80,29 @@ pub enum ServerMsg {
     /// A terminal's PTY exited.
     #[serde(rename = "state.exit")]
     StateExit { terminal_id: String },
+    #[serde(rename = "git.repos")]
+    GitRepos {
+        project_id: String,
+        repos: Vec<crate::git::discover::RepoInfo>,
+    },
+    #[serde(rename = "git.status")]
+    GitStatus {
+        repo_id: String,
+        info: crate::git::GitInfo,
+    },
+    #[serde(rename = "git.diff")]
+    GitDiff {
+        repo_id: String,
+        files: Vec<crate::git::FileDiff>,
+    },
+    #[serde(rename = "git.push.progress")]
+    GitPushProgress { repo_id: String, message: String },
+    #[serde(rename = "git.push.done")]
+    GitPushDone {
+        repo_id: String,
+        ok: bool,
+        output: String,
+    },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
     SessionEvicted,

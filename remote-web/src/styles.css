@@ -289,3 +289,148 @@ body {
   font-size: 13px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
+
+/* git sheet */
+.gitsheet {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+.git-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.git-repo {
+  flex: 1;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.git-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.g-branch {
+  font-weight: 600;
+  color: var(--accent);
+}
+.git-push {
+  padding: 10px 14px 4px;
+}
+.git-pushmsg {
+  padding: 0 14px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 90px;
+  overflow: auto;
+}
+.git-files {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 6px 16px;
+}
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.git-file:active {
+  background: var(--panel);
+}
+.g-glyph {
+  width: 16px;
+  text-align: center;
+  font: 700 13px ui-monospace, Menlo, Consolas, monospace;
+}
+.g-path {
+  flex: 1;
+  font-size: 13px;
+  word-break: break-all;
+}
+.git-diff {
+  flex: 1;
+  overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding-bottom: 24px;
+}
+.g-hunk {
+  color: var(--accent);
+  background: rgba(122, 162, 247, 0.08);
+  padding: 3px 10px;
+}
+.g-line {
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.g-o {
+  display: inline-block;
+  width: 10px;
+  opacity: 0.7;
+}
+.git-empty {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.g-add {
+  color: var(--green, #9ece6a);
+}
+.g-del {
+  color: var(--danger);
+}
+.g-mod {
+  color: var(--warning);
+}
+.g-ren {
+  color: var(--accent);
+}
+.g-line.g-add {
+  background: rgba(158, 206, 106, 0.1);
+}
+.g-line.g-del {
+  background: rgba(247, 118, 142, 0.1);
+}
+.confirm {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 26;
+  width: min(90vw, 320px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+}
+.confirm p {
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}

@@ -17,6 +17,42 @@ export interface StateSnapshot {
   projects: ProjectInfo[]
 }
 
+export interface RepoInfo {
+  id: string
+  path: string
+  relativePath: string
+  name: string
+  isSubmodule: boolean
+  parentRepoId: string | null
+}
+export interface GitInfo {
+  isRepo: boolean
+  branch: string | null
+  githubRepo: { owner: string; repo: string } | null
+  hasUpstream: boolean
+  ahead: number
+  behind: number
+  dirty: boolean
+  defaultBranch: string | null
+}
+export interface DiffLine {
+  origin: string
+  content: string
+  oldLineno: number | null
+  newLineno: number | null
+}
+export interface DiffHunk {
+  header: string
+  lines: DiffLine[]
+}
+export interface FileDiff {
+  path: string
+  oldPath: string | null
+  status: string
+  binary: boolean
+  hunks: DiffHunk[]
+}
+
 export interface Handlers {
   onState?: (state: StateSnapshot, appVersion: string) => void
   onAttached?: (terminalId: string, tag: number) => void
@@ -27,6 +63,11 @@ export interface Handlers {
   onWorking?: (terminalId: string, working: boolean) => void
   onBell?: (terminalId: string) => void
   onExit?: (terminalId: string) => void
+  onGitRepos?: (projectId: string, repos: RepoInfo[]) => void
+  onGitStatus?: (repoId: string, info: GitInfo) => void
+  onGitDiff?: (repoId: string, files: FileDiff[]) => void
+  onGitPushProgress?: (repoId: string, message: string) => void
+  onGitPushDone?: (repoId: string, ok: boolean, output: string) => void
   onEvicted?: () => void
   onError?: (message: string) => void
   onClose?: () => void
@@ -93,6 +134,21 @@ export class RemoteClient {
         case 'state.exit':
           this.h.onExit?.(m.terminalId)
           break
+        case 'git.repos':
+          this.h.onGitRepos?.(m.projectId, m.repos)
+          break
+        case 'git.status':
+          this.h.onGitStatus?.(m.repoId, m.info)
+          break
+        case 'git.diff':
+          this.h.onGitDiff?.(m.repoId, m.files)
+          break
+        case 'git.push.progress':
+          this.h.onGitPushProgress?.(m.repoId, m.message)
+          break
+        case 'git.push.done':
+          this.h.onGitPushDone?.(m.repoId, m.ok, m.output)
+          break
         case 'session.evicted':
           this.h.onEvicted?.()
           break
@@ -130,6 +186,18 @@ export class RemoteClient {
   }
   close(terminalId: string): void {
     this.send({ type: 'term.close', terminalId })
+  }
+  gitRepos(projectId: string): void {
+    this.send({ type: 'git.repos', projectId })
+  }
+  gitStatus(repoId: string): void {
+    this.send({ type: 'git.status', repoId })
+  }
+  gitDiff(repoId: string): void {
+    this.send({ type: 'git.diff', repoId })
+  }
+  gitPush(repoId: string): void {
+    this.send({ type: 'git.push', repoId })
   }
   ping(): void {
     this.send({ type: 'ping' })

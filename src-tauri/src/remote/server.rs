@@ -197,6 +197,43 @@ impl Conn {
                 self.detach(&terminal_id);
                 self.send(ServerMsg::TermClosed { terminal_id }).await;
             }
+            ClientMsg::GitRepos { project_id } => {
+                let (app, out_tx) = (self.ctx.app.clone(), self.out_tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    let repos = bridge::git_repos(&app, &project_id);
+                    let _ = out_tx.blocking_send(text(&ServerMsg::GitRepos { project_id, repos }));
+                });
+            }
+            ClientMsg::GitStatus { repo_id } => {
+                let (app, out_tx) = (self.ctx.app.clone(), self.out_tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    if let Some(info) = bridge::git_status(&app, &repo_id) {
+                        let _ = out_tx.blocking_send(text(&ServerMsg::GitStatus { repo_id, info }));
+                    }
+                });
+            }
+            ClientMsg::GitDiff { repo_id } => {
+                let (app, out_tx) = (self.ctx.app.clone(), self.out_tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    let msg = match bridge::git_diff(&app, &repo_id) {
+                        Ok(files) => ServerMsg::GitDiff { repo_id, files },
+                        Err(message) => ServerMsg::Error { message },
+                    };
+                    let _ = out_tx.blocking_send(text(&msg));
+                });
+            }
+            ClientMsg::GitPush { repo_id } => {
+                self.send(ServerMsg::GitPushProgress {
+                    repo_id: repo_id.clone(),
+                    message: "Pushing…".into(),
+                })
+                .await;
+                let (app, out_tx) = (self.ctx.app.clone(), self.out_tx.clone());
+                tokio::task::spawn_blocking(move || {
+                    let (ok, output) = bridge::git_push(&app, &repo_id);
+                    let _ = out_tx.blocking_send(text(&ServerMsg::GitPushDone { repo_id, ok, output }));
+                });
+            }
         }
     }
 
