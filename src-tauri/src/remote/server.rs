@@ -207,7 +207,11 @@ impl Conn {
                 terminal_id,
                 cols,
                 rows,
-            } => self.ctx.app.state::<PtyManager>().resize(&terminal_id, cols, rows),
+            } => self
+                .ctx
+                .app
+                .state::<PtyManager>()
+                .resize_remote(&terminal_id, cols, rows),
             ClientMsg::TermAttach { terminal_id } => self.attach(terminal_id).await,
             ClientMsg::TermDetach { terminal_id } => self.detach(&terminal_id),
             ClientMsg::TermCreate {
@@ -336,6 +340,11 @@ impl Conn {
     fn detach(&mut self, terminal_id: &str) {
         if let Some(att) = self.attachments.remove(terminal_id) {
             att.handle.abort();
+            // Snap the PTY back to the desktop pane's size (R3.14).
+            self.ctx
+                .app
+                .state::<PtyManager>()
+                .restore_local_size(terminal_id);
         }
     }
 }
@@ -392,8 +401,11 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         }
     }
 
-    for (_, att) in conn.attachments.drain() {
+    let pty = conn.ctx.app.state::<PtyManager>();
+    for (id, att) in conn.attachments.drain() {
         att.handle.abort();
+        // Snap each PTY back to its desktop size now the remote is gone (R3.14).
+        pty.restore_local_size(&id);
     }
     use tauri::Listener;
     for id in listener_ids {

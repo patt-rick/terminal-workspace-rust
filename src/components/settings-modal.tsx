@@ -443,7 +443,9 @@ function RemoteAccessSection() {
           </Row>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted">
-              {status?.connectedSince ? 'A device is connected.' : 'Waiting for a device to pair…'}
+              {status?.connectedSince
+                ? `Connected since ${new Date(status.connectedSince).toLocaleTimeString()}`
+                : 'Waiting for a device to pair…'}
             </span>
             <button
               type="button"

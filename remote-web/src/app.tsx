@@ -299,9 +299,31 @@ export function App() {
       const id = curIdRef.current
       if (id) clientRef.current?.resize(id, cols, rows)
     })
+    // OSC 52: a program in the remote terminal copied to the clipboard — route it
+    // to THIS device's clipboard (R3.16). Payload is "<selection>;<base64>".
+    term.parser.registerOscHandler(52, (payload) => {
+      const semi = payload.indexOf(';')
+      const b64 = semi >= 0 ? payload.slice(semi + 1) : ''
+      if (!b64 || b64 === '?') return true // clipboard query/clear — ignore
+      let text: string
+      try {
+        text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
+      } catch {
+        return true
+      }
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard
+          .writeText(text)
+          .catch(() => notify('Copy', text.length > 48 ? `${text.slice(0, 48)}…` : text))
+      } else {
+        // No async Clipboard API (e.g. non-secure http on Tailscale) — surface it.
+        notify('Copied to terminal', text.length > 48 ? `${text.slice(0, 48)}…` : text)
+      }
+      return true
+    })
     termRef.current = term
     fitRef.current = fit
-  }, [])
+  }, [notify])
 
   const doPair = async (code: string) => {
     setPairError(null)

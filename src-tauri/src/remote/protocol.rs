@@ -230,6 +230,149 @@ mod tests {
     }
 
     #[test]
+    fn server_msg_wire_tags_are_stable() {
+        // Drift guard: pins every OUTGOING wire `type` tag. The TS client is a
+        // hand-maintained mirror (remote-web/src/protocol.ts) — if a tag changes
+        // here, update that mirror to match.
+        use crate::git::GitInfo;
+        let ti = TermInfo {
+            id: "t".into(),
+            name: "n".into(),
+            project_id: "p".into(),
+            live: true,
+        };
+        let cases: Vec<(ServerMsg, &str)> = vec![
+            (
+                ServerMsg::HelloOk {
+                    state: StateSnapshot { projects: vec![] },
+                    app_version: "0".into(),
+                },
+                "hello.ok",
+            ),
+            (ServerMsg::HelloErr { message: "e".into() }, "hello.err"),
+            (
+                ServerMsg::TermAttached {
+                    terminal_id: "t".into(),
+                    tag: 1,
+                },
+                "term.attached",
+            ),
+            (
+                ServerMsg::TermSnapshot {
+                    terminal_id: "t".into(),
+                    tag: 1,
+                    data: String::new(),
+                },
+                "term.snapshot",
+            ),
+            (ServerMsg::TermCreated { terminal: ti }, "term.created"),
+            (
+                ServerMsg::TermClosed {
+                    terminal_id: "t".into(),
+                },
+                "term.closed",
+            ),
+            (
+                ServerMsg::StateWorking {
+                    terminal_id: "t".into(),
+                    working: true,
+                },
+                "state.working",
+            ),
+            (
+                ServerMsg::StateBell {
+                    terminal_id: "t".into(),
+                },
+                "state.bell",
+            ),
+            (
+                ServerMsg::StateExit {
+                    terminal_id: "t".into(),
+                },
+                "state.exit",
+            ),
+            (
+                ServerMsg::GitRepos {
+                    project_id: "p".into(),
+                    repos: vec![],
+                },
+                "git.repos",
+            ),
+            (
+                ServerMsg::GitStatus {
+                    repo_id: "r".into(),
+                    info: GitInfo::default(),
+                },
+                "git.status",
+            ),
+            (
+                ServerMsg::GitDiff {
+                    repo_id: "r".into(),
+                    files: vec![],
+                },
+                "git.diff",
+            ),
+            (
+                ServerMsg::GitPushProgress {
+                    repo_id: "r".into(),
+                    message: "m".into(),
+                },
+                "git.push.progress",
+            ),
+            (
+                ServerMsg::GitPushDone {
+                    repo_id: "r".into(),
+                    ok: true,
+                    output: String::new(),
+                },
+                "git.push.done",
+            ),
+            (
+                ServerMsg::ClaudeSessions {
+                    project_id: "p".into(),
+                    sessions: vec![],
+                },
+                "claude.sessions",
+            ),
+            (ServerMsg::SessionEvicted, "session.evicted"),
+            (ServerMsg::Error { message: "e".into() }, "error"),
+            (ServerMsg::Pong, "pong"),
+        ];
+        for (msg, tag) in cases {
+            let v: serde_json::Value =
+                serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+            assert_eq!(v["type"], tag, "unexpected wire tag for a ServerMsg variant");
+        }
+    }
+
+    #[test]
+    fn client_msg_wire_tags_all_deserialize() {
+        // Drift guard: pins every INCOMING wire `type` the TS client may send.
+        let cases = [
+            r#"{"type":"hello","token":"t"}"#,
+            r#"{"type":"term.attach","terminalId":"t"}"#,
+            r#"{"type":"term.detach","terminalId":"t"}"#,
+            r#"{"type":"term.input","terminalId":"t","data":"aGk="}"#,
+            r#"{"type":"term.resize","terminalId":"t","cols":80,"rows":24}"#,
+            r#"{"type":"term.create","projectId":"p","kind":"shell"}"#,
+            r#"{"type":"term.close","terminalId":"t"}"#,
+            r#"{"type":"git.repos","projectId":"p"}"#,
+            r#"{"type":"git.status","repoId":"r"}"#,
+            r#"{"type":"git.diff","repoId":"r"}"#,
+            r#"{"type":"git.push","repoId":"r"}"#,
+            r#"{"type":"claude.sessions","projectId":"p"}"#,
+            r#"{"type":"claude.resume","projectId":"p","sessionId":"s"}"#,
+            r#"{"type":"ping"}"#,
+        ];
+        for json in cases {
+            assert!(
+                serde_json::from_str::<ClientMsg>(json).is_ok(),
+                "client message must deserialize: {json}"
+            );
+        }
+    }
+
+    #[test]
     fn output_frame_prefixes_big_endian_tag() {
         let f = output_frame(0x01020304, b"hi");
         assert_eq!(&f[..4], &[1, 2, 3, 4]);

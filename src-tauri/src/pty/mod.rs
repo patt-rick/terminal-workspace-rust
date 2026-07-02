@@ -91,6 +91,20 @@ struct PtyHandle {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     out: Arc<Mutex<OutputState>>,
+    /// Last size the desktop pane requested. A remote attach resizes the shared
+    /// PTY to the phone's dimensions; on detach we snap back to this (R3.14).
+    #[cfg(feature = "remote-access")]
+    local_size: (u16, u16),
+}
+
+/// Resize a PTY master, clamping to a 1x1 floor.
+fn apply_size(master: &(dyn MasterPty + Send), cols: u16, rows: u16) {
+    let _ = master.resize(PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    });
 }
 
 pub struct CreateOpts {
@@ -168,6 +182,8 @@ impl PtyManager {
                 writer: writer.clone(),
                 child: child.clone(),
                 out: out.clone(),
+                #[cfg(feature = "remote-access")]
+                local_size: (opts.cols, opts.rows),
             },
         );
 
@@ -237,14 +253,35 @@ impl PtyManager {
         Some((snapshot, rx))
     }
 
+    /// Resize from the desktop pane. Records the size as the "local" size so a
+    /// later remote detach can snap the PTY back to it (R3.14).
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
+        let mut entries = self.entries.lock();
+        if let Some(handle) = entries.get_mut(id) {
+            #[cfg(feature = "remote-access")]
+            {
+                handle.local_size = (cols, rows);
+            }
+            apply_size(handle.master.as_ref(), cols, rows);
+        }
+    }
+
+    /// Resize from a remote client. Deliberately does NOT update `local_size`, so
+    /// the desktop dimensions are preserved for snap-back on detach (R3.14).
+    #[cfg(feature = "remote-access")]
+    pub fn resize_remote(&self, id: &str, cols: u16, rows: u16) {
         if let Some(handle) = self.entries.lock().get(id) {
-            let _ = handle.master.resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            apply_size(handle.master.as_ref(), cols, rows);
+        }
+    }
+
+    /// Snap the PTY back to the last desktop-pane size (called when a remote
+    /// client detaches or disconnects, R3.14).
+    #[cfg(feature = "remote-access")]
+    pub fn restore_local_size(&self, id: &str) {
+        if let Some(handle) = self.entries.lock().get(id) {
+            let (cols, rows) = handle.local_size;
+            apply_size(handle.master.as_ref(), cols, rows);
         }
     }
 

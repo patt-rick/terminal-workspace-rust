@@ -1,5 +1,8 @@
-// Web-client half of the remote protocol (mirrors src-tauri/src/remote/protocol.rs).
-// A round-trip drift test lives on the Rust side; keep the shapes in sync.
+// Web-client half of the remote protocol — a hand-maintained mirror of
+// src-tauri/src/remote/protocol.rs. The Rust side pins every wire `type` tag in
+// contract tests (`server_msg_wire_tags_are_stable` /
+// `client_msg_wire_tags_all_deserialize` in protocol.rs); when those tags or
+// fields change, update this mirror to match.
 
 export interface TermInfo {
   id: string

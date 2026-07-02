@@ -74,6 +74,31 @@ pnpm tauri build    # package a desktop installer
 > includes `src-tauri/build-msvc.cmd` (gitignored) which sets the MSVC + Windows SDK env
 > explicitly. Run `& "src-tauri/build-msvc.cmd" build` from PowerShell.
 
+## Multi-repo workspaces
+
+A project folder doesn't have to be a single git repo. When you add a folder that
+contains several repositories (e.g. `~/work/` holding `amc-back/`, `amc-front/`,
+`arij/`), the app discovers them all and presents them in a **repo picker** at the
+top of the Git tab — the same model VS Code uses for Source Control.
+
+- **Discovery** runs off the main thread on project open (and on demand via the
+  empty-state *Rescan*). It finds every `.git` at any depth but does **not**
+  descend *into* a discovered repo except to resolve its registered submodules;
+  submodules appear as their own badged entries nested under the parent. Stray
+  `.git` dirs inside `node_modules`/`target`/etc. are ignored, symlink loops are
+  skipped, and a 10,000-directory cap guards pathological trees. The discovered
+  list is cached per project in `state.json` and revalidated on project switch.
+- **The whole Git tab operates on the selected repo** — branch, ahead/behind,
+  the working-tree diff viewer, and push/publish. The Git tab icon shows an
+  aggregate dot if *any* discovered repo is dirty, so changes in a non-selected
+  repo aren't invisible. With a single repo the picker collapses to a label.
+- **Identity is per-repo.** Account mappings key on the repo path, so each
+  sub-repo can push as a different GitHub account; on project switch the app
+  applies the right identity to every repo and batches any "which account?"
+  prompts into one dialog.
+- **GitHub** PRs and Actions target the picker-selected repo (owner/repo parsed
+  from that repo's origin).
+
 ## Remote access
 
 Control your terminals from another device through a small web client served by an embedded
