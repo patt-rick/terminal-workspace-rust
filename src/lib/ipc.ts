@@ -193,7 +193,7 @@ export interface WorkflowRunDetail extends WorkflowRunSummary {
 }
 
 export interface CreatePullRequestInput {
-  projectId: string
+  repoId: string
   title: string
   body: string
   head: string
@@ -379,34 +379,34 @@ export const ipc = {
     signOut: () => invoke<GithubSettings>('github_sign_out'),
     deviceStart: () => invoke<DeviceFlowStart>('github_device_start'),
     devicePoll: (deviceCode: string) => invoke<DevicePoll>('github_device_poll', { deviceCode }),
-    listPullRequests: (projectId: string, state: 'open' | 'closed' | 'all' = 'open') =>
-      invoke<PullRequestSummary[]>('github_list_prs', { projectId, state }),
-    getPullRequest: (projectId: string, number: number) =>
-      invoke<PullRequestDetail>('github_get_pr', { projectId, number }),
+    listPullRequests: (repoId: string, state: 'open' | 'closed' | 'all' = 'open') =>
+      invoke<PullRequestSummary[]>('github_list_prs', { repoId, state }),
+    getPullRequest: (repoId: string, number: number) =>
+      invoke<PullRequestDetail>('github_get_pr', { repoId, number }),
     createPullRequest: (input: CreatePullRequestInput) =>
       invoke<PullRequestSummary>('github_create_pr', { input }),
-    mergePullRequest: (projectId: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
-      invoke<void>('github_merge_pr', { projectId, number, method }),
-    commentPullRequest: (projectId: string, number: number, body: string) =>
-      invoke<void>('github_comment_pr', { projectId, number, body }),
-    listWorkflows: (projectId: string) =>
-      invoke<WorkflowSummary[]>('github_list_workflows', { projectId }),
-    listRuns: (projectId: string, branch?: string) =>
-      invoke<WorkflowRunSummary[]>('github_list_runs', { projectId, branch }),
-    getRun: (projectId: string, runId: number) =>
-      invoke<WorkflowRunDetail>('github_get_run', { projectId, runId }),
-    rerunRun: (projectId: string, runId: number) =>
-      invoke<void>('github_rerun_run', { projectId, runId }),
-    rerunFailed: (projectId: string, runId: number) =>
-      invoke<void>('github_rerun_failed', { projectId, runId }),
-    cancelRun: (projectId: string, runId: number) =>
-      invoke<void>('github_cancel_run', { projectId, runId }),
+    mergePullRequest: (repoId: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
+      invoke<void>('github_merge_pr', { repoId, number, method }),
+    commentPullRequest: (repoId: string, number: number, body: string) =>
+      invoke<void>('github_comment_pr', { repoId, number, body }),
+    listWorkflows: (repoId: string) =>
+      invoke<WorkflowSummary[]>('github_list_workflows', { repoId }),
+    listRuns: (repoId: string, branch?: string) =>
+      invoke<WorkflowRunSummary[]>('github_list_runs', { repoId, branch }),
+    getRun: (repoId: string, runId: number) =>
+      invoke<WorkflowRunDetail>('github_get_run', { repoId, runId }),
+    rerunRun: (repoId: string, runId: number) =>
+      invoke<void>('github_rerun_run', { repoId, runId }),
+    rerunFailed: (repoId: string, runId: number) =>
+      invoke<void>('github_rerun_failed', { repoId, runId }),
+    cancelRun: (repoId: string, runId: number) =>
+      invoke<void>('github_cancel_run', { repoId, runId }),
     dispatchWorkflow: (
-      projectId: string,
+      repoId: string,
       workflowId: number,
       gitRef: string,
       inputs?: Record<string, string>
-    ) => invoke<void>('github_dispatch_workflow', { projectId, workflowId, gitRef, inputs }),
+    ) => invoke<void>('github_dispatch_workflow', { repoId, workflowId, gitRef, inputs }),
   },
 
   claude: {
