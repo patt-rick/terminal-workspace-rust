@@ -63,6 +63,15 @@ pub enum ServerMsg {
     TermCreated { terminal: TermInfo },
     #[serde(rename = "term.closed")]
     TermClosed { terminal_id: String },
+    /// A terminal became busy/idle (from Rust-side title/OSC detection).
+    #[serde(rename = "state.working")]
+    StateWorking { terminal_id: String, working: bool },
+    /// A terminal rang the bell.
+    #[serde(rename = "state.bell")]
+    StateBell { terminal_id: String },
+    /// A terminal's PTY exited.
+    #[serde(rename = "state.exit")]
+    StateExit { terminal_id: String },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
     SessionEvicted,

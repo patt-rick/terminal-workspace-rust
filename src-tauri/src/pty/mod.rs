@@ -1,3 +1,5 @@
+#[cfg(feature = "remote-access")]
+pub mod detect;
 pub mod shell;
 
 use crate::error::{AppError, AppResult};
@@ -36,6 +38,11 @@ struct OutputState {
     // attach. Independent of `channel`, so the desktop stream is never disturbed.
     #[cfg(feature = "remote-access")]
     remote_tx: Option<tokio::sync::broadcast::Sender<Vec<u8>>>,
+    // Working/idle + bell detection, drained by the reader loop into Tauri events.
+    #[cfg(feature = "remote-access")]
+    detector: detect::ShellDetector,
+    #[cfg(feature = "remote-access")]
+    pending: Vec<detect::DetectEvent>,
 }
 
 impl OutputState {
@@ -50,6 +57,11 @@ impl OutputState {
         #[cfg(feature = "remote-access")]
         if let Some(tx) = &self.remote_tx {
             let _ = tx.send(bytes.to_vec());
+        }
+        #[cfg(feature = "remote-access")]
+        {
+            let events = self.detector.feed(bytes);
+            self.pending.extend(events);
         }
         if self.channel.is_none() {
             return;
@@ -66,6 +78,11 @@ impl OutputState {
             }
             self.carry.drain(..valid);
         }
+    }
+
+    #[cfg(feature = "remote-access")]
+    fn drain_events(&mut self) -> Vec<detect::DetectEvent> {
+        std::mem::take(&mut self.pending)
     }
 }
 
@@ -258,6 +275,40 @@ fn normalize_startup(cmd: &str) -> String {
     s
 }
 
+#[cfg(feature = "remote-access")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkingPayload {
+    id: String,
+    working: bool,
+}
+
+#[cfg(feature = "remote-access")]
+#[derive(Clone, Serialize)]
+struct IdPayload {
+    id: String,
+}
+
+/// Emit a detected working/bell transition as a Tauri event. Consumed by the
+/// remote server (forwarded to web clients) and available to the desktop.
+#[cfg(feature = "remote-access")]
+fn emit_detect_event(app: &AppHandle, id: &str, ev: detect::DetectEvent) {
+    match ev {
+        detect::DetectEvent::Working(working) => {
+            let _ = app.emit(
+                "terminals:working",
+                WorkingPayload {
+                    id: id.to_string(),
+                    working,
+                },
+            );
+        }
+        detect::DetectEvent::Bell => {
+            let _ = app.emit("terminals:bell", IdPayload { id: id.to_string() });
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reader_loop(
     mut reader: Box<dyn Read + Send>,
@@ -276,7 +327,18 @@ fn reader_loop(
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                out.lock().on_data(&buf[..n]);
+                {
+                    let mut guard = out.lock();
+                    guard.on_data(&buf[..n]);
+                    #[cfg(feature = "remote-access")]
+                    {
+                        let events = guard.drain_events();
+                        drop(guard);
+                        for ev in events {
+                            emit_detect_event(&app, &id, ev);
+                        }
+                    }
+                }
                 // Inject the startup command once the shell is alive (its first
                 // output means the prompt/rc loaded). A short delay lets the
                 // prompt finish rendering so the command lands cleanly after it.

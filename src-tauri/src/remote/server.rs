@@ -74,6 +74,49 @@ fn text(msg: &ServerMsg) -> Message {
     Message::Text(serde_json::to_string(msg).unwrap_or_default())
 }
 
+#[derive(Deserialize)]
+struct WorkingEvt {
+    id: String,
+    working: bool,
+}
+
+#[derive(Deserialize)]
+struct IdEvt {
+    id: String,
+}
+
+/// Forward Rust-side terminal state (working/bell/exit) Tauri events to this
+/// client as `state.*` messages. Returns the listener ids to unlisten on close.
+fn spawn_state_forwarders(app: &AppHandle, out_tx: mpsc::Sender<Message>) -> Vec<tauri::EventId> {
+    use tauri::Listener;
+    let mut ids = Vec::new();
+
+    let tx = out_tx.clone();
+    ids.push(app.listen("terminals:working", move |ev| {
+        if let Ok(p) = serde_json::from_str::<WorkingEvt>(ev.payload()) {
+            let _ = tx.try_send(text(&ServerMsg::StateWorking {
+                terminal_id: p.id,
+                working: p.working,
+            }));
+        }
+    }));
+
+    let tx = out_tx.clone();
+    ids.push(app.listen("terminals:bell", move |ev| {
+        if let Ok(p) = serde_json::from_str::<IdEvt>(ev.payload()) {
+            let _ = tx.try_send(text(&ServerMsg::StateBell { terminal_id: p.id }));
+        }
+    }));
+
+    ids.push(app.listen("terminals:exit", move |ev| {
+        if let Ok(p) = serde_json::from_str::<IdEvt>(ev.payload()) {
+            let _ = out_tx.try_send(text(&ServerMsg::StateExit { terminal_id: p.id }));
+        }
+    }));
+
+    ids
+}
+
 /// Wait (with a timeout) for a valid `hello`. Returns the session generation the
 /// connection is bound to, or None if authentication failed / the socket closed.
 async fn wait_for_hello(socket: &mut WebSocket, ctx: &ServerCtx) -> Option<u64> {
@@ -234,6 +277,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
     }
 
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(256);
+    let listener_ids = spawn_state_forwarders(&ctx.app, out_tx.clone());
     let mut generation_rx = ctx.sessions.subscribe_generation();
     let mut conn = Conn {
         ctx,
@@ -271,5 +315,9 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
 
     for (_, att) in conn.attachments.drain() {
         att.handle.abort();
+    }
+    use tauri::Listener;
+    for id in listener_ids {
+        conn.ctx.app.unlisten(id);
     }
 }

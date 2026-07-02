@@ -40,6 +40,13 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [status, setStatus] = useState('')
   const [pairError, setPairError] = useState<string | null>(null)
+  const [working, setWorking] = useState<Set<string>>(new Set())
+  const [toast, setToast] = useState<string | null>(null)
+
+  const projectsRef = useRef<ProjectInfo[]>([])
+  projectsRef.current = projects
+  const workingRef = useRef<Set<string>>(working)
+  workingRef.current = working
 
   const clientRef = useRef<RemoteClient | null>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -48,6 +55,27 @@ export function App() {
   const curTagRef = useRef<number | null>(null)
   const phaseRef = useRef<Phase>(phase)
   phaseRef.current = phase
+
+  const termName = (id: string): string =>
+    projectsRef.current.flatMap((p) => p.terminals).find((t) => t.id === id)?.name ?? 'Terminal'
+
+  const notify = useCallback((title: string, body: string) => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(title, { body })
+        return
+      } catch {
+        // fall through to toast
+      }
+    }
+    setToast(`${title} — ${body}`)
+  }, [])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(t)
+  }, [toast])
 
   const attachTo = useCallback((id: string) => {
     const client = clientRef.current
@@ -99,6 +127,33 @@ export function App() {
           setCurrentId(null)
           termRef.current?.reset()
         }
+      },
+      onWorking: (tid, isWorking) => {
+        const wasWorking = workingRef.current.has(tid)
+        setWorking((s) => {
+          const n = new Set(s)
+          if (isWorking) n.add(tid)
+          else n.delete(tid)
+          return n
+        })
+        // Notify when a background terminal finishes a task.
+        if (wasWorking && !isWorking && tid !== curIdRef.current) {
+          notify(termName(tid), 'Finished')
+        }
+      },
+      onBell: (tid) => notify(termName(tid), 'Bell'),
+      onExit: (tid) => {
+        setWorking((s) => {
+          const n = new Set(s)
+          n.delete(tid)
+          return n
+        })
+        setProjects((ps) =>
+          ps.map((p) => ({
+            ...p,
+            terminals: p.terminals.map((t) => (t.id === tid ? { ...t, live: false } : t)),
+          }))
+        )
       },
       onEvicted: () => {
         sessionStorage.removeItem(TOKEN_KEY)
@@ -157,6 +212,10 @@ export function App() {
 
   const doPair = async (code: string) => {
     setPairError(null)
+    // Ask for notification permission once, from within this user gesture.
+    if ('Notification' in window && Notification.permission === 'default') {
+      void Notification.requestPermission()
+    }
     try {
       const token = await pair(code)
       sessionStorage.setItem(TOKEN_KEY, token)
@@ -202,7 +261,10 @@ export function App() {
         <button className="iconbtn" onClick={() => setDrawerOpen(true)} aria-label="Menu">
           ☰
         </button>
-        <span className="title">{current ? current.name : 'No terminal'}</span>
+        <span className="title">
+          {current && working.has(current.id) && <span className="spin">◐</span>}
+          {current ? current.name : 'No terminal'}
+        </span>
         <span className="status">{status}</span>
       </div>
 
@@ -255,6 +317,7 @@ export function App() {
                     className={`term-row ${t.id === currentId ? 'active' : ''}`}
                     onClick={() => attachTo(t.id)}
                   >
+                    {working.has(t.id) && <span className="spin">◐</span>}
                     <span className={`name ${t.live ? '' : 'dead'}`}>{t.name}</span>
                     <button
                       className="x"
@@ -277,6 +340,8 @@ export function App() {
           </div>
         </>
       )}
+
+      {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }

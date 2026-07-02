@@ -24,6 +24,9 @@ export interface Handlers {
   onOutput?: (tag: number, bytes: Uint8Array) => void
   onCreated?: (terminal: TermInfo) => void
   onClosed?: (terminalId: string) => void
+  onWorking?: (terminalId: string, working: boolean) => void
+  onBell?: (terminalId: string) => void
+  onExit?: (terminalId: string) => void
   onEvicted?: () => void
   onError?: (message: string) => void
   onClose?: () => void
@@ -80,6 +83,15 @@ export class RemoteClient {
           break
         case 'term.closed':
           this.h.onClosed?.(m.terminalId)
+          break
+        case 'state.working':
+          this.h.onWorking?.(m.terminalId, m.working)
+          break
+        case 'state.bell':
+          this.h.onBell?.(m.terminalId)
+          break
+        case 'state.exit':
+          this.h.onExit?.(m.terminalId)
           break
         case 'session.evicted':
           this.h.onEvicted?.()
