@@ -23,6 +23,11 @@ pub struct ApiKey {
     /// non-secret env injected alongside the key (base URLs etc.)
     #[serde(default)]
     pub extra_env: BTreeMap<String, String>,
+    /// Optional command auto-run in a terminal launched for this entry
+    /// (e.g. `aider --model deepseek/deepseek-chat`). Serialized as null when
+    /// absent so the frontend type is always `string | null`, never undefined.
+    #[serde(default)]
+    pub launch_command: Option<String>,
     pub enabled: bool,
 }
 
@@ -306,6 +311,7 @@ mod tests {
             label: id.to_string(),
             key_env_var: var.to_string(),
             extra_env: BTreeMap::new(),
+            launch_command: None,
             enabled,
         }
     }
@@ -451,5 +457,31 @@ mod tests {
     fn mask_tail_handles_short_values() {
         assert_eq!(mask_tail("ab"), "…ab");
         assert_eq!(mask_tail("sk-abcdef"), "…cdef");
+    }
+
+    #[test]
+    fn launch_command_roundtrips_and_defaults_to_none() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        {
+            let store = ApiKeyStore::new(path.clone());
+            let mut k = key("a", "OPENAI_API_KEY", true);
+            k.launch_command = Some("codex".to_string());
+            store.save(k, None).unwrap();
+        }
+        let store = ApiKeyStore::new(path.clone());
+        assert_eq!(
+            store.keys_snapshot()[0].launch_command.as_deref(),
+            Some("codex")
+        );
+
+        // Entries persisted before the field existed load as None.
+        fs::write(
+            &path,
+            r#"{"keys":[{"id":"b","provider":"openai","label":"b","keyEnvVar":"OPENAI_API_KEY","extraEnv":{},"enabled":true}]}"#,
+        )
+        .unwrap();
+        let store = ApiKeyStore::new(path);
+        assert_eq!(store.keys_snapshot()[0].launch_command, None);
     }
 }

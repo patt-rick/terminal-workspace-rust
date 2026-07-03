@@ -883,6 +883,7 @@ pub fn apikeys_import_env(
     env_var: String,
     provider: String,
     label: String,
+    launch_command: Option<String>,
 ) -> AppResult<Vec<ApiKeyMeta>> {
     let secret = std::env::var(&env_var)
         .map_err(|_| AppError::Msg(format!("{env_var} is not set in the app's environment")))?;
@@ -892,6 +893,7 @@ pub fn apikeys_import_env(
         label,
         key_env_var: env_var,
         extra_env: Default::default(),
+        launch_command,
         enabled: true,
     };
     store.save(entry, Some(secret.trim().to_string()))?;
