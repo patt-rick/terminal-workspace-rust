@@ -9,6 +9,17 @@ import { QRCodeSVG } from 'qrcode.react'
 import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
+import { useUi } from '../state/ui'
+
+type SettingsTabId = 'general' | 'ai' | 'github' | 'remote' | 'updates'
+
+const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
+  { id: 'general', label: 'General' },
+  { id: 'ai', label: 'AI' },
+  { id: 'github', label: 'GitHub' },
+  { id: 'remote', label: 'Remote access' },
+  { id: 'updates', label: 'Updates' },
+]
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const themes = useThemeList()
@@ -24,6 +35,29 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [themeError, setThemeError] = useState<string | null>(null)
+
+  const settingsTab = useUi((s) => s.settingsTab)
+  const clearSettingsTab = useUi((s) => s.clearSettingsTab)
+  const [tab, setTab] = useState<SettingsTabId>('general')
+
+  useEffect(() => {
+    if (open && settingsTab) {
+      if (SETTINGS_TABS.some((t) => t.id === settingsTab)) setTab(settingsTab as SettingsTabId)
+      clearSettingsTab()
+    }
+  }, [open, settingsTab, clearSettingsTab])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
 
   const activeIsCustom = themes.custom.some((t) => t.id === themeId)
 
@@ -81,30 +115,42 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'var(--backdrop)' }}
-      onClick={onClose}
-    >
-      <div
-        className="max-h-[80vh] w-[480px] overflow-auto rounded-xl border border-border bg-overlay p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <div className="text-sm font-semibold text-foreground">Settings</div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-6 w-6 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+    <div className="fixed inset-0 z-50 flex bg-background">
+      <nav className="flex w-48 flex-shrink-0 flex-col gap-0.5 border-r border-border bg-surface p-3">
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close settings (Esc)"
+          className="mb-4 flex h-8 w-8 items-center justify-center rounded-full border border-border text-foreground/60 hover:bg-foreground/10 hover:text-foreground"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+        <div className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          Settings
         </div>
-
-        <Section title="Appearance">
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`rounded-md px-3 py-1.5 text-left text-sm ${
+              tab === t.id
+                ? 'bg-foreground/10 font-medium text-foreground'
+                : 'text-foreground/70 hover:bg-foreground/5 hover:text-foreground'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+      <div className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-2xl px-6 py-6">
+          {tab === 'general' && (
+            <>
+              <Section title="Appearance">
           <Row label="Theme">
             <select
               value={themeId}
@@ -195,18 +241,22 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </Row>
         </Section>
 
-        <Section title="Terminal">
-          <div className="text-xs text-muted">Startup command — run in every new terminal tab.</div>
-          <textarea
-            value={terminal.startupCommand}
-            onChange={(e) => updateTerminal({ startupCommand: e.target.value })}
-            rows={2}
-            placeholder="e.g. source .venv/bin/activate"
-            className="mt-1 w-full resize-none rounded-md border border-border bg-field-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent"
-          />
-        </Section>
+              <Section title="Terminal">
+                <div className="text-xs text-muted">Startup command — run in every new terminal tab.</div>
+                <textarea
+                  value={terminal.startupCommand}
+                  onChange={(e) => updateTerminal({ startupCommand: e.target.value })}
+                  rows={2}
+                  placeholder="e.g. source .venv/bin/activate"
+                  className="mt-1 w-full resize-none rounded-md border border-border bg-field-background px-2 py-1.5 font-mono text-xs text-foreground outline-none focus:border-accent"
+                />
+              </Section>
+            </>
+          )}
 
-        <Section title="Claude Code">
+          {tab === 'ai' && (
+            <>
+              <Section title="Claude Code">
           <Row label="Always skip permissions">
             <Toggle
               checked={terminal.claudeSkipPermissions}
@@ -218,16 +268,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <code className="font-mono">--dangerously-skip-permissions</code>. Claude will not ask
             for permission before running tools. Only enable this if you understand the risk.
           </div>
-          <ClaudeHooksToggle />
-        </Section>
+                <ClaudeHooksToggle />
+              </Section>
 
-        <AccountsSection />
+              <ProvidersSection />
+            </>
+          )}
 
-        <ProvidersSection />
+          {tab === 'github' && <AccountsSection />}
 
-        <RemoteAccessSection />
+          {tab === 'remote' && <RemoteAccessSection />}
 
-        <UpdatesSection />
+          {tab === 'updates' && <UpdatesSection />}
+        </div>
       </div>
     </div>
   )

@@ -233,7 +233,7 @@ export default function App() {
           <div className="flex-1" />
           <button
             type="button"
-            onClick={openSettings}
+            onClick={() => openSettings()}
             title={`Settings (${kbd(',')})`}
             className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
           >

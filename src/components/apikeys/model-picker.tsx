@@ -37,7 +37,7 @@ export function ModelPicker() {
 
   const toSettings = (): void => {
     close()
-    openSettings()
+    openSettings('ai')
   }
 
   return (

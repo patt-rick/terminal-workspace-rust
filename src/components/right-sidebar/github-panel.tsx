@@ -170,7 +170,7 @@ function PushAccountSection({ projectId }: { projectId: string }) {
       </div>
       <button
         type="button"
-        onClick={openSettings}
+        onClick={() => openSettings('github')}
         className="mt-1 text-xs text-link hover:underline"
       >
         Manage accounts…
