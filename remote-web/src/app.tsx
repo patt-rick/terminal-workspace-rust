@@ -459,6 +459,43 @@ export function App() {
       }
       return true
     })
+    // xterm has no touch handling of its own, so translate vertical swipes:
+    // normal buffer → scroll the local scrollback; alternate buffer (full-screen
+    // TUIs — no scrollback) → arrow keys, mirroring xterm's alternateScroll
+    // wheel behavior. preventDefault keeps the browser from treating the swipe
+    // as a scroll/pull-to-refresh gesture.
+    let touchY: number | null = null
+    let touchAcc = 0
+    node.addEventListener('touchstart', (e) => {
+      touchY = e.touches.length === 1 ? e.touches[0].clientY : null
+      touchAcc = 0
+    })
+    node.addEventListener(
+      'touchmove',
+      (e) => {
+        if (touchY === null || e.touches.length !== 1) return
+        e.preventDefault()
+        touchAcc += e.touches[0].clientY - touchY
+        touchY = e.touches[0].clientY
+        const lineHeight = node.clientHeight / Math.max(1, term.rows)
+        if (lineHeight <= 0) return
+        const lines = Math.trunc(touchAcc / lineHeight)
+        if (!lines) return
+        touchAcc -= lines * lineHeight
+        if (term.buffer.active.type === 'alternate') {
+          const up = term.modes.applicationCursorKeysMode ? '\x1bOA' : '\x1b[A'
+          const down = term.modes.applicationCursorKeysMode ? '\x1bOB' : '\x1b[B'
+          const id = curIdRef.current
+          if (id) clientRef.current?.input(id, (lines > 0 ? up : down).repeat(Math.abs(lines)))
+        } else {
+          term.scrollLines(-lines)
+        }
+      },
+      { passive: false }
+    )
+    node.addEventListener('touchend', () => {
+      touchY = null
+    })
     termRef.current = term
     fitRef.current = fit
   }, [notify])
