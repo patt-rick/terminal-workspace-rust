@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import { useWorkspace } from '../../state/store'
 import { useActiveTheme } from '../../themes/theme-provider'
 import type { Theme } from '../../themes'
@@ -107,19 +108,37 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       })
     )
 
-    // Wire copy/paste explicitly. macOS uses ⌘C/⌘V; elsewhere Ctrl+Shift+C/V.
+    // Wire copy/paste explicitly through the Tauri clipboard plugin —
+    // navigator.clipboard.readText() is denied inside the webview, so paste
+    // would silently fail. macOS: ⌘C/⌘V. Elsewhere: Ctrl(+Shift)+C to copy,
+    // Ctrl+V / Ctrl+Shift+V / Shift+Insert to paste. A plain Ctrl+V with no
+    // clipboard text falls through as ^V (\x16) so TUIs that read the
+    // clipboard themselves (Claude Code image paste) keep working.
+    const pasteFromClipboard = (fallbackByte?: string): void => {
+      void readText()
+        .catch(() => '')
+        .then((text) => {
+          if (text) term.paste(text)
+          else if (fallbackByte) term.input(fallbackByte)
+        })
+    }
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
       const key = e.key.toLowerCase()
       const copyCombo = isMac ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey
       if (key === 'c' && copyCombo && term.hasSelection()) {
-        void navigator.clipboard.writeText(term.getSelection())
+        void writeText(term.getSelection())
         return false
       }
-      if (key === 'v' && !isMac && e.ctrlKey && e.shiftKey) {
-        void navigator.clipboard.readText().then((text) => {
-          if (text) term.paste(text)
-        })
+      const pasteCombo = isMac
+        ? key === 'v' && e.metaKey
+        : (key === 'v' && e.ctrlKey && e.shiftKey) || (key === 'insert' && e.shiftKey)
+      if (pasteCombo) {
+        pasteFromClipboard()
+        return false
+      }
+      if (key === 'v' && !isMac && e.ctrlKey && !e.shiftKey && !e.altKey) {
+        pasteFromClipboard('\x16')
         return false
       }
       return true
@@ -213,7 +232,7 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       if (payload === '?') return false
       try {
         const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
-        void navigator.clipboard.writeText(new TextDecoder().decode(bytes))
+        void writeText(new TextDecoder().decode(bytes))
       } catch {
         // malformed base64
       }
