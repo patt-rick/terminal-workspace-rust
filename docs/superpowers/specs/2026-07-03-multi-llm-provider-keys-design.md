@@ -175,6 +175,26 @@ Mirrors the identity feature end to end:
 - Existing integration flow: manual smoke — save a key, open a new terminal, `echo $VAR`
   (or `$env:VAR` on Windows) shows it; terminals opened before saving do not.
 
+## Addendum (approved 2026-07-03): per-provider Launch button
+
+Removes the "now type the CLI command yourself" step. Each entry gains an optional
+`launchCommand` (serde `Option<String>`, default absent — existing `keys.json` files load
+unchanged). Presets prefill it: anthropic → `claude`, openai → `codex`, deepseek →
+`aider --model deepseek/deepseek-chat`, qwen → `aider --model openai/qwen-plus`, custom → empty.
+The field is editable in the add/edit form.
+
+A ▶ Launch button on each saved entry creates a terminal in the **selected project** via the
+existing `createProjectTerminal` helper (`src/state/store.ts`) with `startupCommand` = the
+entry's launch command and `name` = the entry's label, then closes the settings modal. Env
+injection needs no new work — it already happens at spawn. `createProjectTerminal` also applies
+the global Claude skip-permissions setting and session linking, so `claude` launch commands get
+Sessions-panel tracking for free. Button disabled (tooltip) when the entry is disabled, has no
+stored key, has no launch command, or no project is selected. `apikeys_import_env` gains an
+optional `launch_command` parameter so imported keys are launchable immediately.
+
+If the CLI isn't installed, the terminal shows the shell's command-not-found error — visible,
+honest feedback; no availability probing in v1.
+
 ## Non-goals (unchanged from the proposal)
 
 No in-app inference or chat panel; no proxy/protocol translation (Claude Code still speaks
