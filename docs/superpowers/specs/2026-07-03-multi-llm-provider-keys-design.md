@@ -111,8 +111,9 @@ Modeled on `IdentityStore` (`parking_lot::Mutex` + atomic persist):
 Uses the existing `reqwest` (rustls). Anthropic-format entries: `GET
 https://api.anthropic.com/v1/models` with `x-api-key: <key>` (+ `anthropic-version` header).
 OpenAI-format entries: `GET <base>/models` where `<base>` is the entry's base-URL override
-(`OPENAI_BASE_URL`-style extra env, normalized to include `/v1` when absent) or
-`https://api.openai.com/v1`, with `Authorization: Bearer <key>`. Result is one of
+(`OPENAI_BASE_URL`-style extra env, used exactly as the CLI would consume it — DeepSeek's base
+has no `/v1`, OpenRouter's does; only `/models` is appended) or `https://api.openai.com/v1`,
+with `Authorization: Bearer <key>`. Result is one of
 `ok | authFailed (401/403) | unreachable(message)`. 5s timeout. Exact endpoint URLs verified
 against provider docs at implementation time.
 
