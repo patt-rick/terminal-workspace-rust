@@ -4,6 +4,7 @@
 //! GitHub, and filesystem access. `run()` wires plugins, managed state, and the
 //! command handlers the webview invokes.
 
+mod apikeys;
 mod claude;
 mod commands;
 mod error;
