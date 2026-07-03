@@ -179,6 +179,9 @@ pub struct CreateOpts {
     pub cols: u16,
     pub rows: u16,
     pub startup_command: Option<String>,
+    /// Extra env pairs applied after TERM* and before shell-integration env.
+    /// Later pairs override earlier ones (provider-key collision rule).
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Default)]
@@ -216,6 +219,9 @@ impl PtyManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "ghostty");
         cmd.env("TERM_PROGRAM_VERSION", "1.1.0");
+        for (k, v) in &opts.env {
+            cmd.env(k, v);
+        }
         for (k, v) in &prepared.env {
             cmd.env(k, v);
         }

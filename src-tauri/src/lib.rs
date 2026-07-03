@@ -18,6 +18,7 @@ mod remote;
 mod settings;
 mod state;
 
+use apikeys::ApiKeyStore;
 use github::GithubStore;
 use identity::IdentityStore;
 use pty::PtyManager;
@@ -61,6 +62,7 @@ pub fn run() {
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
+            app.manage(ApiKeyStore::new(data_dir.join("keys.json")));
             app.manage(PtyManager::new());
             // Claude hook events (Notification/Stop) land in the spool dir; the
             // watcher routes them to terminals as attention events. Cheap no-op

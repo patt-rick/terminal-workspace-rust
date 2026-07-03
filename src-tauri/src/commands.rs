@@ -146,6 +146,7 @@ pub fn terminal_create(
             cols: args.cols.unwrap_or(80),
             rows: args.rows.unwrap_or(24),
             startup_command: args.startup_command.clone(),
+            env: app.state::<crate::apikeys::ApiKeyStore>().resolved_env(),
         },
     )?;
 
