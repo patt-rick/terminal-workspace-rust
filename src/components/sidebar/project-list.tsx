@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useProjects } from '../../hooks/use-projects'
 import { useWorkspace, createProjectTerminal } from '../../state/store'
+import { useApiKeys } from '../../state/apikeys'
 import { ipc, type Project } from '../../lib/ipc'
 import { ContextMenu, type MenuItem } from '../context-menu'
 import { ConfirmDialog } from '../confirm-dialog'
@@ -113,6 +114,10 @@ function ProjectRow({ project }: { project: Project }) {
         </span>
       ),
       onClick: () => newClaude(true),
+    },
+    {
+      label: 'Use other models…',
+      onClick: () => expandAnd(() => useApiKeys.getState().openLauncher(project.id)),
     },
     { label: 'Rename', separatorBefore: true, onClick: () => setEditing(true) },
     {

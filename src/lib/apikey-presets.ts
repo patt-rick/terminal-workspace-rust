@@ -87,3 +87,18 @@ export function envConflicts(
   }
   return byVar
 }
+
+/**
+ * Why an entry can't be launched right now, or null when it can. Order matters:
+ * the most actionable problem is reported first.
+ */
+export function launchBlocker(k: {
+  enabled: boolean
+  hasValue: boolean
+  launchCommand: string | null
+}): string | null {
+  if (!k.enabled) return 'Disabled'
+  if (!k.hasValue) return 'No API key stored'
+  if (!k.launchCommand) return 'No launch command'
+  return null
+}

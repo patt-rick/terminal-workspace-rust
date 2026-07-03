@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { envConflicts, PROVIDER_PRESETS, presetById } from './apikey-presets'
+import { envConflicts, launchBlocker, PROVIDER_PRESETS, presetById } from './apikey-presets'
 
 const entry = (
   id: string,
@@ -43,5 +43,16 @@ describe('presets', () => {
       else expect(p.launchCommand.length).toBeGreaterThan(0)
     }
     expect(presetById('deepseek')?.launchCommand).toBe('aider --model deepseek/deepseek-chat')
+  })
+})
+
+describe('launchBlocker', () => {
+  it('returns null only when launchable', () => {
+    const base = { enabled: true, hasValue: true, launchCommand: 'aider' }
+    expect(launchBlocker(base)).toBeNull()
+    expect(launchBlocker({ ...base, enabled: false })).toBe('Disabled')
+    expect(launchBlocker({ ...base, hasValue: false })).toBe('No API key stored')
+    expect(launchBlocker({ ...base, launchCommand: null })).toBe('No launch command')
+    expect(launchBlocker({ ...base, launchCommand: '' })).toBe('No launch command')
   })
 })
