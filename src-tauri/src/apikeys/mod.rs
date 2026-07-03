@@ -69,6 +69,82 @@ impl ApiKeyStore {
             }
         }
     }
+
+    /// Metadata + derived has_value. Never returns secrets.
+    pub fn list(&self) -> Vec<ApiKeyMeta> {
+        self.inner
+            .lock()
+            .keys
+            .iter()
+            .cloned()
+            .map(|k| {
+                let has_value = keychain_secret(&k.id).is_some();
+                ApiKeyMeta { key: k, has_value }
+            })
+            .collect()
+    }
+
+    /// Upsert metadata; when `secret` is Some, write the keychain first — a
+    /// keychain failure aborts the save so metadata never claims a value it
+    /// doesn't have. `secret: None` keeps any existing secret.
+    pub fn save(&self, entry: ApiKey, secret: Option<String>) -> AppResult<()> {
+        if let Some(s) = secret {
+            keychain_set(&entry.id, &s)?;
+        }
+        let mut d = self.inner.lock();
+        if let Some(slot) = d.keys.iter_mut().find(|k| k.id == entry.id) {
+            *slot = entry;
+        } else {
+            d.keys.push(entry);
+        }
+        self.persist(&d);
+        Ok(())
+    }
+
+    pub fn remove(&self, id: &str) {
+        keychain_delete(id);
+        let mut d = self.inner.lock();
+        d.keys.retain(|k| k.id != id);
+        self.persist(&d);
+    }
+
+    pub fn set_enabled(&self, id: &str, enabled: bool) {
+        let mut d = self.inner.lock();
+        if let Some(k) = d.keys.iter_mut().find(|k| k.id == id) {
+            k.enabled = enabled;
+        }
+        self.persist(&d);
+    }
+
+    /// Flat env pairs for every enabled entry, secrets read from the keychain.
+    /// Called at terminal-spawn time.
+    pub fn resolved_env(&self) -> Vec<(String, String)> {
+        let d = self.inner.lock();
+        expand_env(&d.keys, keychain_secret)
+    }
+}
+
+// ---- keychain ----
+
+fn keyring_entry(id: &str) -> Option<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE, &format!("apikey-{id}")).ok()
+}
+
+fn keychain_secret(id: &str) -> Option<String> {
+    keyring_entry(id)?.get_password().ok()
+}
+
+fn keychain_set(id: &str, secret: &str) -> AppResult<()> {
+    keyring_entry(id)
+        .ok_or_else(|| AppError::Msg("keychain unavailable".to_string()))?
+        .set_password(secret)
+        .map_err(|e| AppError::Msg(format!("keychain write failed: {e}")))
+}
+
+fn keychain_delete(id: &str) {
+    if let Some(e) = keyring_entry(id) {
+        let _ = e.delete_credential();
+    }
 }
 
 // ---- pure helpers ----
@@ -174,5 +250,33 @@ mod tests {
         fs::write(&path, "{not json").unwrap();
         let store = ApiKeyStore::new(path);
         assert!(store.inner.lock().keys.is_empty());
+    }
+
+    #[test]
+    fn save_upserts_and_set_enabled_toggles() {
+        let dir = tempdir().unwrap();
+        let store = ApiKeyStore::new(dir.path().join("keys.json"));
+        store.save(key("a", "OPENAI_API_KEY", true), None).unwrap();
+        store.save(key("b", "GROQ_API_KEY", true), None).unwrap();
+        // upsert replaces in place, preserving order
+        let mut edited = key("a", "OPENAI_API_KEY", true);
+        edited.label = "renamed".to_string();
+        store.save(edited, None).unwrap();
+        store.set_enabled("b", false);
+
+        let metas = store.list();
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas[0].key.label, "renamed");
+        assert!(!metas[1].key.enabled);
+        assert!(!metas[0].has_value); // nothing in the keychain for test ids
+    }
+
+    #[test]
+    fn remove_deletes_metadata() {
+        let dir = tempdir().unwrap();
+        let store = ApiKeyStore::new(dir.path().join("keys.json"));
+        store.save(key("a", "OPENAI_API_KEY", true), None).unwrap();
+        store.remove("a");
+        assert!(store.list().is_empty());
     }
 }
