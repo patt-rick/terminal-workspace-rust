@@ -1,6 +1,6 @@
 # Architecture: Multi-LLM Provider Keys
 
-**Status:** Proposed — not yet implemented.
+**Status:** Implemented (v1) — see `docs/superpowers/specs/2026-07-03-multi-llm-provider-keys-design.md` for the locked decisions.
 **Goal:** Let users bring their own API keys for any LLM provider (Claude, ChatGPT/OpenAI,
 DeepSeek, Qwen, and anything OpenAI-compatible) so that agent CLIs launched in the app's
 terminals can use them. "Plug in what's needed and start working."
