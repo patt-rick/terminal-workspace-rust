@@ -1,3 +1,4 @@
+use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore};
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
 use crate::git::discover::RepoInfo;
@@ -146,7 +147,7 @@ pub fn terminal_create(
             cols: args.cols.unwrap_or(80),
             rows: args.rows.unwrap_or(24),
             startup_command: args.startup_command.clone(),
-            env: app.state::<crate::apikeys::ApiKeyStore>().resolved_env(),
+            env: app.state::<ApiKeyStore>().resolved_env(),
         },
     )?;
 
@@ -808,6 +809,38 @@ pub fn identity_apply_global(ids: State<IdentityStore>, account_id: String) -> A
 #[tauri::command]
 pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     crate::identity::detect_gh_accounts()
+}
+
+// ---------- provider API keys ----------
+
+#[tauri::command]
+pub fn apikeys_list(store: State<ApiKeyStore>) -> Vec<ApiKeyMeta> {
+    store.list()
+}
+
+#[tauri::command]
+pub fn apikeys_save(
+    store: State<ApiKeyStore>,
+    entry: ApiKey,
+    secret: Option<String>,
+) -> AppResult<Vec<ApiKeyMeta>> {
+    // Treat an empty paste as "no change" so the write-only field can be
+    // submitted blank when editing.
+    let secret = secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    store.save(entry, secret)?;
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub fn apikeys_remove(store: State<ApiKeyStore>, id: String) -> Vec<ApiKeyMeta> {
+    store.remove(&id);
+    store.list()
+}
+
+#[tauri::command]
+pub fn apikeys_set_enabled(store: State<ApiKeyStore>, id: String, enabled: bool) -> Vec<ApiKeyMeta> {
+    store.set_enabled(&id, enabled);
+    store.list()
 }
 
 // ---------- remote access (feature-gated) ----------

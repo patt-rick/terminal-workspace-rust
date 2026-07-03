@@ -163,6 +163,10 @@ pub fn run() {
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,
+            commands::apikeys_list,
+            commands::apikeys_save,
+            commands::apikeys_remove,
+            commands::apikeys_set_enabled,
             #[cfg(feature = "remote-access")]
             commands::remote_start,
             #[cfg(feature = "remote-access")]
