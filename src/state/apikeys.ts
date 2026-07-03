@@ -19,7 +19,7 @@ interface ApiKeysState {
   setEnabled: (id: string, enabled: boolean) => Promise<void>
   test: (id: string) => Promise<ApiKeyTestResult>
   detectEnv: () => Promise<void>
-  importEnv: (envVar: string, provider: string, label: string) => Promise<void>
+  importEnv: (envVar: string, provider: string, label: string, launchCommand: string | null) => Promise<void>
 }
 
 export const useApiKeys = create<ApiKeysState>((set) => ({
@@ -54,8 +54,8 @@ export const useApiKeys = create<ApiKeysState>((set) => ({
     set({ detected })
   },
 
-  importEnv: async (envVar, provider, label) => {
-    const keys = await ipc.apikeys.importEnv(envVar, provider, label)
+  importEnv: async (envVar, provider, label, launchCommand) => {
+    const keys = await ipc.apikeys.importEnv(envVar, provider, label, launchCommand)
     // The imported var is stored now, so it drops out of the candidates.
     const detected = await ipc.apikeys.detectEnv()
     set({ keys, detected })

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { type ApiKeyEntry, type ApiKeyMeta } from '../../lib/ipc'
 import { envConflicts, PROVIDER_PRESETS, presetById } from '../../lib/apikey-presets'
 import { useApiKeys } from '../../state/apikeys'
+import { createProjectTerminal, useWorkspace } from '../../state/store'
+import { useUi } from '../../state/ui'
 
 interface Draft {
   id: string
@@ -9,6 +11,7 @@ interface Draft {
   label: string
   keyEnvVar: string
   extraEnv: { name: string; value: string }[]
+  launchCommand: string
   enabled: boolean
   /** write-only paste field; empty = keep the stored secret */
   secret: string
@@ -23,6 +26,7 @@ const draftFromPreset = (presetId: string): Draft => {
     label: p.name,
     keyEnvVar: p.keyEnvVar,
     extraEnv: Object.entries(p.extraEnv).map(([name, value]) => ({ name, value })),
+    launchCommand: p.launchCommand,
     enabled: true,
     secret: '',
     hasValue: false,
@@ -35,6 +39,7 @@ const draftFromEntry = (k: ApiKeyMeta): Draft => ({
   label: k.label,
   keyEnvVar: k.keyEnvVar,
   extraEnv: Object.entries(k.extraEnv).map(([name, value]) => ({ name, value })),
+  launchCommand: k.launchCommand ?? '',
   enabled: k.enabled,
   secret: '',
   hasValue: k.hasValue,
@@ -50,6 +55,7 @@ const entryFromDraft = (d: Draft): ApiKeyEntry => ({
       .map((p) => [p.name.trim(), p.value.trim()])
       .filter(([name, value]) => name && value)
   ),
+  launchCommand: d.launchCommand.trim() || null,
   enabled: d.enabled,
 })
 
@@ -69,6 +75,18 @@ export function ProvidersSection() {
   const test = useApiKeys((s) => s.test)
   const detectEnv = useApiKeys((s) => s.detectEnv)
   const importEnv = useApiKeys((s) => s.importEnv)
+
+  const selectedProjectId = useWorkspace((s) => s.selectedProjectId)
+  const closeSettings = useUi((s) => s.closeSettings)
+
+  const onLaunch = async (k: ApiKeyMeta): Promise<void> => {
+    if (!selectedProjectId || !k.launchCommand) return
+    await createProjectTerminal(selectedProjectId, {
+      name: k.label,
+      startupCommand: k.launchCommand,
+    })
+    closeSettings()
+  }
 
   const [draft, setDraft] = useState<Draft | null>(null)
   const [testMsg, setTestMsg] = useState<Record<string, string>>({})
@@ -139,7 +157,7 @@ export function ProvidersSection() {
 
   const onImport = async (envVar: string): Promise<void> => {
     const preset = PROVIDER_PRESETS.find((p) => p.keyEnvVar === envVar)
-    await importEnv(envVar, preset?.id ?? 'custom', preset?.name ?? envVar)
+    await importEnv(envVar, preset?.id ?? 'custom', preset?.name ?? envVar, preset?.launchCommand || null)
   }
 
   const applyPreset = (presetId: string): void => {
@@ -152,6 +170,7 @@ export function ProvidersSection() {
       label: draft.label || p.name,
       keyEnvVar: p.keyEnvVar,
       extraEnv: Object.entries(p.extraEnv).map(([name, value]) => ({ name, value })),
+      launchCommand: p.launchCommand,
     })
   }
 
@@ -204,6 +223,25 @@ export function ProvidersSection() {
                   />
                   Enabled
                 </label>
+                <button
+                  type="button"
+                  disabled={!k.enabled || !k.hasValue || !k.launchCommand || !selectedProjectId}
+                  onClick={() => void onLaunch(k)}
+                  title={
+                    !selectedProjectId
+                      ? 'Select a project first'
+                      : !k.launchCommand
+                        ? 'Set a launch command on this entry'
+                        : !k.hasValue
+                          ? 'No API key stored'
+                          : !k.enabled
+                            ? 'Entry is disabled'
+                            : `Open a terminal running: ${k.launchCommand}`
+                  }
+                  className="rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5 disabled:opacity-50"
+                >
+                  ▶ Launch
+                </button>
                 <button
                   type="button"
                   onClick={() => void onTest(k.id)}
@@ -297,6 +335,12 @@ export function ProvidersSection() {
             value={draft.keyEnvVar}
             onChange={(v) => setDraft({ ...draft, keyEnvVar: v })}
             placeholder="OPENAI_API_KEY"
+          />
+          <Field
+            label="Launch command (runs in the new terminal)"
+            value={draft.launchCommand}
+            onChange={(v) => setDraft({ ...draft, launchCommand: v })}
+            placeholder="aider --model deepseek/deepseek-chat"
           />
           <div>
             <div className="mb-1 flex items-center justify-between">

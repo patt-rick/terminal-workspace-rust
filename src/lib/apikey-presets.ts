@@ -5,6 +5,7 @@ export interface ProviderPreset {
   wire: 'anthropic' | 'openai'
   keyEnvVar: string
   extraEnv: Record<string, string>
+  launchCommand: string
 }
 
 /**
@@ -19,6 +20,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     wire: 'anthropic',
     keyEnvVar: 'ANTHROPIC_API_KEY',
     extraEnv: {},
+    launchCommand: 'claude',
   },
   {
     id: 'openai',
@@ -26,6 +28,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     wire: 'openai',
     keyEnvVar: 'OPENAI_API_KEY',
     extraEnv: {},
+    launchCommand: 'codex',
   },
   {
     id: 'deepseek',
@@ -33,6 +36,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     wire: 'openai',
     keyEnvVar: 'DEEPSEEK_API_KEY',
     extraEnv: { OPENAI_BASE_URL: 'https://api.deepseek.com' },
+    launchCommand: 'aider --model deepseek/deepseek-chat',
   },
   {
     id: 'qwen',
@@ -40,6 +44,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     wire: 'openai',
     keyEnvVar: 'DASHSCOPE_API_KEY',
     extraEnv: { OPENAI_BASE_URL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+    launchCommand: 'aider --model openai/qwen-plus',
   },
   {
     id: 'custom',
@@ -47,6 +52,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     wire: 'openai',
     keyEnvVar: 'OPENAI_API_KEY',
     extraEnv: { OPENAI_BASE_URL: '' },
+    launchCommand: '',
   },
 ]
 

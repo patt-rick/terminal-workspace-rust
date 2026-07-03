@@ -36,4 +36,12 @@ describe('presets', () => {
     expect(new Set(ids).size).toBe(ids.length)
     for (const id of ids) expect(presetById(id)?.id).toBe(id)
   })
+
+  it('prefills a launch command for every non-custom preset', () => {
+    for (const p of PROVIDER_PRESETS) {
+      if (p.id === 'custom') expect(p.launchCommand).toBe('')
+      else expect(p.launchCommand.length).toBeGreaterThan(0)
+    }
+    expect(presetById('deepseek')?.launchCommand).toBe('aider --model deepseek/deepseek-chat')
+  })
 })
