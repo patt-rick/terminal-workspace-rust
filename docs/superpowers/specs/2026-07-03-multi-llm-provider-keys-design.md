@@ -195,6 +195,19 @@ optional `launch_command` parameter so imported keys are launchable immediately.
 If the CLI isn't installed, the terminal shows the shell's command-not-found error — visible,
 honest feedback; no availability probing in v1.
 
+### "Use other models" picker (approved 2026-07-03)
+
+Claude entry points (⇧T/⇧D shortcuts, "Claude Code" context-menu items, empty-state button)
+stay exactly as they are. A new **"Use other models"** action opens a modal picker
+(`src/components/apikeys/model-picker.tsx`, modeled on the identity `account-picker.tsx`)
+listing the saved provider entries: click a launchable entry (enabled + stored key + launch
+command) to open a terminal in that project running its launch command; non-launchable entries
+are greyed out with the reason. Empty list → "No models added yet" + an Open-settings button.
+Picker state lives in the apikeys store (`launcherProjectId: string | null`), mirroring the
+identity picker. Entry points: a "Use other models…" project context-menu item below the two
+Claude items, and a third button on the "No terminals yet" empty state. `<ModelPicker />` is
+rendered once in `app.tsx` alongside `<IdentityAutoApply />`. No backend changes.
+
 ## Non-goals (unchanged from the proposal)
 
 No in-app inference or chat panel; no proxy/protocol translation (Claude Code still speaks
