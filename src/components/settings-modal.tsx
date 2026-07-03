@@ -147,7 +147,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         ))}
       </nav>
       <div className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-6 py-6">
+        <div className="mx-auto max-w-2xl px-6 pb-6 pt-14">
           {tab === 'general' && (
             <>
               <Section title="Appearance">
