@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event'
 import { QRCodeSVG } from 'qrcode.react'
 import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
+import { ProvidersSection } from './apikeys/providers-section'
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const themes = useThemeList()
@@ -221,6 +222,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </Section>
 
         <AccountsSection />
+
+        <ProvidersSection />
 
         <RemoteAccessSection />
 
