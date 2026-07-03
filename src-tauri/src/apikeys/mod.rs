@@ -122,6 +122,28 @@ impl ApiKeyStore {
         let d = self.inner.lock();
         expand_env(&d.keys, keychain_secret)
     }
+
+    /// (provider, base-url override, secret) for the reachability test.
+    /// Gathered under the lock and returned owned, so the async command never
+    /// holds the lock across an await.
+    pub fn test_inputs(&self, id: &str) -> AppResult<(String, Option<String>, String)> {
+        let d = self.inner.lock();
+        let k = d
+            .keys
+            .iter()
+            .find(|k| k.id == id)
+            .ok_or_else(|| AppError::Msg("key not found".to_string()))?;
+        let base = k
+            .extra_env
+            .iter()
+            .find(|(name, _)| name.ends_with("BASE_URL"))
+            .map(|(_, v)| v.clone());
+        let provider = k.provider.clone();
+        drop(d);
+        let secret =
+            keychain_secret(id).ok_or_else(|| AppError::Msg("no API key stored".to_string()))?;
+        Ok((provider, base, secret))
+    }
 }
 
 // ---- keychain ----
@@ -144,6 +166,49 @@ fn keychain_set(id: &str, secret: &str) -> AppResult<()> {
 fn keychain_delete(id: &str) {
     if let Some(e) = keyring_entry(id) {
         let _ = e.delete_credential();
+    }
+}
+
+// ---- reachability test ----
+
+pub struct TestRequest {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TestResult {
+    Ok,
+    AuthFailed,
+    Unreachable { message: String },
+}
+
+/// Build the auth-check request. Anthropic-format entries hit `<base>/v1/models`
+/// with `x-api-key`; everything else is OpenAI-format: `<base>/models` with a
+/// bearer token, where `<base>` is the entry's *_BASE_URL override as the CLI
+/// would consume it (so it may or may not contain `/v1` — DeepSeek's doesn't,
+/// OpenRouter's does; we append only `/models`).
+pub fn build_test_request(provider: &str, base_url: Option<&str>, secret: &str) -> TestRequest {
+    if provider == "anthropic" {
+        let base = base_url
+            .unwrap_or("https://api.anthropic.com")
+            .trim_end_matches('/');
+        TestRequest {
+            url: format!("{base}/v1/models"),
+            headers: vec![
+                ("x-api-key".to_string(), secret.to_string()),
+                ("anthropic-version".to_string(), "2023-06-01".to_string()),
+            ],
+        }
+    } else {
+        let base = base_url
+            .unwrap_or("https://api.openai.com/v1")
+            .trim_end_matches('/');
+        TestRequest {
+            url: format!("{base}/models"),
+            headers: vec![("Authorization".to_string(), format!("Bearer {secret}"))],
+        }
     }
 }
 
@@ -278,5 +343,34 @@ mod tests {
         store.save(key("a", "OPENAI_API_KEY", true), None).unwrap();
         store.remove("a");
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn test_request_anthropic_uses_x_api_key() {
+        let r = build_test_request("anthropic", None, "sk-ant-x");
+        assert_eq!(r.url, "https://api.anthropic.com/v1/models");
+        assert!(r.headers.contains(&("x-api-key".to_string(), "sk-ant-x".to_string())));
+        assert!(r
+            .headers
+            .iter()
+            .any(|(k, v)| k == "anthropic-version" && !v.is_empty()));
+    }
+
+    #[test]
+    fn test_request_openai_defaults_to_openai_base() {
+        let r = build_test_request("openai", None, "sk-x");
+        assert_eq!(r.url, "https://api.openai.com/v1/models");
+        assert_eq!(
+            r.headers,
+            vec![("Authorization".to_string(), "Bearer sk-x".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_request_respects_base_url_override_and_trailing_slash() {
+        let r = build_test_request("deepseek", Some("https://api.deepseek.com/"), "sk-x");
+        assert_eq!(r.url, "https://api.deepseek.com/models");
+        let r2 = build_test_request("custom", Some("https://openrouter.ai/api/v1"), "sk-x");
+        assert_eq!(r2.url, "https://openrouter.ai/api/v1/models");
     }
 }

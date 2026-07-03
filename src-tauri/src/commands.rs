@@ -1,4 +1,4 @@
-use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore};
+use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore, TestResult};
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
 use crate::git::discover::RepoInfo;
@@ -841,6 +841,35 @@ pub fn apikeys_remove(store: State<ApiKeyStore>, id: String) -> Vec<ApiKeyMeta> 
 pub fn apikeys_set_enabled(store: State<ApiKeyStore>, id: String, enabled: bool) -> Vec<ApiKeyMeta> {
     store.set_enabled(&id, enabled);
     store.list()
+}
+
+#[tauri::command]
+pub async fn apikeys_test(store: State<'_, ApiKeyStore>, id: String) -> AppResult<TestResult> {
+    let (provider, base, secret) = store.test_inputs(&id)?;
+    let req = crate::apikeys::build_test_request(&provider, base.as_deref(), &secret);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    let mut r = client.get(&req.url);
+    for (k, v) in &req.headers {
+        r = r.header(k, v);
+    }
+    Ok(match r.send().await {
+        Ok(resp) if resp.status().is_success() => TestResult::Ok,
+        Ok(resp)
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                || resp.status() == reqwest::StatusCode::FORBIDDEN =>
+        {
+            TestResult::AuthFailed
+        }
+        Ok(resp) => TestResult::Unreachable {
+            message: format!("HTTP {}", resp.status()),
+        },
+        Err(e) => TestResult::Unreachable {
+            message: e.to_string(),
+        },
+    })
 }
 
 // ---------- remote access (feature-gated) ----------
