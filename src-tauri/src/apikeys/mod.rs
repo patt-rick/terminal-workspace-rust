@@ -70,6 +70,10 @@ impl ApiKeyStore {
         }
     }
 
+    pub fn keys_snapshot(&self) -> Vec<ApiKey> {
+        self.inner.lock().keys.clone()
+    }
+
     /// Metadata + derived has_value. Never returns secrets.
     pub fn list(&self) -> Vec<ApiKeyMeta> {
         self.inner
@@ -236,6 +240,60 @@ pub fn expand_env(
     out
 }
 
+// ---- import from environment ----
+
+/// Key vars the detector looks for in the app's own process environment.
+pub const KNOWN_ENV_VARS: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "MISTRAL_API_KEY",
+    "XAI_API_KEY",
+    "GEMINI_API_KEY",
+];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedEnvKey {
+    pub env_var: String,
+    /// Last few characters for display — never the full value.
+    pub masked_tail: String,
+}
+
+pub fn mask_tail(v: &str) -> String {
+    let chars: Vec<char> = v.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(4)..].iter().collect();
+    format!("…{tail}")
+}
+
+/// Known key vars present in the environment that no stored entry uses yet.
+pub fn detect_candidates(
+    existing: &[ApiKey],
+    get: impl Fn(&str) -> Option<String>,
+) -> Vec<DetectedEnvKey> {
+    let used: std::collections::HashSet<&str> =
+        existing.iter().map(|k| k.key_env_var.as_str()).collect();
+    KNOWN_ENV_VARS
+        .iter()
+        .filter(|name| !used.contains(**name))
+        .filter_map(|name| {
+            let v = get(name)?;
+            let v = v.trim();
+            if v.is_empty() {
+                return None;
+            }
+            Some(DetectedEnvKey {
+                env_var: name.to_string(),
+                masked_tail: mask_tail(v),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +430,26 @@ mod tests {
         assert_eq!(r.url, "https://api.deepseek.com/models");
         let r2 = build_test_request("custom", Some("https://openrouter.ai/api/v1"), "sk-x");
         assert_eq!(r2.url, "https://openrouter.ai/api/v1/models");
+    }
+
+    #[test]
+    fn detect_skips_vars_already_stored_and_empty_values() {
+        let existing = vec![key("a", "OPENAI_API_KEY", true)];
+        let fake_env = |name: &str| match name {
+            "OPENAI_API_KEY" => Some("sk-already".to_string()),
+            "DEEPSEEK_API_KEY" => Some("sk-deep-1234".to_string()),
+            "GROQ_API_KEY" => Some("   ".to_string()),
+            _ => None,
+        };
+        let found = detect_candidates(&existing, fake_env);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].env_var, "DEEPSEEK_API_KEY");
+        assert_eq!(found[0].masked_tail, "…1234");
+    }
+
+    #[test]
+    fn mask_tail_handles_short_values() {
+        assert_eq!(mask_tail("ab"), "…ab");
+        assert_eq!(mask_tail("sk-abcdef"), "…cdef");
     }
 }

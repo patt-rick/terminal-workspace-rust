@@ -168,6 +168,8 @@ pub fn run() {
             commands::apikeys_remove,
             commands::apikeys_set_enabled,
             commands::apikeys_test,
+            commands::apikeys_detect_env,
+            commands::apikeys_import_env,
             #[cfg(feature = "remote-access")]
             commands::remote_start,
             #[cfg(feature = "remote-access")]

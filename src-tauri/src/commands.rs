@@ -1,4 +1,4 @@
-use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore, TestResult};
+use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore, DetectedEnvKey, TestResult};
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
 use crate::git::discover::RepoInfo;
@@ -870,6 +870,32 @@ pub async fn apikeys_test(store: State<'_, ApiKeyStore>, id: String) -> AppResul
             message: e.to_string(),
         },
     })
+}
+
+#[tauri::command]
+pub fn apikeys_detect_env(store: State<ApiKeyStore>) -> Vec<DetectedEnvKey> {
+    crate::apikeys::detect_candidates(&store.keys_snapshot(), |name| std::env::var(name).ok())
+}
+
+#[tauri::command]
+pub fn apikeys_import_env(
+    store: State<ApiKeyStore>,
+    env_var: String,
+    provider: String,
+    label: String,
+) -> AppResult<Vec<ApiKeyMeta>> {
+    let secret = std::env::var(&env_var)
+        .map_err(|_| AppError::Msg(format!("{env_var} is not set in the app's environment")))?;
+    let entry = ApiKey {
+        id: Uuid::new_v4().to_string(),
+        provider,
+        label,
+        key_env_var: env_var,
+        extra_env: Default::default(),
+        enabled: true,
+    };
+    store.save(entry, Some(secret.trim().to_string()))?;
+    Ok(store.list())
 }
 
 // ---------- remote access (feature-gated) ----------
