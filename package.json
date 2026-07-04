@@ -1,7 +1,7 @@
 {
   "name": "terminal-workspace-rust",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "description": "Multi-project, multi-terminal workspace IDE (Tauri + React)",
   "author": "patt-rick",
