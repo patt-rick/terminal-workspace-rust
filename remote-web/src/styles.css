@@ -38,6 +38,13 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  /* Lift the whole app above the on-screen keyboard (--kb-inset is the keyboard
+     height, set from visualViewport). The terminal keeps its full height and
+     grid — only the viewport slides up — so the PTY (and the mirrored desktop
+     pane) never reflow when the keyboard opens. */
+  transform: translateY(calc(-1 * var(--kb-inset, 0px)));
+  transition: transform 0.15s ease-out;
+  will-change: transform;
 }
 
 /* top bar */
@@ -124,6 +131,11 @@ body {
 .key:active {
   background: var(--accent);
   color: var(--surface);
+}
+.key.key-on {
+  background: var(--accent);
+  color: var(--surface);
+  border-color: var(--accent);
 }
 
 /* drawer */

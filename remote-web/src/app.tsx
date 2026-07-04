@@ -12,8 +12,12 @@ import {
 } from './protocol'
 import { GitSheet } from './git-sheet'
 import { SessionsSheet } from './sessions-sheet'
+import { PredictiveEcho } from './predictive-echo'
 
 const TOKEN_KEY = 'tw_remote_token'
+// Speculative local echo is opt-in (prototype): it hides round-trip lag on
+// high-latency links but can briefly mispredict, so the user turns it on.
+const PRED_ECHO_KEY = 'tw_pred_echo'
 type Phase = 'pair' | 'connecting' | 'ready' | 'evicted' | 'closed'
 
 // Token lives in localStorage (not sessionStorage) so the session survives the
@@ -124,8 +128,11 @@ export function App() {
   const workingRef = useRef<Set<string>>(working)
   workingRef.current = working
 
+  const [predEcho, setPredEcho] = useState<boolean>(() => localStorage.getItem(PRED_ECHO_KEY) === '1')
+
   const clientRef = useRef<RemoteClient | null>(null)
   const termRef = useRef<Terminal | null>(null)
+  const predRef = useRef<PredictiveEcho | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const curIdRef = useRef<string | null>(null)
   const curTagRef = useRef<number | null>(null)
@@ -223,6 +230,7 @@ export function App() {
       return next
     })
     localStorage.setItem(LAST_TERM_KEY, id)
+    predRef.current?.reset()
     termRef.current?.reset()
     client.attach(id)
     const term = termRef.current
@@ -250,6 +258,7 @@ export function App() {
           // Reconnect on a live page: the server has no memory of the previous
           // socket, so re-subscribe (replays scrollback).
           curTagRef.current = null
+          predRef.current?.reset()
           termRef.current?.reset()
           clientRef.current?.attach(id)
           const term = termRef.current
@@ -272,14 +281,20 @@ export function App() {
       onAttached: (tid, tag) => {
         if (tid === curIdRef.current) {
           curTagRef.current = tag
+          predRef.current?.reset()
           termRef.current?.reset()
         }
       },
       onSnapshot: (tid, _tag, bytes) => {
-        if (tid === curIdRef.current) termRef.current?.write(bytes)
+        if (tid === curIdRef.current) {
+          predRef.current?.reset()
+          termRef.current?.write(bytes)
+        }
       },
       onOutput: (tag, bytes) => {
-        if (tag === curTagRef.current) termRef.current?.write(bytes)
+        if (tag !== curTagRef.current) return
+        if (predRef.current) predRef.current.writeServer(bytes)
+        else termRef.current?.write(bytes)
       },
       onCreated: (t) => {
         setProjects((ps) =>
@@ -296,6 +311,7 @@ export function App() {
           curIdRef.current = null
           curTagRef.current = null
           setCurrentId(null)
+          predRef.current?.reset()
           termRef.current?.reset()
         }
       },
@@ -409,11 +425,43 @@ export function App() {
     }
   }, [])
 
-  // Re-fit on viewport changes (orientation, mobile keyboard show/hide).
+  // Re-fit only on genuine layout changes (orientation), debounced so a burst of
+  // resize events settles into one PTY resize. The mobile keyboard no longer
+  // resizes the layout viewport (interactive-widget=resizes-visual), so opening
+  // it never reaches here — that's what stops the desktop terminal from
+  // reflowing when the keyboard appears.
   useEffect(() => {
-    const onResize = () => fitRef.current?.fit()
+    let t: ReturnType<typeof setTimeout> | null = null
+    const onResize = () => {
+      if (t) clearTimeout(t)
+      t = setTimeout(() => fitRef.current?.fit(), 200)
+    }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => {
+      if (t) clearTimeout(t)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [])
+
+  // Track the on-screen keyboard via the visual viewport and expose its height as
+  // --kb-inset. The .app transform lifts the UI above the keyboard so the prompt
+  // and key row stay visible — all without resizing the terminal grid.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const root = document.documentElement
+    const apply = () => {
+      const kb = Math.max(0, root.clientHeight - vv.height - vv.offsetTop)
+      root.style.setProperty('--kb-inset', kb > 120 ? `${Math.round(kb)}px` : '0px')
+    }
+    apply()
+    vv.addEventListener('resize', apply)
+    vv.addEventListener('scroll', apply)
+    return () => {
+      vv.removeEventListener('resize', apply)
+      vv.removeEventListener('scroll', apply)
+      root.style.removeProperty('--kb-inset')
+    }
   }, [])
 
   const mountTerminal = useCallback((node: HTMLDivElement | null) => {
@@ -429,6 +477,9 @@ export function App() {
     term.loadAddon(fit)
     term.open(node)
     fit.fit()
+    // Read the toggle from storage (not React state) so this one-time mount
+    // callback never closes over a stale value.
+    predRef.current = new PredictiveEcho(term, localStorage.getItem(PRED_ECHO_KEY) === '1')
 
     // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
     // The alt buffer has no scrollback, so xterm converts each wheel tick into
@@ -544,7 +595,10 @@ export function App() {
 
     term.onData((data) => {
       const id = curIdRef.current
-      if (id) clientRef.current?.input(id, data)
+      if (!id) return
+      // Render the keystroke locally first (instant), then send it unchanged.
+      predRef.current?.predict(data)
+      clientRef.current?.input(id, data)
     })
     term.onResize(({ cols, rows }) => {
       const id = curIdRef.current
@@ -647,6 +701,19 @@ export function App() {
       </div>
 
       <div className="keys">
+        <button
+          className={`key ${predEcho ? 'key-on' : ''}`}
+          title="Speculative local echo — hides typing lag on high-latency links"
+          onClick={() => {
+            const next = !predEcho
+            setPredEcho(next)
+            localStorage.setItem(PRED_ECHO_KEY, next ? '1' : '0')
+            predRef.current?.setEnabled(next)
+            termRef.current?.focus()
+          }}
+        >
+          ⚡
+        </button>
         <button className="key" onClick={() => sendKey('\x1b')}>
           Esc
         </button>
