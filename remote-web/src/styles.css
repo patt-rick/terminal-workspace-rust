@@ -85,6 +85,9 @@ body {
 .term {
   height: 100%;
   width: 100%;
+  /* Touch pan is handled in JS (scrollback / PgUp translation) — keep the
+     browser from panning the page or synthesizing wheel events itself. */
+  touch-action: none;
 }
 .emptyterm {
   display: flex;

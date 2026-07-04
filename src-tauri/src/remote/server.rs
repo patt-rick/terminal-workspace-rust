@@ -274,11 +274,18 @@ impl Conn {
                 terminal_id,
                 cols,
                 rows,
-            } => self
-                .ctx
-                .app
-                .state::<PtyManager>()
-                .resize_remote(&terminal_id, cols, rows),
+            } => {
+                // Remote owns the size while attached (remote-wins sizing); tell the desktop
+                // pane so it mirrors the same grid instead of rendering jumbled.
+                if self
+                    .ctx
+                    .app
+                    .state::<PtyManager>()
+                    .resize_remote(&terminal_id, cols, rows)
+                {
+                    crate::pty::emit_remote_size(&self.ctx.app, &terminal_id, Some((cols, rows)));
+                }
+            }
             ClientMsg::TermAttach { terminal_id } => self.attach(terminal_id).await,
             ClientMsg::TermDetach { terminal_id } => self.detach(&terminal_id),
             ClientMsg::TermCreate {
@@ -426,6 +433,7 @@ impl Conn {
                 .app
                 .state::<PtyManager>()
                 .restore_local_size(terminal_id);
+            crate::pty::emit_remote_size(&self.ctx.app, terminal_id, None);
         }
     }
 }
@@ -489,6 +497,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         att.handle.abort();
         // Snap each PTY back to its desktop size now the remote is gone (R3.14).
         pty.restore_local_size(&id);
+        crate::pty::emit_remote_size(&conn.ctx.app, &id, None);
     }
     use tauri::Listener;
     for id in listener_ids {

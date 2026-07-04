@@ -171,6 +171,21 @@ pub fn terminal_resize(pty: State<PtyManager>, id: String, cols: u16, rows: u16)
     pty.resize(&id, cols, rows)
 }
 
+/// Size a remote client currently mandates for this terminal, if one is
+/// attached (remote-wins sizing). Lets a freshly mounted pane adopt the remote grid.
+#[tauri::command]
+pub fn terminal_remote_size(pty: State<PtyManager>, id: String) -> Option<(u16, u16)> {
+    #[cfg(feature = "remote-access")]
+    {
+        pty.remote_size(&id)
+    }
+    #[cfg(not(feature = "remote-access"))]
+    {
+        let _ = (pty, id);
+        None
+    }
+}
+
 #[tauri::command]
 pub fn terminal_kill(pty: State<PtyManager>, id: String) {
     pty.kill(&id)

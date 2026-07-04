@@ -40,6 +40,14 @@ export interface ExitPayload {
   exitCode: number
 }
 
+/** A remote client took over a terminal's size (cols/rows set) or released it
+ * (both null). While owned, the desktop pane mirrors the remote grid (remote-wins sizing). */
+export interface RemoteSizePayload {
+  id: string
+  cols: number | null
+  rows: number | null
+}
+
 export interface FsEntry {
   name: string
   /** path relative to the project root, forward slashes; "" = root */
@@ -362,6 +370,10 @@ export const ipc = {
       invoke<void>('terminal_remove_record', { projectId, id }),
     onExit: (cb: (p: ExitPayload) => void): Promise<UnlistenFn> =>
       listen<ExitPayload>('terminals:exit', (e) => cb(e.payload)),
+    remoteSize: (id: string) =>
+      invoke<[number, number] | null>('terminal_remote_size', { id }),
+    onRemoteSize: (cb: (p: RemoteSizePayload) => void): Promise<UnlistenFn> =>
+      listen<RemoteSizePayload>('terminals:remote-size', (e) => cb(e.payload)),
   },
 
   fs: {

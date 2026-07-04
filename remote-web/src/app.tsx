@@ -429,6 +429,119 @@ export function App() {
     term.loadAddon(fit)
     term.open(node)
     fit.fit()
+
+    // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
+    // The alt buffer has no scrollback, so xterm converts each wheel tick into
+    // an ↑/↓ key — which a prompt reads as history navigation. Claude Code
+    // scrolls its transcript with PgUp/PgDn ("Scroll wheel is sending arrow
+    // keys · use PgUp/PgDn to scroll"), so we translate scroll gestures into
+    // page keys there instead. xterm 6 has no touch handling at all
+    // (xtermjs/xterm.js#5377), so touch pan is handled here for both buffers.
+    const sendSeq = (seq: string) => {
+      const id = curIdRef.current
+      if (id) clientRef.current?.input(id, seq)
+    }
+    const PAGE_UP = '\x1b[5~'
+    const PAGE_DOWN = '\x1b[6~'
+    const inAltBuffer = () => term.buffer.active.type === 'alternate'
+    const cellHeight = () => Math.max(1, node.clientHeight / term.rows)
+    // Drag distance that flips one page. Kept well under a typical flick
+    // (~200px) so casual swipes always move.
+    const pageThreshold = () => Math.max(48, Math.min(node.clientHeight / 3, 200))
+
+    let touchY: number | null = null
+    let touchAcc = 0
+    let gestureDy = 0
+    let gestureStart = 0
+    let gesturePages = 0
+    node.addEventListener(
+      'touchstart',
+      (e) => {
+        touchY = e.touches.length === 1 ? e.touches[0].clientY : null
+        touchAcc = 0
+        gestureDy = 0
+        gesturePages = 0
+        gestureStart = performance.now()
+      },
+      { passive: true }
+    )
+    node.addEventListener(
+      'touchmove',
+      (e) => {
+        if (touchY === null || e.touches.length !== 1) return
+        const dy = e.touches[0].clientY - touchY
+        touchY = e.touches[0].clientY
+        gestureDy += dy
+        if (touchAcc !== 0 && Math.sign(dy) !== Math.sign(touchAcc)) touchAcc = 0
+        touchAcc += dy
+        if (inAltBuffer()) {
+          // Dragging down reveals older content → page up.
+          const page = pageThreshold()
+          while (touchAcc >= page) {
+            sendSeq(PAGE_UP)
+            touchAcc -= page
+            gesturePages++
+          }
+          while (touchAcc <= -page) {
+            sendSeq(PAGE_DOWN)
+            touchAcc += page
+            gesturePages++
+          }
+        } else {
+          const cell = cellHeight()
+          const lines = Math.trunc(touchAcc / cell)
+          if (lines !== 0) {
+            term.scrollLines(-lines)
+            touchAcc -= lines * cell
+          }
+        }
+        // Stop the browser from also panning / synthesizing wheel events.
+        e.preventDefault()
+      },
+      { passive: false }
+    )
+    node.addEventListener(
+      'touchend',
+      () => {
+        // A quick flick that didn't reach the page threshold still turns one
+        // page — otherwise short swipes feel dead in the alt buffer.
+        if (
+          touchY !== null &&
+          inAltBuffer() &&
+          gesturePages === 0 &&
+          Math.abs(gestureDy) >= 30 &&
+          performance.now() - gestureStart < 300
+        ) {
+          sendSeq(gestureDy > 0 ? PAGE_UP : PAGE_DOWN)
+        }
+        touchY = null
+      },
+      { passive: true }
+    )
+
+    let wheelAcc = 0
+    term.attachCustomWheelEventHandler((ev) => {
+      if (!inAltBuffer()) return true // normal buffer: xterm scrolls its scrollback
+      const px =
+        ev.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? ev.deltaY * cellHeight()
+          : ev.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? ev.deltaY * node.clientHeight
+            : ev.deltaY
+      if (wheelAcc !== 0 && Math.sign(px) !== Math.sign(wheelAcc)) wheelAcc = 0
+      wheelAcc += px
+      const page = pageThreshold()
+      while (wheelAcc >= page) {
+        sendSeq(PAGE_DOWN)
+        wheelAcc -= page
+      }
+      while (wheelAcc <= -page) {
+        sendSeq(PAGE_UP)
+        wheelAcc += page
+      }
+      return false // handled — suppress xterm's wheel→arrow fallback
+    })
+
     term.onData((data) => {
       const id = curIdRef.current
       if (id) clientRef.current?.input(id, data)
@@ -458,43 +571,6 @@ export function App() {
         notify('Copied to terminal', text.length > 48 ? `${text.slice(0, 48)}…` : text)
       }
       return true
-    })
-    // xterm has no touch handling of its own, so translate vertical swipes:
-    // normal buffer → scroll the local scrollback; alternate buffer (full-screen
-    // TUIs — no scrollback) → arrow keys, mirroring xterm's alternateScroll
-    // wheel behavior. preventDefault keeps the browser from treating the swipe
-    // as a scroll/pull-to-refresh gesture.
-    let touchY: number | null = null
-    let touchAcc = 0
-    node.addEventListener('touchstart', (e) => {
-      touchY = e.touches.length === 1 ? e.touches[0].clientY : null
-      touchAcc = 0
-    })
-    node.addEventListener(
-      'touchmove',
-      (e) => {
-        if (touchY === null || e.touches.length !== 1) return
-        e.preventDefault()
-        touchAcc += e.touches[0].clientY - touchY
-        touchY = e.touches[0].clientY
-        const lineHeight = node.clientHeight / Math.max(1, term.rows)
-        if (lineHeight <= 0) return
-        const lines = Math.trunc(touchAcc / lineHeight)
-        if (!lines) return
-        touchAcc -= lines * lineHeight
-        if (term.buffer.active.type === 'alternate') {
-          const up = term.modes.applicationCursorKeysMode ? '\x1bOA' : '\x1b[A'
-          const down = term.modes.applicationCursorKeysMode ? '\x1bOB' : '\x1b[B'
-          const id = curIdRef.current
-          if (id) clientRef.current?.input(id, (lines > 0 ? up : down).repeat(Math.abs(lines)))
-        } else {
-          term.scrollLines(-lines)
-        }
-      },
-      { passive: false }
-    )
-    node.addEventListener('touchend', () => {
-      touchY = null
     })
     termRef.current = term
     fitRef.current = fit
@@ -591,6 +667,12 @@ export function App() {
         </button>
         <button className="key" onClick={() => sendKey('\x1b[C')}>
           →
+        </button>
+        <button className="key" onClick={() => sendKey('\x1b[5~')}>
+          PgUp
+        </button>
+        <button className="key" onClick={() => sendKey('\x1b[6~')}>
+          PgDn
         </button>
       </div>
 
