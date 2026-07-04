@@ -69,6 +69,9 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  // Grid a remote client mandates while attached (remote-wins sizing): the pane mirrors it
+  // (letterboxed) instead of fitting, so both viewers agree with the PTY.
+  const remoteSizeRef = useRef<{ cols: number; rows: number } | null>(null)
   const initRef = useRef(false)
   const bellRef = useRef<typeof onBell>(onBell)
   bellRef.current = onBell
@@ -147,6 +150,19 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
 
     const fitNow = (): void => {
       try {
+        const remote = remoteSizeRef.current
+        if (remote) {
+          // Remote owns the size: keep mirroring its grid, but keep reporting
+          // what this pane would want so detach snaps back correctly (R3.14).
+          if (term.cols !== remote.cols || term.rows !== remote.rows) {
+            term.resize(remote.cols, remote.rows)
+          }
+          const dims = fit.proposeDimensions()
+          if (dims?.cols && dims?.rows) {
+            void ipc.terminals.resize(terminalId, dims.cols, dims.rows)
+          }
+          return
+        }
         fit.fit()
         void ipc.terminals.resize(terminalId, term.cols, term.rows)
       } catch {
@@ -159,6 +175,40 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
     window.addEventListener('resize', onResize)
     const ro = new ResizeObserver(() => fitNow())
     ro.observe(hostRef.current)
+
+    // Follow remote size ownership: adopt the phone's grid while it's attached,
+    // refit when it lets go. Also adopt on mount if a remote is already attached.
+    let unlistenRemoteSize: (() => void) | null = null
+    let remoteListenerGone = false
+    void ipc.terminals
+      .onRemoteSize((p) => {
+        if (p.id !== terminalId) return
+        if (p.cols && p.rows) {
+          remoteSizeRef.current = { cols: p.cols, rows: p.rows }
+          try {
+            term.resize(p.cols, p.rows)
+          } catch {
+            // teardown race
+          }
+        } else {
+          remoteSizeRef.current = null
+          fitNow()
+        }
+      })
+      .then((un) => {
+        if (remoteListenerGone) un()
+        else unlistenRemoteSize = un
+      })
+    void ipc.terminals.remoteSize(terminalId).then((size) => {
+      if (size && termRef.current === term) {
+        remoteSizeRef.current = { cols: size[0], rows: size[1] }
+        try {
+          term.resize(size[0], size[1])
+        } catch {
+          // teardown race
+        }
+      }
+    })
 
     // Replay the snapshot, then live chunks. Chunks arriving over the channel
     // before the snapshot resolves are buffered so output stays ordered.
@@ -228,6 +278,9 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       osc9.dispose()
       osc52.dispose()
       ro.disconnect()
+      remoteListenerGone = true
+      unlistenRemoteSize?.()
+      remoteSizeRef.current = null
       window.removeEventListener('resize', onResize)
       useWorkspace.getState().setTerminalBusy(terminalId, false)
       term.dispose()
@@ -241,8 +294,9 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
     if (!active) return
     requestAnimationFrame(() => {
       try {
-        fitRef.current?.fit()
         termRef.current?.focus()
+        if (remoteSizeRef.current) return // remote owns the grid (remote-wins sizing)
+        fitRef.current?.fit()
         const term = termRef.current
         if (term) void ipc.terminals.resize(terminalId, term.cols, term.rows)
       } catch {

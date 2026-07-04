@@ -117,6 +117,11 @@ struct PtyHandle {
     /// PTY to the phone's dimensions; on detach we snap back to this (R3.14).
     #[cfg(feature = "remote-access")]
     local_size: (u16, u16),
+    /// Size mandated by an attached remote client. While `Some`, the remote
+    /// owns the PTY size: desktop resizes are recorded in `local_size` but not
+    /// applied, and the desktop pane mirrors this grid (letterboxed).
+    #[cfg(feature = "remote-access")]
+    remote_size: Option<(u16, u16)>,
     /// Claude session id parsed from the startup command (`--session-id` /
     /// `--resume`), used to route Claude-hook events back to this terminal.
     #[cfg(feature = "remote-access")]
@@ -252,6 +257,8 @@ impl PtyManager {
                 #[cfg(feature = "remote-access")]
                 local_size: (opts.cols, opts.rows),
                 #[cfg(feature = "remote-access")]
+                remote_size: None,
+                #[cfg(feature = "remote-access")]
                 session_id: opts
                     .startup_command
                     .as_deref()
@@ -374,32 +381,53 @@ impl PtyManager {
     }
 
     /// Resize from the desktop pane. Records the size as the "local" size so a
-    /// later remote detach can snap the PTY back to it (R3.14).
+    /// later remote detach can snap the PTY back to it (R3.14). While a remote
+    /// client owns the size, the request is recorded but not applied — the
+    /// remote wins until it detaches (remote-wins sizing).
     pub fn resize(&self, id: &str, cols: u16, rows: u16) {
         let mut entries = self.entries.lock();
         if let Some(handle) = entries.get_mut(id) {
             #[cfg(feature = "remote-access")]
             {
                 handle.local_size = (cols, rows);
+                if handle.remote_size.is_some() {
+                    return;
+                }
             }
             apply_size(handle.master.as_ref(), cols, rows);
         }
     }
 
-    /// Resize from a remote client. Deliberately does NOT update `local_size`, so
-    /// the desktop dimensions are preserved for snap-back on detach (R3.14).
+    /// Resize from a remote client: takes ownership of the PTY size (remote-wins sizing).
+    /// Deliberately does NOT update `local_size`, so the desktop dimensions are
+    /// preserved for snap-back on detach (R3.14). Returns false if the terminal
+    /// is gone.
     #[cfg(feature = "remote-access")]
-    pub fn resize_remote(&self, id: &str, cols: u16, rows: u16) {
-        if let Some(handle) = self.entries.lock().get(id) {
+    pub fn resize_remote(&self, id: &str, cols: u16, rows: u16) -> bool {
+        let mut entries = self.entries.lock();
+        if let Some(handle) = entries.get_mut(id) {
+            handle.remote_size = Some((cols, rows));
             apply_size(handle.master.as_ref(), cols, rows);
+            true
+        } else {
+            false
         }
     }
 
-    /// Snap the PTY back to the last desktop-pane size (called when a remote
-    /// client detaches or disconnects, R3.14).
+    /// The size an attached remote client currently mandates, if any.
+    #[cfg(feature = "remote-access")]
+    pub fn remote_size(&self, id: &str) -> Option<(u16, u16)> {
+        self.entries.lock().get(id).and_then(|h| h.remote_size)
+    }
+
+    /// Release remote size ownership and snap the PTY back to the last
+    /// desktop-pane size (called when a remote client detaches or disconnects,
+    /// R3.14).
     #[cfg(feature = "remote-access")]
     pub fn restore_local_size(&self, id: &str) {
-        if let Some(handle) = self.entries.lock().get(id) {
+        let mut entries = self.entries.lock();
+        if let Some(handle) = entries.get_mut(id) {
+            handle.remote_size = None;
             let (cols, rows) = handle.local_size;
             apply_size(handle.master.as_ref(), cols, rows);
         }
@@ -455,6 +483,28 @@ struct AttentionPayload {
     /// | "needs-permission" | "finished" (the latter two come from Claude hooks).
     reason: String,
     message: Option<String>,
+}
+
+#[cfg(feature = "remote-access")]
+#[derive(Clone, Serialize)]
+struct RemoteSizePayload {
+    id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
+/// A remote client took ownership of a terminal's size (`Some`) or released it
+/// (`None`). The desktop pane mirrors the remote grid while owned (remote-wins sizing).
+#[cfg(feature = "remote-access")]
+pub fn emit_remote_size(app: &AppHandle, id: &str, size: Option<(u16, u16)>) {
+    let _ = app.emit(
+        "terminals:remote-size",
+        RemoteSizePayload {
+            id: id.to_string(),
+            cols: size.map(|s| s.0),
+            rows: size.map(|s| s.1),
+        },
+    );
 }
 
 /// A terminal needs the user, with a machine-readable reason. Consumed by the

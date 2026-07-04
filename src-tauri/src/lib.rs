@@ -107,6 +107,7 @@ pub fn run() {
             commands::terminal_attach,
             commands::terminal_write,
             commands::terminal_resize,
+            commands::terminal_remote_size,
             commands::terminal_kill,
             commands::terminal_rename,
             commands::terminal_remove_record,
