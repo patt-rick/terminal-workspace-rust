@@ -7,6 +7,7 @@ import { DiffViewer } from './components/diff/diff-viewer'
 import { ConfirmDialog } from './components/confirm-dialog'
 import { SettingsModal } from './components/settings-modal'
 import { IdentityAutoApply } from './components/identity/identity-auto-apply'
+import { ModelPicker } from './components/apikeys/model-picker'
 import { UpdateManager } from './components/update-manager'
 import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
@@ -15,6 +16,7 @@ import { useDiffView } from './state/diff'
 import { useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
 import { useUi } from './state/ui'
+import { useApiKeys } from './state/apikeys'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
 import { isTauri, type Project, type TerminalRecord } from './lib/ipc'
@@ -231,7 +233,7 @@ export default function App() {
           <div className="flex-1" />
           <button
             type="button"
-            onClick={openSettings}
+            onClick={() => openSettings()}
             title={`Settings (${kbd(',')})`}
             className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
           >
@@ -285,6 +287,10 @@ export default function App() {
                     name: 'Claude Code',
                     startupCommand: 'claude',
                   })
+                }
+                tertiaryLabel="Use other models"
+                onTertiary={() =>
+                  selectedProject && useApiKeys.getState().openLauncher(selectedProject.id)
                 }
               />
             )}
@@ -347,6 +353,7 @@ export default function App() {
 
       <SettingsModal open={settingsOpen} onClose={closeSettings} />
       <IdentityAutoApply />
+      <ModelPicker />
       <UpdateManager />
     </div>
   )
@@ -358,12 +365,16 @@ function EmptyState({
   onAction,
   secondaryLabel,
   onSecondary,
+  tertiaryLabel,
+  onTertiary,
 }: {
   title: string
   actionLabel: string
   onAction: () => void
   secondaryLabel?: string
   onSecondary?: () => void
+  tertiaryLabel?: string
+  onTertiary?: () => void
 }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
@@ -384,6 +395,15 @@ function EmptyState({
               className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
             >
               {secondaryLabel}
+            </button>
+          )}
+          {tertiaryLabel && onTertiary && (
+            <button
+              type="button"
+              onClick={onTertiary}
+              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
+            >
+              {tertiaryLabel}
             </button>
           )}
         </div>

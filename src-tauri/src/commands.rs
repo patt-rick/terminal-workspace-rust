@@ -1,3 +1,4 @@
+use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore, DetectedEnvKey, TestResult};
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
 use crate::git::discover::RepoInfo;
@@ -146,6 +147,7 @@ pub fn terminal_create(
             cols: args.cols.unwrap_or(80),
             rows: args.rows.unwrap_or(24),
             startup_command: args.startup_command.clone(),
+            env: app.state::<ApiKeyStore>().resolved_env(),
         },
     )?;
 
@@ -822,6 +824,95 @@ pub fn identity_apply_global(ids: State<IdentityStore>, account_id: String) -> A
 #[tauri::command]
 pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     crate::identity::detect_gh_accounts()
+}
+
+// ---------- provider API keys ----------
+
+#[tauri::command]
+pub fn apikeys_list(store: State<ApiKeyStore>) -> Vec<ApiKeyMeta> {
+    store.list()
+}
+
+#[tauri::command]
+pub fn apikeys_save(
+    store: State<ApiKeyStore>,
+    entry: ApiKey,
+    secret: Option<String>,
+) -> AppResult<Vec<ApiKeyMeta>> {
+    // Treat an empty paste as "no change" so the write-only field can be
+    // submitted blank when editing.
+    let secret = secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    store.save(entry, secret)?;
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub fn apikeys_remove(store: State<ApiKeyStore>, id: String) -> Vec<ApiKeyMeta> {
+    store.remove(&id);
+    store.list()
+}
+
+#[tauri::command]
+pub fn apikeys_set_enabled(store: State<ApiKeyStore>, id: String, enabled: bool) -> Vec<ApiKeyMeta> {
+    store.set_enabled(&id, enabled);
+    store.list()
+}
+
+#[tauri::command]
+pub async fn apikeys_test(store: State<'_, ApiKeyStore>, id: String) -> AppResult<TestResult> {
+    let (provider, base, secret) = store.test_inputs(&id)?;
+    let req = crate::apikeys::build_test_request(&provider, base.as_deref(), &secret);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    let mut r = client.get(&req.url);
+    for (k, v) in &req.headers {
+        r = r.header(k, v);
+    }
+    Ok(match r.send().await {
+        Ok(resp) if resp.status().is_success() => TestResult::Ok,
+        Ok(resp)
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                || resp.status() == reqwest::StatusCode::FORBIDDEN =>
+        {
+            TestResult::AuthFailed
+        }
+        Ok(resp) => TestResult::Unreachable {
+            message: format!("HTTP {}", resp.status()),
+        },
+        Err(e) => TestResult::Unreachable {
+            message: e.to_string(),
+        },
+    })
+}
+
+#[tauri::command]
+pub fn apikeys_detect_env(store: State<ApiKeyStore>) -> Vec<DetectedEnvKey> {
+    crate::apikeys::detect_candidates(&store.keys_snapshot(), |name| std::env::var(name).ok())
+}
+
+#[tauri::command]
+pub fn apikeys_import_env(
+    store: State<ApiKeyStore>,
+    env_var: String,
+    provider: String,
+    label: String,
+    launch_command: Option<String>,
+) -> AppResult<Vec<ApiKeyMeta>> {
+    let secret = std::env::var(&env_var)
+        .map_err(|_| AppError::Msg(format!("{env_var} is not set in the app's environment")))?;
+    let entry = ApiKey {
+        id: Uuid::new_v4().to_string(),
+        provider,
+        label,
+        key_env_var: env_var,
+        extra_env: Default::default(),
+        launch_command,
+        enabled: true,
+    };
+    store.save(entry, Some(secret.trim().to_string()))?;
+    Ok(store.list())
 }
 
 // ---------- remote access (feature-gated) ----------

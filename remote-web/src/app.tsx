@@ -457,7 +457,7 @@ export function App() {
     node.addEventListener(
       'touchstart',
       (e) => {
-        touchY = e.touches[0].clientY
+        touchY = e.touches.length === 1 ? e.touches[0].clientY : null
         touchAcc = 0
         gestureDy = 0
         gesturePages = 0
@@ -468,7 +468,7 @@ export function App() {
     node.addEventListener(
       'touchmove',
       (e) => {
-        if (touchY === null) return
+        if (touchY === null || e.touches.length !== 1) return
         const dy = e.touches[0].clientY - touchY
         touchY = e.touches[0].clientY
         gestureDy += dy

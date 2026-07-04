@@ -98,6 +98,7 @@ fn spawn_terminal(
             cols: 80,
             rows: 24,
             startup_command,
+            env: app.state::<crate::apikeys::ApiKeyStore>().resolved_env(),
         },
     )
     .map_err(|e| e.to_string())?;

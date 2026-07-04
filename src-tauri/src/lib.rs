@@ -4,6 +4,7 @@
 //! GitHub, and filesystem access. `run()` wires plugins, managed state, and the
 //! command handlers the webview invokes.
 
+mod apikeys;
 mod claude;
 mod commands;
 mod error;
@@ -17,6 +18,7 @@ mod remote;
 mod settings;
 mod state;
 
+use apikeys::ApiKeyStore;
 use github::GithubStore;
 use identity::IdentityStore;
 use pty::PtyManager;
@@ -32,6 +34,7 @@ pub fn hook_sink(spool: &std::path::Path) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -60,6 +63,7 @@ pub fn run() {
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
+            app.manage(ApiKeyStore::new(data_dir.join("keys.json")));
             app.manage(PtyManager::new());
             // Claude hook events (Notification/Stop) land in the spool dir; the
             // watcher routes them to terminals as attention events. Cheap no-op
@@ -161,6 +165,13 @@ pub fn run() {
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,
+            commands::apikeys_list,
+            commands::apikeys_save,
+            commands::apikeys_remove,
+            commands::apikeys_set_enabled,
+            commands::apikeys_test,
+            commands::apikeys_detect_env,
+            commands::apikeys_import_env,
             #[cfg(feature = "remote-access")]
             commands::remote_start,
             #[cfg(feature = "remote-access")]

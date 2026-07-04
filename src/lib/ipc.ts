@@ -258,6 +258,34 @@ export interface DetectedGhAccount {
   email: string | null
 }
 
+export interface ApiKeyMeta {
+  id: string
+  /** preset id: anthropic | openai | deepseek | qwen | custom */
+  provider: string
+  label: string
+  /** env var carrying the secret, e.g. OPENAI_API_KEY */
+  keyEnvVar: string
+  /** non-secret env injected alongside the key (base URLs etc.) */
+  extraEnv: Record<string, string>
+  /** command auto-run in a terminal launched for this entry */
+  launchCommand: string | null
+  enabled: boolean
+  /** derived from the keychain; the secret itself never crosses IPC */
+  hasValue: boolean
+}
+
+export type ApiKeyEntry = Omit<ApiKeyMeta, 'hasValue'>
+
+export type ApiKeyTestResult =
+  | { status: 'ok' }
+  | { status: 'authFailed' }
+  | { status: 'unreachable'; message: string }
+
+export interface DetectedEnvKey {
+  envVar: string
+  maskedTail: string
+}
+
 /** Connectivity mode for remote access. */
 export type RemoteMode = 'cloudflare' | 'local' | 'tailscale'
 
@@ -455,6 +483,20 @@ export const ipc = {
       invoke<void>('identity_apply_global', { accountId }),
     detectGhAccounts: () =>
       invoke<DetectedGhAccount[]>('identity_detect_gh_accounts'),
+  },
+
+  apikeys: {
+    list: () => invoke<ApiKeyMeta[]>('apikeys_list'),
+    /** `secret` null/empty = keep the existing stored secret (write-only field). */
+    save: (entry: ApiKeyEntry, secret: string | null) =>
+      invoke<ApiKeyMeta[]>('apikeys_save', { entry, secret }),
+    remove: (id: string) => invoke<ApiKeyMeta[]>('apikeys_remove', { id }),
+    setEnabled: (id: string, enabled: boolean) =>
+      invoke<ApiKeyMeta[]>('apikeys_set_enabled', { id, enabled }),
+    test: (id: string) => invoke<ApiKeyTestResult>('apikeys_test', { id }),
+    detectEnv: () => invoke<DetectedEnvKey[]>('apikeys_detect_env'),
+    importEnv: (envVar: string, provider: string, label: string, launchCommand: string | null) =>
+      invoke<ApiKeyMeta[]>('apikeys_import_env', { envVar, provider, label, launchCommand }),
   },
 
   // Remote access (only present when the app is built with the `remote-access`

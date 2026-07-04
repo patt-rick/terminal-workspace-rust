@@ -21,6 +21,12 @@ body,
   height: 100%;
   margin: 0;
 }
+html {
+  /* Must be on the root element — since Chrome 93 overscroll-behavior does not
+     propagate from body to the viewport, so pull-to-refresh would still fire. */
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+}
 body {
   background: var(--bg);
   color: var(--fg);

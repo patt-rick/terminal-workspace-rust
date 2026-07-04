@@ -71,7 +71,7 @@ export function AccountPicker() {
               type="button"
               onClick={() => {
                 close()
-                openSettings()
+                openSettings('github')
               }}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90"
             >
@@ -115,7 +115,7 @@ export function AccountPicker() {
                 type="button"
                 onClick={() => {
                   close()
-                  openSettings()
+                  openSettings('github')
                 }}
                 className="text-xs text-link hover:underline"
               >
