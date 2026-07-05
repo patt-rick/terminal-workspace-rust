@@ -15,8 +15,11 @@ export interface TerminalSettings {
   /** Command run automatically in every new terminal tab. Empty = nothing. */
   startupCommand: string
   /**
-   * When true, every default Claude Code launch appends
-   * `--dangerously-skip-permissions`. The ⇧D shortcut always adds it regardless.
+   * When true, every AI CLI launch appends the CLI's own auto-approve flag
+   * (claude `--dangerously-skip-permissions`, codex
+   * `--dangerously-bypass-approvals-and-sandbox`, gemini/qwen `--yolo`, aider
+   * `--yes-always`). The ⇧D shortcut always adds Claude's regardless. Key name
+   * kept for stored-settings compatibility.
    */
   claudeSkipPermissions: boolean
 }

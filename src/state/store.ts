@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
 import { useSettings } from './settings'
-import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
+import { applySkipPermissions, linkClaudeSession } from './claude-command'
 
 // Re-exported so existing importers keep working; the implementation lives in
 // claude-command.ts so it can be unit tested without Tauri imports.
@@ -341,7 +341,7 @@ export async function createProjectTerminal(
   // spawn path (chooser, ⇧T/⇧D shortcuts, empty-state button, resume) inherits
   // it. Already-flagged commands (⇧D) are untouched — the flag is never doubled.
   if (startupCommand) {
-    startupCommand = applyClaudeSkipPermissions(
+    startupCommand = applySkipPermissions(
       startupCommand,
       useSettings.getState().terminal.claudeSkipPermissions
     )

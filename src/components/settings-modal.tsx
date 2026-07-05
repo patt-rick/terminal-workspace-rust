@@ -264,9 +264,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             />
           </Row>
           <div className="text-xs text-muted">
-            Starts Claude Code with{' '}
-            <code className="font-mono">--dangerously-skip-permissions</code>. Claude will not ask
-            for permission before running tools. Only enable this if you understand the risk.
+            Starts every AI CLI with its own auto-approve flag: Claude Code{' '}
+            <code className="font-mono">--dangerously-skip-permissions</code>, Codex{' '}
+            <code className="font-mono">--dangerously-bypass-approvals-and-sandbox</code>, Gemini
+            and Qwen <code className="font-mono">--yolo</code>, aider{' '}
+            <code className="font-mono">--yes-always</code>. The CLI will not ask for permission
+            before running tools. Only enable this if you understand the risk.
           </div>
                 <ClaudeHooksToggle />
               </Section>

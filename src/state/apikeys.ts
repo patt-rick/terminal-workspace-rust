@@ -13,7 +13,7 @@ import {
   withInstall,
   type PresenceCheck,
 } from '../lib/apikey-presets'
-import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
+import { applySkipPermissions, linkClaudeSession } from './claude-command'
 import { useSettings } from './settings'
 import { createProjectTerminal, useWorkspace } from './store'
 
@@ -131,10 +131,10 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
     const p = get().pendingInstall
     if (!p?.entry.launchCommand) return
     set({ pendingInstall: null })
-    // The Claude command transforms only match commands starting with `claude`,
+    // The command transforms only match commands starting with the CLI itself,
     // so they must run on the launch half before the install command is chained
     // in front — createProjectTerminal's own pass no-ops on the chained string.
-    const flagged = applyClaudeSkipPermissions(
+    const flagged = applySkipPermissions(
       p.entry.launchCommand,
       useSettings.getState().terminal.claudeSkipPermissions
     )

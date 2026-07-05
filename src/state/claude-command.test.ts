@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
+import { applySkipPermissions, linkClaudeSession } from './claude-command'
 
 const FLAG = '--dangerously-skip-permissions'
 
@@ -9,33 +9,70 @@ const FLAG = '--dangerously-skip-permissions'
  * final startup command string that gets injected into the PTY.
  */
 function buildStartupCommand(command: string, skipPermissions: boolean): string {
-  const withFlag = applyClaudeSkipPermissions(command, skipPermissions)
+  const withFlag = applySkipPermissions(command, skipPermissions)
   return linkClaudeSession(withFlag).startupCommand
 }
 
-describe('applyClaudeSkipPermissions', () => {
+describe('applySkipPermissions', () => {
   it('appends the flag to a bare claude launch when enabled', () => {
-    expect(applyClaudeSkipPermissions('claude', true)).toBe(`claude ${FLAG}`)
+    expect(applySkipPermissions('claude', true)).toBe(`claude ${FLAG}`)
   })
 
   it('leaves a bare claude launch untouched when disabled', () => {
-    expect(applyClaudeSkipPermissions('claude', false)).toBe('claude')
+    expect(applySkipPermissions('claude', false)).toBe('claude')
   })
 
   it('never duplicates the flag (⇧D command already has it)', () => {
-    expect(applyClaudeSkipPermissions(`claude ${FLAG}`, true)).toBe(`claude ${FLAG}`)
-    expect(applyClaudeSkipPermissions(`claude ${FLAG}`, false)).toBe(`claude ${FLAG}`)
+    expect(applySkipPermissions(`claude ${FLAG}`, true)).toBe(`claude ${FLAG}`)
+    expect(applySkipPermissions(`claude ${FLAG}`, false)).toBe(`claude ${FLAG}`)
   })
 
   it('appends the flag to a resume launch when enabled', () => {
-    expect(applyClaudeSkipPermissions('claude --resume abc123', true)).toBe(
+    expect(applySkipPermissions('claude --resume abc123', true)).toBe(
       `claude --resume abc123 ${FLAG}`
     )
   })
 
-  it('ignores non-claude commands even when enabled', () => {
-    expect(applyClaudeSkipPermissions('npm run dev', true)).toBe('npm run dev')
-    expect(applyClaudeSkipPermissions('claudia', true)).toBe('claudia')
+  it('ignores unknown commands even when enabled', () => {
+    expect(applySkipPermissions('npm run dev', true)).toBe('npm run dev')
+    expect(applySkipPermissions('claudia', true)).toBe('claudia')
+  })
+
+  it('gives every provider CLI its own auto-approve flag', () => {
+    expect(applySkipPermissions('codex', true)).toBe(
+      'codex --dangerously-bypass-approvals-and-sandbox'
+    )
+    expect(applySkipPermissions('gemini', true)).toBe('gemini --yolo')
+    expect(applySkipPermissions('qwen', true)).toBe('qwen --yolo')
+    expect(applySkipPermissions('aider --model x', true)).toBe('aider --model x --yes-always')
+    expect(applySkipPermissions('python -m aider --model deepseek/deepseek-chat', true)).toBe(
+      'python -m aider --model deepseek/deepseek-chat --yes-always'
+    )
+  })
+
+  it('leaves provider commands untouched when disabled', () => {
+    expect(applySkipPermissions('codex', false)).toBe('codex')
+    expect(applySkipPermissions('python -m aider --model x', false)).toBe(
+      'python -m aider --model x'
+    )
+  })
+
+  it('respects flags (and their aliases) the user already set', () => {
+    expect(applySkipPermissions('codex --yolo', true)).toBe('codex --yolo')
+    expect(
+      applySkipPermissions('codex --dangerously-bypass-approvals-and-sandbox', true)
+    ).toBe('codex --dangerously-bypass-approvals-and-sandbox')
+    expect(applySkipPermissions('gemini -y', true)).toBe('gemini -y')
+    expect(applySkipPermissions('qwen --yolo', true)).toBe('qwen --yolo')
+    expect(applySkipPermissions('python -m aider --yes-always', true)).toBe(
+      'python -m aider --yes-always'
+    )
+    expect(applySkipPermissions('aider --yes', true)).toBe('aider --yes')
+  })
+
+  it('no-ops on install chains (flags are applied to the launch half beforehand)', () => {
+    const chained = 'python -m pip install aider-chat ; python -m aider --model x --yes-always'
+    expect(applySkipPermissions(chained, true)).toBe(chained)
   })
 })
 
