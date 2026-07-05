@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { envConflicts, launchBlocker, PROVIDER_PRESETS, presetById } from './apikey-presets'
+import {
+  binaryFromCommand,
+  envConflicts,
+  launchBlocker,
+  nextLabel,
+  presetById,
+  PROVIDER_PRESETS,
+  withInstall,
+} from './apikey-presets'
 
 const entry = (
   id: string,
@@ -54,5 +62,72 @@ describe('launchBlocker', () => {
     expect(launchBlocker({ ...base, hasValue: false })).toBe('No API key stored')
     expect(launchBlocker({ ...base, launchCommand: null })).toBe('No launch command')
     expect(launchBlocker({ ...base, launchCommand: '' })).toBe('No launch command')
+  })
+})
+
+describe('expanded presets', () => {
+  it('covers the common providers', () => {
+    for (const id of [
+      'anthropic',
+      'openai',
+      'gemini',
+      'deepseek',
+      'grok',
+      'mistral',
+      'groq',
+      'openrouter',
+      'qwen',
+      'custom',
+    ])
+      expect(presetById(id), id).toBeDefined()
+  })
+
+  it('every non-custom preset is launchable out of the box', () => {
+    for (const p of PROVIDER_PRESETS) {
+      if (p.id === 'custom') {
+        expect(p.binaryName).toBeNull()
+        expect(p.installCommand).toBeNull()
+        continue
+      }
+      expect(p.launchCommand.length, p.id).toBeGreaterThan(0)
+      expect(p.binaryName, p.id).toBe(binaryFromCommand(p.launchCommand))
+      expect(p.installCommand?.length, p.id).toBeGreaterThan(0)
+      expect(p.keyEnvVar, p.id).toMatch(/^[A-Z][A-Z0-9_]*$/)
+    }
+  })
+
+  it('aider-based presets need no base-URL extra env (litellm reads native keys)', () => {
+    for (const id of ['deepseek', 'grok', 'mistral', 'groq', 'openrouter'])
+      expect(presetById(id)?.extraEnv).toEqual({})
+  })
+})
+
+describe('nextLabel', () => {
+  const openai = presetById('openai')!
+  it('replaces empty and preset-default labels on preset switch', () => {
+    expect(nextLabel('', openai)).toBe(openai.name)
+    expect(nextLabel('  ', openai)).toBe(openai.name)
+    expect(nextLabel('Anthropic / Claude', openai)).toBe(openai.name)
+  })
+  it('keeps a customized label', () => {
+    expect(nextLabel('work key', openai)).toBe('work key')
+  })
+})
+
+describe('binaryFromCommand', () => {
+  it('returns the first token, unquoted', () => {
+    expect(binaryFromCommand('aider --model deepseek/deepseek-chat')).toBe('aider')
+    expect(binaryFromCommand('codex')).toBe('codex')
+    expect(binaryFromCommand('"my tool" --flag')).toBe('my')
+    expect(binaryFromCommand("'aider' --x")).toBe('aider')
+    expect(binaryFromCommand('   ')).toBeNull()
+  })
+})
+
+describe('withInstall', () => {
+  it('chains install and launch with ";"', () => {
+    expect(withInstall('npm install -g @openai/codex', 'codex')).toBe(
+      'npm install -g @openai/codex ; codex'
+    )
   })
 })
