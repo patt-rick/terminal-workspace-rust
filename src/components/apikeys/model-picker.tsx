@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { launchBlocker, presetById } from '../../lib/apikey-presets'
 import { useApiKeys } from '../../state/apikeys'
-import { createProjectTerminal, useWorkspace } from '../../state/store'
 import { useUi } from '../../state/ui'
 
 /**
@@ -16,6 +15,7 @@ export function ModelPicker() {
   const loaded = useApiKeys((s) => s.loaded)
   const load = useApiKeys((s) => s.load)
   const close = useApiKeys((s) => s.closeLauncher)
+  const requestLaunch = useApiKeys((s) => s.requestLaunch)
   const openSettings = useUi((s) => s.openSettings)
 
   useEffect(() => {
@@ -24,15 +24,13 @@ export function ModelPicker() {
 
   if (!projectId) return null
 
+  const ready = keys.filter((k) => !launchBlocker(k))
+
   const onPick = async (id: string): Promise<void> => {
-    const k = keys.find((entry) => entry.id === id)
-    if (!k || launchBlocker(k) || !k.launchCommand) return
-    useWorkspace.getState().setProjectExpanded(projectId, true)
-    await createProjectTerminal(projectId, {
-      name: k.label,
-      startupCommand: k.launchCommand,
-    })
+    const k = ready.find((entry) => entry.id === id)
+    if (!k) return
     close()
+    await requestLaunch(projectId, k)
   }
 
   const toSettings = (): void => {
@@ -51,10 +49,10 @@ export function ModelPicker() {
       >
         <h2 className="mb-2 text-sm font-semibold">Use other models</h2>
 
-        {keys.length === 0 ? (
+        {ready.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs text-muted">
-              No models added yet. Add a provider API key first.
+              No providers are set up yet. Add a provider API key first.
             </p>
             <button
               type="button"
@@ -67,29 +65,23 @@ export function ModelPicker() {
         ) : (
           <>
             <div className="max-h-72 space-y-1 overflow-auto">
-              {keys.map((k) => {
-                const blocker = launchBlocker(k)
-                return (
-                  <button
-                    key={k.id}
-                    type="button"
-                    disabled={!!blocker}
-                    onClick={() => void onPick(k.id)}
-                    title={blocker ?? `Runs: ${k.launchCommand}`}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-foreground/5 disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="text-sm font-medium">{k.label}</span>
-                      <span className="ml-2 text-xs text-muted">
-                        {presetById(k.provider)?.name ?? k.provider}
-                      </span>
-                      <span className="block truncate text-xs text-muted">
-                        {blocker ?? k.launchCommand}
-                      </span>
+              {ready.map((k) => (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => void onPick(k.id)}
+                  title={`Runs: ${k.launchCommand}`}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-foreground/5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="text-sm font-medium">{k.label}</span>
+                    <span className="ml-2 text-xs text-muted">
+                      {presetById(k.provider)?.name ?? k.provider}
                     </span>
-                  </button>
-                )
-              })}
+                    <span className="block truncate text-xs text-muted">{k.launchCommand}</span>
+                  </span>
+                </button>
+              ))}
             </div>
             <div className="mt-3 flex items-center justify-between">
               <button
