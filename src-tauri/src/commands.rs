@@ -878,6 +878,10 @@ pub async fn apikeys_test(store: State<'_, ApiKeyStore>, id: String) -> AppResul
         {
             TestResult::AuthFailed
         }
+        // Gemini's OpenAI-compat endpoint signals a bad key with 400, not 401.
+        Ok(resp) if provider == "gemini" && resp.status() == reqwest::StatusCode::BAD_REQUEST => {
+            TestResult::AuthFailed
+        }
         Ok(resp) => TestResult::Unreachable {
             message: format!("HTTP {}", resp.status()),
         },
@@ -916,8 +920,9 @@ pub fn apikeys_import_env(
 }
 
 /// PATH lookup for a CLI binary, used by the prompt-then-install launch flow.
+/// Async so the filesystem scan runs off the main thread.
 #[tauri::command]
-pub fn binary_exists(name: String) -> bool {
+pub async fn binary_exists(name: String) -> bool {
     crate::apikeys::binary_on_path(&name)
 }
 

@@ -15,7 +15,7 @@ const KEYRING_SERVICE: &str = "com.patt-rick.terminalworkspace";
 #[serde(rename_all = "camelCase")]
 pub struct ApiKey {
     pub id: String,
-    /// preset id: anthropic | openai | deepseek | qwen | custom
+    /// preset id — see PROVIDER_PRESETS in src/lib/apikey-presets.ts for the full set
     pub provider: String,
     pub label: String,
     /// env var that carries the secret (e.g. OPENAI_API_KEY)
@@ -225,6 +225,13 @@ pub fn build_test_request(provider: &str, base_url: Option<&str>, secret: &str) 
                 ("x-api-key".to_string(), secret.to_string()),
                 ("anthropic-version".to_string(), "2023-06-01".to_string()),
             ],
+        }
+    } else if provider == "openrouter" && base_url.is_none() {
+        // OpenRouter's /models is public (200 without auth), so probe the
+        // authenticated /key endpoint instead — it 401s on a bad key.
+        TestRequest {
+            url: "https://openrouter.ai/api/v1/key".to_string(),
+            headers: vec![("Authorization".to_string(), format!("Bearer {secret}"))],
         }
     } else {
         let base = base_url.unwrap_or_else(|| default_base(provider)).trim_end_matches('/');
@@ -518,7 +525,7 @@ mod tests {
             ("grok", "https://api.x.ai/v1/models"),
             ("mistral", "https://api.mistral.ai/v1/models"),
             ("groq", "https://api.groq.com/openai/v1/models"),
-            ("openrouter", "https://openrouter.ai/api/v1/models"),
+            ("openrouter", "https://openrouter.ai/api/v1/key"),
             ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/models"),
             ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1/models"),
             ("custom", "https://api.openai.com/v1/models"),
@@ -526,6 +533,9 @@ mod tests {
         for (provider, url) in cases {
             assert_eq!(build_test_request(provider, None, "sk-x").url, url, "{provider}");
         }
+        // An explicit base override keeps the generic /models probe.
+        let r = build_test_request("openrouter", Some("https://proxy.example/v1"), "sk-x");
+        assert_eq!(r.url, "https://proxy.example/v1/models");
     }
 
     #[test]
