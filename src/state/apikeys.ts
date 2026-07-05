@@ -6,7 +6,13 @@ import {
   type ApiKeyTestResult,
   type DetectedEnvKey,
 } from '../lib/ipc'
-import { binaryFromCommand, presetById, withInstall } from '../lib/apikey-presets'
+import {
+  commandUsesCli,
+  presetById,
+  upgradeLaunchCommand,
+  withInstall,
+  type PresenceCheck,
+} from '../lib/apikey-presets'
 import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
 import { useSettings } from './settings'
 import { createProjectTerminal, useWorkspace } from './store'
@@ -22,8 +28,9 @@ interface ApiKeysState {
   pendingInstall: {
     projectId: string
     entry: ApiKeyMeta
-    binary: string
+    check: PresenceCheck
     installCommand: string
+    installUrl: string | null
   } | null
 
   load: () => Promise<void>
@@ -37,7 +44,7 @@ interface ApiKeysState {
   closeLauncher: () => void
 
   /**
-   * Launch an entry's CLI in a new terminal. When the binary is missing and
+   * Launch an entry's CLI in a new terminal. When the CLI is missing and
    * the preset knows an installer, opens the install prompt instead.
    */
   requestLaunch: (projectId: string, entry: ApiKeyMeta) => Promise<void>
@@ -53,7 +60,14 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
   pendingInstall: null,
 
   load: async () => {
-    const keys = await ipc.apikeys.list()
+    let keys = await ipc.apikeys.list()
+    // Persist preset-default fixes into entries saved by earlier releases.
+    for (const { hasValue: _, ...entry } of keys) {
+      const upgraded = upgradeLaunchCommand(entry.provider, entry.launchCommand)
+      if (upgraded !== entry.launchCommand) {
+        keys = await ipc.apikeys.save({ ...entry, launchCommand: upgraded }, null)
+      }
+    }
     set({ keys, loaded: true })
   },
 
@@ -92,15 +106,21 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
   requestLaunch: async (projectId, entry) => {
     if (!entry.launchCommand) return
     const preset = presetById(entry.provider)
-    const binary = binaryFromCommand(entry.launchCommand)
+    const check = preset?.check
     if (
-      binary &&
+      check &&
       preset?.installCommand &&
-      binary === preset.binaryName &&
-      !(await ipc.apikeys.binaryExists(binary))
+      commandUsesCli(entry.launchCommand, check) &&
+      !(await cliPresent(check))
     ) {
       set({
-        pendingInstall: { projectId, entry, binary, installCommand: preset.installCommand },
+        pendingInstall: {
+          projectId,
+          entry,
+          check,
+          installCommand: preset.installCommand,
+          installUrl: preset.installUrl,
+        },
       })
       return
     }
@@ -129,6 +149,12 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
 
   cancelInstall: () => set({ pendingInstall: null }),
 }))
+
+function cliPresent(check: PresenceCheck): Promise<boolean> {
+  return check.kind === 'binary'
+    ? ipc.apikeys.binaryExists(check.name)
+    : ipc.apikeys.pythonModuleExists(check.module)
+}
 
 async function launchTerminal(
   projectId: string,

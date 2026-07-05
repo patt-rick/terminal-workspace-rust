@@ -335,6 +335,32 @@ pub fn binary_on_path(name: &str) -> bool {
     find_in_paths(name, std::env::split_paths(&paths), &pathext)
 }
 
+/// True when `module` imports under the `python` (or `python3`) on PATH — the
+/// same resolution a `python -m <module>` launch will use. The name must be a
+/// bare identifier; anything else is refused before a process is spawned, so
+/// no untrusted text reaches `-c`. Unlike `binary_on_path` this fails closed:
+/// python missing or the probe erroring reports the module as absent, which
+/// surfaces the install prompt — the pip-based remedy — rather than launching
+/// a command that's guaranteed to fail.
+pub fn python_module_importable(module: &str) -> bool {
+    let mut chars = module.chars();
+    let is_ident = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !is_ident {
+        return false;
+    }
+    ["python", "python3"].iter().any(|exe| {
+        std::process::Command::new(exe)
+            .args(["-c", &format!("import {module}")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
 fn find_in_paths(
     name: &str,
     dirs: impl Iterator<Item = PathBuf>,
@@ -536,6 +562,16 @@ mod tests {
         // An explicit base override keeps the generic /models probe.
         let r = build_test_request("openrouter", Some("https://proxy.example/v1"), "sk-x");
         assert_eq!(r.url, "https://proxy.example/v1/models");
+    }
+
+    #[test]
+    fn python_module_check_rejects_non_identifiers_and_missing_modules() {
+        // Non-identifier names are refused before any process is spawned.
+        assert!(!python_module_importable(""));
+        assert!(!python_module_importable("aider; rm -rf /"));
+        assert!(!python_module_importable("aider chat"));
+        // A bogus module is false whether or not python itself is installed.
+        assert!(!python_module_importable("definitely_not_a_real_module_zz9"));
     }
 
     #[test]

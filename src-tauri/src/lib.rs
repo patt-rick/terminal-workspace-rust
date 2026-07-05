@@ -173,6 +173,7 @@ pub fn run() {
             commands::apikeys_detect_env,
             commands::apikeys_import_env,
             commands::binary_exists,
+            commands::python_module_exists,
             #[cfg(feature = "remote-access")]
             commands::remote_start,
             #[cfg(feature = "remote-access")]

@@ -926,6 +926,14 @@ pub async fn binary_exists(name: String) -> bool {
     crate::apikeys::binary_on_path(&name)
 }
 
+/// Import probe for a Python module, used by the prompt-then-install launch
+/// flow for `python -m` presets. Async so the interpreter spawn runs off the
+/// main thread.
+#[tauri::command]
+pub async fn python_module_exists(module: String) -> bool {
+    crate::apikeys::python_module_importable(&module)
+}
+
 // ---------- remote access (feature-gated) ----------
 
 #[cfg(feature = "remote-access")]

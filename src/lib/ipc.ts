@@ -499,6 +499,9 @@ export const ipc = {
       invoke<ApiKeyMeta[]>('apikeys_import_env', { envVar, provider, label, launchCommand }),
     /** PATH lookup for a CLI binary (prompt-then-install launch flow). */
     binaryExists: (name: string) => invoke<boolean>('binary_exists', { name }),
+    /** Import probe for a Python module (prompt-then-install launch flow). */
+    pythonModuleExists: (module: string) =>
+      invoke<boolean>('python_module_exists', { module }),
   },
 
   // Remote access (only present when the app is built with the `remote-access`

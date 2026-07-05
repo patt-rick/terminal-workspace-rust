@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   binaryFromCommand,
+  checkTarget,
+  commandUsesCli,
   envConflicts,
   launchBlocker,
   nextLabel,
   presetById,
   PROVIDER_PRESETS,
+  upgradeLaunchCommand,
   withInstall,
 } from './apikey-presets'
 
@@ -50,7 +53,9 @@ describe('presets', () => {
       if (p.id === 'custom') expect(p.launchCommand).toBe('')
       else expect(p.launchCommand.length).toBeGreaterThan(0)
     }
-    expect(presetById('deepseek')?.launchCommand).toBe('aider --model deepseek/deepseek-chat')
+    expect(presetById('deepseek')?.launchCommand).toBe(
+      'python -m aider --model deepseek/deepseek-chat'
+    )
   })
 })
 
@@ -85,14 +90,33 @@ describe('expanded presets', () => {
   it('every non-custom preset is launchable out of the box', () => {
     for (const p of PROVIDER_PRESETS) {
       if (p.id === 'custom') {
-        expect(p.binaryName).toBeNull()
+        expect(p.check).toBeNull()
         expect(p.installCommand).toBeNull()
         continue
       }
       expect(p.launchCommand.length, p.id).toBeGreaterThan(0)
-      expect(p.binaryName, p.id).toBe(binaryFromCommand(p.launchCommand))
+      expect(p.check, p.id).not.toBeNull()
+      expect(commandUsesCli(p.launchCommand, p.check!), p.id).toBe(true)
       expect(p.installCommand?.length, p.id).toBeGreaterThan(0)
       expect(p.keyEnvVar, p.id).toMatch(/^[A-Z][A-Z0-9_]*$/)
+    }
+  })
+
+  it('every installable preset links official install docs for manual installs', () => {
+    for (const p of PROVIDER_PRESETS) {
+      if (p.id === 'custom') expect(p.installUrl).toBeNull()
+      else expect(p.installUrl, p.id).toMatch(/^https:\/\//)
+    }
+    for (const id of ['deepseek', 'grok', 'mistral', 'groq', 'openrouter'])
+      expect(presetById(id)?.installUrl, id).toBe('https://aider.chat/docs/install.html')
+  })
+
+  it('aider presets never depend on PATH (pip console scripts often are not on it)', () => {
+    for (const id of ['deepseek', 'grok', 'mistral', 'groq', 'openrouter']) {
+      const p = presetById(id)!
+      expect(p.launchCommand, id).toMatch(/^python -m aider /)
+      expect(p.installCommand, id).toBe('python -m pip install aider-chat')
+      expect(p.check, id).toEqual({ kind: 'pythonModule', module: 'aider' })
     }
   })
 
@@ -121,6 +145,57 @@ describe('binaryFromCommand', () => {
     expect(binaryFromCommand('"my tool" --flag')).toBe('my')
     expect(binaryFromCommand("'aider' --x")).toBe('aider')
     expect(binaryFromCommand('   ')).toBeNull()
+  })
+})
+
+describe('commandUsesCli', () => {
+  const binary = { kind: 'binary', name: 'codex' } as const
+  const module = { kind: 'pythonModule', module: 'aider' } as const
+
+  it('binary checks match the command\'s first token', () => {
+    expect(commandUsesCli('codex --full-auto', binary)).toBe(true)
+    expect(commandUsesCli('"codex" resume', binary)).toBe(true)
+    expect(commandUsesCli('my-codex', binary)).toBe(false)
+    expect(commandUsesCli('npx codex', binary)).toBe(false)
+  })
+
+  it('python-module checks match `python -m <module>` invocations only', () => {
+    expect(commandUsesCli('python -m aider --model deepseek/deepseek-chat', module)).toBe(true)
+    expect(commandUsesCli('python3 -m aider', module)).toBe(true)
+    expect(commandUsesCli('python  -m  aider', module)).toBe(true)
+    expect(commandUsesCli('python -m aider_ci', module)).toBe(false)
+    expect(commandUsesCli('aider --model x', module)).toBe(false)
+    expect(commandUsesCli('python script.py', module)).toBe(false)
+  })
+
+  it('checkTarget names the CLI for the install prompt', () => {
+    expect(checkTarget(binary)).toBe('codex')
+    expect(checkTarget(module)).toBe('aider')
+  })
+})
+
+describe('upgradeLaunchCommand', () => {
+  it('rewrites stored stale preset defaults to the current preset command', () => {
+    expect(upgradeLaunchCommand('deepseek', 'aider --model deepseek/deepseek-chat')).toBe(
+      'python -m aider --model deepseek/deepseek-chat'
+    )
+    expect(upgradeLaunchCommand('grok', 'aider --model xai/grok-4')).toBe(
+      'python -m aider --model xai/grok-4'
+    )
+    expect(upgradeLaunchCommand('qwen', 'aider --model openai/qwen-plus')).toBe('qwen')
+  })
+
+  it('leaves user-customized, current, null and unknown-provider commands alone', () => {
+    expect(upgradeLaunchCommand('deepseek', 'aider --model deepseek/deepseek-coder')).toBe(
+      'aider --model deepseek/deepseek-coder'
+    )
+    expect(
+      upgradeLaunchCommand('deepseek', 'python -m aider --model deepseek/deepseek-chat')
+    ).toBe('python -m aider --model deepseek/deepseek-chat')
+    expect(upgradeLaunchCommand('deepseek', null)).toBeNull()
+    expect(upgradeLaunchCommand('nope', 'aider --model deepseek/deepseek-chat')).toBe(
+      'aider --model deepseek/deepseek-chat'
+    )
   })
 })
 
