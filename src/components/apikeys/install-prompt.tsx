@@ -20,7 +20,8 @@ export function InstallPrompt() {
             {pending.entry.label} launches <code>{pending.entry.launchCommand}</code>, but{' '}
             <code>{pending.binary}</code> wasn't found on your PATH. Install it now? The new
             terminal will run <code className="break-all">{pending.installCommand}</code> and
-            then start the CLI.
+            then start the CLI. If the CLI still isn't found after installing, restart the app
+            so it picks up the updated PATH.
           </>
         )
       }

@@ -188,7 +188,7 @@ Presets are just default field values; the underlying storage is generic. Exact 
 | **Groq** | `GROQ_API_KEY` | `aider --model groq/llama-3.3-70b-versatile` | `python -m pip install aider-install ; aider-install` |
 | **OpenRouter** | `OPENROUTER_API_KEY` | `aider --model openrouter/openrouter/auto` | `python -m pip install aider-install ; aider-install` |
 | **Qwen** | `DASHSCOPE_API_KEY` | `qwen` | `npm install -g @qwen-code/qwen-code` |
-| **Custom (OpenAI-compatible)** | user-defined | (empty) | — |
+| **Custom (OpenAI-compatible)** | `OPENAI_API_KEY` (editable) | (empty) | — |
 
 The aider-based presets (DeepSeek, Grok, Mistral, Groq, OpenRouter) rely on litellm's native
 `provider/model` prefixes, which read each provider's own key env var directly — no

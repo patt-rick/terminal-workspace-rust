@@ -7,6 +7,8 @@ import {
   type DetectedEnvKey,
 } from '../lib/ipc'
 import { binaryFromCommand, presetById, withInstall } from '../lib/apikey-presets'
+import { applyClaudeSkipPermissions, linkClaudeSession } from './claude-command'
+import { useSettings } from './settings'
 import { createProjectTerminal, useWorkspace } from './store'
 
 interface ApiKeysState {
@@ -109,10 +111,19 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
     const p = get().pendingInstall
     if (!p?.entry.launchCommand) return
     set({ pendingInstall: null })
+    // The Claude command transforms only match commands starting with `claude`,
+    // so they must run on the launch half before the install command is chained
+    // in front — createProjectTerminal's own pass no-ops on the chained string.
+    const flagged = applyClaudeSkipPermissions(
+      p.entry.launchCommand,
+      useSettings.getState().terminal.claudeSkipPermissions
+    )
+    const linked = linkClaudeSession(flagged)
     await launchTerminal(
       p.projectId,
       p.entry.label,
-      withInstall(p.installCommand, p.entry.launchCommand)
+      withInstall(p.installCommand, linked.startupCommand),
+      linked.sessionId
     )
   },
 
@@ -122,8 +133,9 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
 async function launchTerminal(
   projectId: string,
   name: string,
-  startupCommand: string
+  startupCommand: string,
+  claudeSessionId?: string
 ): Promise<void> {
   useWorkspace.getState().setProjectExpanded(projectId, true)
-  await createProjectTerminal(projectId, { name, startupCommand })
+  await createProjectTerminal(projectId, { name, startupCommand, claudeSessionId })
 }
