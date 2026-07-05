@@ -7,13 +7,13 @@ import { useApiKeys } from '../../state/apikeys'
  */
 export function InstallPrompt() {
   const pending = useApiKeys((s) => s.pendingInstall)
-  const confirm = useApiKeys((s) => s.confirmInstall)
+  const confirmInstall = useApiKeys((s) => s.confirmInstall)
   const cancel = useApiKeys((s) => s.cancelInstall)
 
   return (
     <ConfirmDialog
       open={!!pending}
-      title={`${pending?.binary} isn't installed`}
+      title={pending ? `${pending.binary} isn't installed` : ''}
       message={
         pending && (
           <>
@@ -25,7 +25,7 @@ export function InstallPrompt() {
         )
       }
       confirmLabel="Install & launch"
-      onConfirm={() => void confirm()}
+      onConfirm={() => void confirmInstall()}
       onCancel={cancel}
     />
   )

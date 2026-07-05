@@ -89,10 +89,17 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
 
   requestLaunch: async (projectId, entry) => {
     if (!entry.launchCommand) return
+    const preset = presetById(entry.provider)
     const binary = binaryFromCommand(entry.launchCommand)
-    const installCommand = presetById(entry.provider)?.installCommand ?? null
-    if (binary && installCommand && !(await ipc.apikeys.binaryExists(binary))) {
-      set({ pendingInstall: { projectId, entry, binary, installCommand } })
+    if (
+      binary &&
+      preset?.installCommand &&
+      binary === preset.binaryName &&
+      !(await ipc.apikeys.binaryExists(binary))
+    ) {
+      set({
+        pendingInstall: { projectId, entry, binary, installCommand: preset.installCommand },
+      })
       return
     }
     await launchTerminal(projectId, entry.label, entry.launchCommand)
