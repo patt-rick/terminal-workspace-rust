@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { type ApiKeyEntry, type ApiKeyMeta } from '../../lib/ipc'
-import { envConflicts, PROVIDER_PRESETS, presetById } from '../../lib/apikey-presets'
+import { envConflicts, nextLabel, PROVIDER_PRESETS, presetById } from '../../lib/apikey-presets'
 import { useApiKeys } from '../../state/apikeys'
-import { createProjectTerminal, useWorkspace } from '../../state/store'
+import { useWorkspace } from '../../state/store'
 import { useUi } from '../../state/ui'
 
 interface Draft {
@@ -16,6 +16,8 @@ interface Draft {
   /** write-only paste field; empty = keep the stored secret */
   secret: string
   hasValue: boolean
+  /** UI-only: show label/env/launch fields (auto-on for custom) */
+  advanced: boolean
 }
 
 const draftFromPreset = (presetId: string): Draft => {
@@ -30,6 +32,7 @@ const draftFromPreset = (presetId: string): Draft => {
     enabled: true,
     secret: '',
     hasValue: false,
+    advanced: p.id === 'custom',
   }
 }
 
@@ -43,6 +46,7 @@ const draftFromEntry = (k: ApiKeyMeta): Draft => ({
   enabled: k.enabled,
   secret: '',
   hasValue: k.hasValue,
+  advanced: false,
 })
 
 const entryFromDraft = (d: Draft): ApiKeyEntry => ({
@@ -76,16 +80,15 @@ export function ProvidersSection() {
   const detectEnv = useApiKeys((s) => s.detectEnv)
   const importEnv = useApiKeys((s) => s.importEnv)
 
+  const requestLaunch = useApiKeys((s) => s.requestLaunch)
+
   const selectedProjectId = useWorkspace((s) => s.selectedProjectId)
   const closeSettings = useUi((s) => s.closeSettings)
 
   const onLaunch = async (k: ApiKeyMeta): Promise<void> => {
     if (!selectedProjectId || !k.launchCommand) return
-    await createProjectTerminal(selectedProjectId, {
-      name: k.label,
-      startupCommand: k.launchCommand,
-    })
     closeSettings()
+    await requestLaunch(selectedProjectId, k)
   }
 
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -167,10 +170,11 @@ export function ProvidersSection() {
     setDraft({
       ...draft,
       provider: p.id,
-      label: draft.label || p.name,
+      label: nextLabel(draft.label, p),
       keyEnvVar: p.keyEnvVar,
       extraEnv: Object.entries(p.extraEnv).map(([name, value]) => ({ name, value })),
       launchCommand: p.launchCommand,
+      advanced: draft.advanced || p.id === 'custom',
     })
   }
 
@@ -311,12 +315,6 @@ export function ProvidersSection() {
               ))}
             </select>
           </label>
-          <Field
-            label="Label"
-            value={draft.label}
-            onChange={(v) => setDraft({ ...draft, label: v })}
-            placeholder="DeepSeek (personal)"
-          />
           <label className="block">
             <span className="text-xs text-muted">
               API key {draft.hasValue && '(leave blank to keep the current value)'}
@@ -330,67 +328,84 @@ export function ProvidersSection() {
               className="mt-0.5 w-full rounded border border-border bg-field-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
             />
           </label>
-          <Field
-            label="Key env var"
-            value={draft.keyEnvVar}
-            onChange={(v) => setDraft({ ...draft, keyEnvVar: v })}
-            placeholder="OPENAI_API_KEY"
-          />
-          <Field
-            label="Launch command (runs in the new terminal)"
-            value={draft.launchCommand}
-            onChange={(v) => setDraft({ ...draft, launchCommand: v })}
-            placeholder="aider --model deepseek/deepseek-chat"
-          />
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-xs text-muted">Extra env (base URLs etc. — not secret)</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setDraft({ ...draft, extraEnv: [...draft.extraEnv, { name: '', value: '' }] })
-                }
-                className="rounded border border-border px-2 py-0.5 text-xs hover:bg-foreground/5"
-              >
-                + Add pair
-              </button>
-            </div>
-            {draft.extraEnv.map((pair, i) => (
-              <div key={i} className="mb-1 flex items-center gap-1">
-                <input
-                  type="text"
-                  value={pair.name}
-                  placeholder="OPENAI_BASE_URL"
-                  onChange={(e) => {
-                    const extraEnv = [...draft.extraEnv]
-                    extraEnv[i] = { ...pair, name: e.target.value }
-                    setDraft({ ...draft, extraEnv })
-                  }}
-                  className="w-2/5 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
-                />
-                <input
-                  type="text"
-                  value={pair.value}
-                  placeholder="https://…"
-                  onChange={(e) => {
-                    const extraEnv = [...draft.extraEnv]
-                    extraEnv[i] = { ...pair, value: e.target.value }
-                    setDraft({ ...draft, extraEnv })
-                  }}
-                  className="flex-1 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    setDraft({ ...draft, extraEnv: draft.extraEnv.filter((_, j) => j !== i) })
-                  }
-                  className="rounded border border-border px-2 py-1 text-xs text-danger hover:bg-foreground/5"
-                >
-                  ✕
-                </button>
+          <button
+            type="button"
+            onClick={() => setDraft({ ...draft, advanced: !draft.advanced })}
+            className="self-start text-xs text-link hover:underline"
+          >
+            {draft.advanced ? 'Hide advanced' : 'Advanced…'}
+          </button>
+          {draft.advanced && (
+            <>
+              <Field
+                label="Label"
+                value={draft.label}
+                onChange={(v) => setDraft({ ...draft, label: v })}
+                placeholder="DeepSeek (personal)"
+              />
+              <Field
+                label="Key env var"
+                value={draft.keyEnvVar}
+                onChange={(v) => setDraft({ ...draft, keyEnvVar: v })}
+                placeholder="OPENAI_API_KEY"
+              />
+              <Field
+                label="Launch command (runs in the new terminal)"
+                value={draft.launchCommand}
+                onChange={(v) => setDraft({ ...draft, launchCommand: v })}
+                placeholder="aider --model deepseek/deepseek-chat"
+              />
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-xs text-muted">Extra env (base URLs etc. — not secret)</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDraft({ ...draft, extraEnv: [...draft.extraEnv, { name: '', value: '' }] })
+                    }
+                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-foreground/5"
+                  >
+                    + Add pair
+                  </button>
+                </div>
+                {draft.extraEnv.map((pair, i) => (
+                  <div key={i} className="mb-1 flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={pair.name}
+                      placeholder="OPENAI_BASE_URL"
+                      onChange={(e) => {
+                        const extraEnv = [...draft.extraEnv]
+                        extraEnv[i] = { ...pair, name: e.target.value }
+                        setDraft({ ...draft, extraEnv })
+                      }}
+                      className="w-2/5 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
+                    />
+                    <input
+                      type="text"
+                      value={pair.value}
+                      placeholder="https://…"
+                      onChange={(e) => {
+                        const extraEnv = [...draft.extraEnv]
+                        extraEnv[i] = { ...pair, value: e.target.value }
+                        setDraft({ ...draft, extraEnv })
+                      }}
+                      className="flex-1 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft({ ...draft, extraEnv: draft.extraEnv.filter((_, j) => j !== i) })
+                      }
+                      className="rounded border border-border px-2 py-1 text-xs text-danger hover:bg-foreground/5"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="button"
