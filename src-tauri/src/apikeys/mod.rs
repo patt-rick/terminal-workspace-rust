@@ -193,6 +193,22 @@ pub enum TestResult {
     Unreachable { message: String },
 }
 
+/// Default API base for the reachability test, for presets whose CLIs read the
+/// provider's native key env var (so entries carry no *_BASE_URL). An entry's
+/// explicit *_BASE_URL extra env still wins.
+fn default_base(provider: &str) -> &'static str {
+    match provider {
+        "deepseek" => "https://api.deepseek.com",
+        "grok" => "https://api.x.ai/v1",
+        "mistral" => "https://api.mistral.ai/v1",
+        "groq" => "https://api.groq.com/openai/v1",
+        "openrouter" => "https://openrouter.ai/api/v1",
+        "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
+        "qwen" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        _ => "https://api.openai.com/v1",
+    }
+}
+
 /// Build the auth-check request. Anthropic-format entries hit `<base>/v1/models`
 /// with `x-api-key`; everything else is OpenAI-format: `<base>/models` with a
 /// bearer token, where `<base>` is the entry's *_BASE_URL override as the CLI
@@ -211,9 +227,7 @@ pub fn build_test_request(provider: &str, base_url: Option<&str>, secret: &str) 
             ],
         }
     } else {
-        let base = base_url
-            .unwrap_or("https://api.openai.com/v1")
-            .trim_end_matches('/');
+        let base = base_url.unwrap_or_else(|| default_base(provider)).trim_end_matches('/');
         TestRequest {
             url: format!("{base}/models"),
             headers: vec![("Authorization".to_string(), format!("Bearer {secret}"))],
@@ -297,6 +311,44 @@ pub fn detect_candidates(
             })
         })
         .collect()
+}
+
+/// True when `name` resolves to a file on PATH. Windows also tries PATHEXT
+/// suffixes (an npm shim `codex` on disk is `codex.cmd`). Fails open — any
+/// resolution problem returns true so the check can never block a launch.
+pub fn binary_on_path(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return true;
+    };
+    let pathext = if cfg!(windows) {
+        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+    } else {
+        String::new()
+    };
+    find_in_paths(name, std::env::split_paths(&paths), &pathext)
+}
+
+fn find_in_paths(
+    name: &str,
+    dirs: impl Iterator<Item = PathBuf>,
+    pathext: &str,
+) -> bool {
+    let exts: Vec<String> = std::iter::once(String::new())
+        .chain(
+            pathext
+                .split(';')
+                .filter(|e| !e.is_empty())
+                .map(|e| e.to_ascii_lowercase()),
+        )
+        .collect();
+    for dir in dirs {
+        for ext in &exts {
+            if dir.join(format!("{name}{ext}")).is_file() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -457,6 +509,35 @@ mod tests {
     fn mask_tail_handles_short_values() {
         assert_eq!(mask_tail("ab"), "…ab");
         assert_eq!(mask_tail("sk-abcdef"), "…cdef");
+    }
+
+    #[test]
+    fn test_request_uses_provider_default_base() {
+        let cases = [
+            ("deepseek", "https://api.deepseek.com/models"),
+            ("grok", "https://api.x.ai/v1/models"),
+            ("mistral", "https://api.mistral.ai/v1/models"),
+            ("groq", "https://api.groq.com/openai/v1/models"),
+            ("openrouter", "https://openrouter.ai/api/v1/models"),
+            ("gemini", "https://generativelanguage.googleapis.com/v1beta/openai/models"),
+            ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1/models"),
+            ("custom", "https://api.openai.com/v1/models"),
+        ];
+        for (provider, url) in cases {
+            assert_eq!(build_test_request(provider, None, "sk-x").url, url, "{provider}");
+        }
+    }
+
+    #[test]
+    fn find_in_paths_matches_pathext_and_bare_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("aider.cmd"), "").unwrap();
+        fs::write(dir.path().join("rg"), "").unwrap();
+        let dirs = || vec![dir.path().to_path_buf()].into_iter();
+        assert!(find_in_paths("aider", dirs(), ".COM;.EXE;.BAT;.CMD"));
+        assert!(find_in_paths("rg", dirs(), ".COM;.EXE;.BAT;.CMD")); // bare file
+        assert!(find_in_paths("rg", dirs(), ""));
+        assert!(!find_in_paths("codex", dirs(), ".COM;.EXE;.BAT;.CMD"));
     }
 
     #[test]

@@ -915,6 +915,12 @@ pub fn apikeys_import_env(
     Ok(store.list())
 }
 
+/// PATH lookup for a CLI binary, used by the prompt-then-install launch flow.
+#[tauri::command]
+pub fn binary_exists(name: String) -> bool {
+    crate::apikeys::binary_on_path(&name)
+}
+
 // ---------- remote access (feature-gated) ----------
 
 #[cfg(feature = "remote-access")]
