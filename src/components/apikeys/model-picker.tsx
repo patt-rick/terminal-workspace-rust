@@ -52,7 +52,9 @@ export function ModelPicker() {
         {ready.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs text-muted">
-              No providers are set up yet. Add a provider API key first.
+              {keys.length === 0
+                ? 'No providers are set up yet. Add a provider API key first.'
+                : 'None of your providers are ready to launch. Enable one or add its API key in settings.'}
             </p>
             <button
               type="button"

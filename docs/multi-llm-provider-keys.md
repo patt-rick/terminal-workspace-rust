@@ -1,6 +1,10 @@
 # Architecture: Multi-LLM Provider Keys
 
-**Status:** Implemented (v1) — see `docs/superpowers/specs/2026-07-03-multi-llm-provider-keys-design.md` for the locked decisions.
+**Status:** Implemented (v1); extended by the v2 one-click provider setup (preset install/launch
+flow, binary-on-PATH checks, ready-only model picker) — see
+`docs/superpowers/specs/2026-07-03-multi-llm-provider-keys-design.md` for the original locked
+decisions and `docs/superpowers/specs/2026-07-05-one-click-provider-setup-design.md` for the v2
+design.
 **Goal:** Let users bring their own API keys for any LLM provider (Claude, ChatGPT/OpenAI,
 DeepSeek, Qwen, and anything OpenAI-compatible) so that agent CLIs launched in the app's
 terminals can use them. "Plug in what's needed and start working."
@@ -170,17 +174,26 @@ indicator, not the value.
 
 ## 8. Provider presets
 
-Presets are just default field values; the underlying storage is generic. **Exact base URLs and
-model ids must be verified against each provider's current docs at implementation time** — they
-change. Illustrative starting set:
+Presets are just default field values; the underlying storage is generic. Exact values live in
+`src/lib/apikey-presets.ts` — the table below mirrors it:
 
-| Preset | Key env var | Extra env (base URL) | Notes |
+| Preset | Key env var | Launch command | Install command |
 |---|---|---|---|
-| **Anthropic / Claude** | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` (optional) | Native to Claude Code. |
-| **OpenAI / ChatGPT** | `OPENAI_API_KEY` | — (default endpoint) | Used by codex, aider (`--model gpt-…`). |
-| **DeepSeek** | `DEEPSEEK_API_KEY` *or* `OPENAI_API_KEY` | `OPENAI_BASE_URL=https://api.deepseek.com` | OpenAI-compatible. aider has native `deepseek/…` models using `DEEPSEEK_API_KEY`. |
-| **Qwen (DashScope)** | `DASHSCOPE_API_KEY` *or* `OPENAI_API_KEY` | OpenAI-compatible DashScope endpoint | OpenAI-compatible mode; also a dedicated Qwen CLI exists. |
-| **Custom (OpenAI-compatible)** | user-defined | `OPENAI_BASE_URL=<user>` | OpenRouter, Groq, Together, local vLLM, etc. |
+| **Anthropic / Claude** | `ANTHROPIC_API_KEY` | `claude` | `npm install -g @anthropic-ai/claude-code` |
+| **OpenAI / ChatGPT** | `OPENAI_API_KEY` | `codex` | `npm install -g @openai/codex` |
+| **Google Gemini** | `GEMINI_API_KEY` | `gemini` | `npm install -g @google/gemini-cli` |
+| **DeepSeek** | `DEEPSEEK_API_KEY` | `aider --model deepseek/deepseek-chat` | `python -m pip install aider-install ; aider-install` |
+| **xAI Grok** | `XAI_API_KEY` | `aider --model xai/grok-4` | `python -m pip install aider-install ; aider-install` |
+| **Mistral** | `MISTRAL_API_KEY` | `aider --model mistral/mistral-large-latest` | `python -m pip install aider-install ; aider-install` |
+| **Groq** | `GROQ_API_KEY` | `aider --model groq/llama-3.3-70b-versatile` | `python -m pip install aider-install ; aider-install` |
+| **OpenRouter** | `OPENROUTER_API_KEY` | `aider --model openrouter/openrouter/auto` | `python -m pip install aider-install ; aider-install` |
+| **Qwen** | `DASHSCOPE_API_KEY` | `qwen` | `npm install -g @qwen-code/qwen-code` |
+| **Custom (OpenAI-compatible)** | user-defined | (empty) | — |
+
+The aider-based presets (DeepSeek, Grok, Mistral, Groq, OpenRouter) rely on litellm's native
+`provider/model` prefixes, which read each provider's own key env var directly — no
+`OPENAI_BASE_URL` juggling needed. Launch checks the CLI binary on PATH first and offers a
+prompt-then-install flow (`<install> ; <launch>`) when it's missing.
 
 Because "Custom" exists, **any** OpenAI-compatible provider is supported without a new preset.
 
