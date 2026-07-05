@@ -6,6 +6,8 @@ import {
   type ApiKeyTestResult,
   type DetectedEnvKey,
 } from '../lib/ipc'
+import { binaryFromCommand, presetById, withInstall } from '../lib/apikey-presets'
+import { createProjectTerminal, useWorkspace } from './store'
 
 interface ApiKeysState {
   keys: ApiKeyMeta[]
@@ -14,6 +16,13 @@ interface ApiKeysState {
   detected: DetectedEnvKey[]
   /** project the "Use other models" picker is open for; null = closed */
   launcherProjectId: string | null
+  /** launch blocked on a missing CLI, awaiting the user's install decision */
+  pendingInstall: {
+    projectId: string
+    entry: ApiKeyMeta
+    binary: string
+    installCommand: string
+  } | null
 
   load: () => Promise<void>
   save: (entry: ApiKeyEntry, secret: string | null) => Promise<void>
@@ -24,13 +33,22 @@ interface ApiKeysState {
   importEnv: (envVar: string, provider: string, label: string, launchCommand: string | null) => Promise<void>
   openLauncher: (projectId: string) => void
   closeLauncher: () => void
+
+  /**
+   * Launch an entry's CLI in a new terminal. When the binary is missing and
+   * the preset knows an installer, opens the install prompt instead.
+   */
+  requestLaunch: (projectId: string, entry: ApiKeyMeta) => Promise<void>
+  confirmInstall: () => Promise<void>
+  cancelInstall: () => void
 }
 
-export const useApiKeys = create<ApiKeysState>((set) => ({
+export const useApiKeys = create<ApiKeysState>((set, get) => ({
   keys: [],
   loaded: false,
   detected: [],
   launcherProjectId: null,
+  pendingInstall: null,
 
   load: async () => {
     const keys = await ipc.apikeys.list()
@@ -68,4 +86,37 @@ export const useApiKeys = create<ApiKeysState>((set) => ({
 
   openLauncher: (projectId) => set({ launcherProjectId: projectId }),
   closeLauncher: () => set({ launcherProjectId: null }),
+
+  requestLaunch: async (projectId, entry) => {
+    if (!entry.launchCommand) return
+    const binary = binaryFromCommand(entry.launchCommand)
+    const installCommand = presetById(entry.provider)?.installCommand ?? null
+    if (binary && installCommand && !(await ipc.apikeys.binaryExists(binary))) {
+      set({ pendingInstall: { projectId, entry, binary, installCommand } })
+      return
+    }
+    await launchTerminal(projectId, entry.label, entry.launchCommand)
+  },
+
+  confirmInstall: async () => {
+    const p = get().pendingInstall
+    if (!p?.entry.launchCommand) return
+    set({ pendingInstall: null })
+    await launchTerminal(
+      p.projectId,
+      p.entry.label,
+      withInstall(p.installCommand, p.entry.launchCommand)
+    )
+  },
+
+  cancelInstall: () => set({ pendingInstall: null }),
 }))
+
+async function launchTerminal(
+  projectId: string,
+  name: string,
+  startupCommand: string
+): Promise<void> {
+  useWorkspace.getState().setProjectExpanded(projectId, true)
+  await createProjectTerminal(projectId, { name, startupCommand })
+}

@@ -8,6 +8,7 @@ import { ConfirmDialog } from './components/confirm-dialog'
 import { SettingsModal } from './components/settings-modal'
 import { IdentityAutoApply } from './components/identity/identity-auto-apply'
 import { ModelPicker } from './components/apikeys/model-picker'
+import { InstallPrompt } from './components/apikeys/install-prompt'
 import { UpdateManager } from './components/update-manager'
 import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
@@ -354,6 +355,7 @@ export default function App() {
       <SettingsModal open={settingsOpen} onClose={closeSettings} />
       <IdentityAutoApply />
       <ModelPicker />
+      <InstallPrompt />
       <UpdateManager />
     </div>
   )

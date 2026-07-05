@@ -260,7 +260,7 @@ export interface DetectedGhAccount {
 
 export interface ApiKeyMeta {
   id: string
-  /** preset id: anthropic | openai | deepseek | qwen | custom */
+  /** preset id: anthropic | openai | gemini | deepseek | grok | mistral | groq | openrouter | qwen | custom */
   provider: string
   label: string
   /** env var carrying the secret, e.g. OPENAI_API_KEY */
@@ -497,6 +497,8 @@ export const ipc = {
     detectEnv: () => invoke<DetectedEnvKey[]>('apikeys_detect_env'),
     importEnv: (envVar: string, provider: string, label: string, launchCommand: string | null) =>
       invoke<ApiKeyMeta[]>('apikeys_import_env', { envVar, provider, label, launchCommand }),
+    /** PATH lookup for a CLI binary (prompt-then-install launch flow). */
+    binaryExists: (name: string) => invoke<boolean>('binary_exists', { name }),
   },
 
   // Remote access (only present when the app is built with the `remote-access`
