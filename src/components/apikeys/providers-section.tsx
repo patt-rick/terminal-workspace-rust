@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react'
 import { type ApiKeyEntry, type ApiKeyMeta } from '../../lib/ipc'
-import { envConflicts, nextLabel, PROVIDER_PRESETS, presetById } from '../../lib/apikey-presets'
+import {
+  envConflicts,
+  launchBlocker,
+  nextLabel,
+  PROVIDER_PRESETS,
+  presetById,
+} from '../../lib/apikey-presets'
 import { useApiKeys } from '../../state/apikeys'
 import { useWorkspace } from '../../state/store'
 import { useUi } from '../../state/ui'
+
+const ENV_VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 interface Draft {
   id: string
@@ -126,7 +134,7 @@ export function ProvidersSection() {
   const canSave =
     !!draft &&
     !!draft.label.trim() &&
-    /^[A-Za-z_][A-Za-z0-9_]*$/.test(draft.keyEnvVar.trim()) &&
+    ENV_VAR_RE.test(draft.keyEnvVar.trim()) &&
     (draft.hasValue || !!draft.secret.trim())
 
   const onSave = async (): Promise<void> => {
@@ -203,6 +211,7 @@ export function ProvidersSection() {
         {keys.length === 0 && <div className="py-1 text-xs text-muted">No provider keys yet.</div>}
         {keys.map((k) => {
           const note = conflictNote(k)
+          const blocker = !selectedProjectId ? 'Select a project first' : launchBlocker(k)
           return (
             <div key={k.id} className="rounded-md border border-border px-3 py-2">
               <div className="flex items-center gap-2">
@@ -229,19 +238,9 @@ export function ProvidersSection() {
                 </label>
                 <button
                   type="button"
-                  disabled={!k.enabled || !k.hasValue || !k.launchCommand || !selectedProjectId}
+                  disabled={!!blocker}
                   onClick={() => void onLaunch(k)}
-                  title={
-                    !selectedProjectId
-                      ? 'Select a project first'
-                      : !k.launchCommand
-                        ? 'Set a launch command on this entry'
-                        : !k.hasValue
-                          ? 'No API key stored'
-                          : !k.enabled
-                            ? 'Entry is disabled'
-                            : `Open a terminal running: ${k.launchCommand}`
-                  }
+                  title={blocker ?? `Open a terminal running: ${k.launchCommand}`}
                   className="rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5 disabled:opacity-50"
                 >
                   ▶ Launch
@@ -301,6 +300,9 @@ export function ProvidersSection() {
       {/* add / edit form */}
       {draft && (
         <div className="mt-3 flex flex-col gap-2 rounded-md border border-border p-3">
+          <div className="text-xs font-semibold text-foreground">
+            {draft.hasValue ? `Edit "${draft.label}"` : 'Add provider key'}
+          </div>
           <label className="block">
             <span className="text-xs text-muted">Provider preset</span>
             <select
@@ -328,6 +330,12 @@ export function ProvidersSection() {
               className="mt-0.5 w-full rounded border border-border bg-field-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
             />
           </label>
+          {!draft.advanced && (
+            <p className="text-xs text-muted">
+              Stored as {draft.keyEnvVar}
+              {draft.launchCommand ? ` · launches ${draft.launchCommand}` : ''}
+            </p>
+          )}
           <button
             type="button"
             onClick={() => setDraft({ ...draft, advanced: !draft.advanced })}
@@ -406,7 +414,12 @@ export function ProvidersSection() {
               </div>
             </>
           )}
-          <div className="flex justify-end gap-2 pt-1">
+          <div className="flex items-center justify-end gap-2 pt-1">
+            {!canSave &&
+              !draft.advanced &&
+              (!draft.label.trim() || !ENV_VAR_RE.test(draft.keyEnvVar.trim())) && (
+                <span className="text-xs text-danger">Fix the label or env var under Advanced</span>
+              )}
             <button
               type="button"
               onClick={() => setDraft(null)}
