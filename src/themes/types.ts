@@ -75,9 +75,23 @@ export interface SyntaxTokens {
   link: string
 }
 
+/**
+ * Optional decorative gradients layered over the solid color tokens. Each value
+ * is a full CSS gradient function string (e.g. `linear-gradient(...)`). They are
+ * applied only to chrome surfaces — the terminal and editor keep solid
+ * backgrounds so xterm/CodeMirror rendering and text legibility are unaffected.
+ */
+export interface GradientTokens {
+  /** Window backdrop, painted on `body` behind the chrome. */
+  app?: string
+  /** The custom title bar background. */
+  titleBar?: string
+}
+
 export interface Theme {
   meta: { id: string; name: string; appearance: Appearance }
   chrome: ChromeTokens
   terminal: TerminalTokens
   syntax: SyntaxTokens
+  gradients?: GradientTokens
 }

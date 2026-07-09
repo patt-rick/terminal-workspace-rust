@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react'
+import { useEffect, useLayoutEffect } from 'react'
 import { applyTheme, resolveTheme, THEMES } from './index'
 import { useSettings } from '../state/settings'
 
@@ -15,6 +15,20 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useLayoutEffect(() => {
     applyTheme(resolveTheme(themeId, customThemes))
   }, [themeId, customThemes])
+
+  // Daily shuffle: run on mount, then re-check on a minute timer and on window
+  // focus so a window left open across midnight still rolls over. The store's
+  // date guard makes every call after the first of the day a no-op.
+  useEffect(() => {
+    const run = (): void => useSettings.getState().applyDailyShuffle()
+    run()
+    const timer = window.setInterval(run, 60_000)
+    window.addEventListener('focus', run)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', run)
+    }
+  }, [])
 
   return children
 }

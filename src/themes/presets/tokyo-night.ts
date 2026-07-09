@@ -63,4 +63,8 @@ export const tokyoNight: Theme = {
     heading: '#7aa2f7',
     link: '#7dcfff',
   },
+  gradients: {
+    app: 'linear-gradient(160deg, #16161e 0%, #1a1b26 55%, #24283b 100%)',
+    titleBar: 'linear-gradient(90deg, #16161e 0%, #292e42 100%)',
+  },
 }

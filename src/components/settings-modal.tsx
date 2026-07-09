@@ -29,6 +29,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const addCustomTheme = useSettings((s) => s.addCustomTheme)
   const removeCustomTheme = useSettings((s) => s.removeCustomTheme)
   const activeTheme = useActiveTheme()
+  const themeShuffle = useSettings((s) => s.themeShuffle)
+  const setThemeShuffle = useSettings((s) => s.setThemeShuffle)
   const editor = useSettings((s) => s.editor)
   const updateEditor = useSettings((s) => s.updateEditor)
   const terminal = useSettings((s) => s.terminal)
@@ -176,6 +178,13 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               )}
             </select>
           </Row>
+          <Row label="Surprise me daily">
+            <Toggle checked={themeShuffle} onChange={setThemeShuffle} />
+          </Row>
+          <div className="text-xs text-muted">
+            Automatically switch to a different theme once a day. Flip it on for an
+            instant change.
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"

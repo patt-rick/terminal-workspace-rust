@@ -27,6 +27,29 @@ function isColor(v: unknown): v is string {
   return typeof v === 'string' && v.trim().length > 0 && COLOR.test(v.trim())
 }
 
+// Gradients are also injected as CSS custom property values, so the same
+// injection concern applies. Allow only the CSS gradient functions with an
+// inner character set that covers colors, angles, stops, and keywords —
+// crucially excluding `;`, `{`, `}`, and quotes that could break out of the
+// declaration, plus `url` (which the char set already forbids via `:` and `/`).
+const GRADIENT = /^(repeating-)?(linear|radial|conic)-gradient\(\s*[a-zA-Z0-9#.,%()\s-]+\)$/
+
+function isGradient(v: unknown): v is string {
+  return typeof v === 'string' && GRADIENT.test(v.trim())
+}
+
+// Every optional gradient key and the group name for error messages.
+const GRADIENT_KEYS = ['app', 'titleBar'] as const
+
+function checkGradients(obj: Record<string, unknown>): string | null {
+  for (const key of GRADIENT_KEYS) {
+    const v = obj[key]
+    if (v === undefined) continue // optional
+    if (!isGradient(v)) return `Invalid gradient for gradients.${key}: ${JSON.stringify(v)}`
+  }
+  return null
+}
+
 export function slugify(name: string): string {
   const base = name
     .toLowerCase()
@@ -94,6 +117,21 @@ export function parseThemeJson(raw: string): ParseResult {
   const syntaxErr = checkColors(syntax, SYNTAX_KEYS, 'syntax')
   if (syntaxErr) return { ok: false, error: syntaxErr }
 
+  // Gradients are optional; validate only the keys that are present.
+  let gradients: Theme['gradients']
+  if (t.gradients !== undefined) {
+    if (typeof t.gradients !== 'object' || t.gradients === null) {
+      return { ok: false, error: 'gradients must be a JSON object.' }
+    }
+    const g = t.gradients as Record<string, unknown>
+    const gradientErr = checkGradients(g)
+    if (gradientErr) return { ok: false, error: gradientErr }
+    gradients = {
+      ...(typeof g.app === 'string' ? { app: g.app.trim() } : {}),
+      ...(typeof g.titleBar === 'string' ? { titleBar: g.titleBar.trim() } : {}),
+    }
+  }
+
   const theme: Theme = {
     meta: {
       id: slugify(meta.name),
@@ -103,6 +141,7 @@ export function parseThemeJson(raw: string): ParseResult {
     chrome: chrome as unknown as Theme['chrome'],
     terminal: terminal as unknown as Theme['terminal'],
     syntax: syntax as unknown as Theme['syntax'],
+    ...(gradients ? { gradients } : {}),
   }
   return { ok: true, theme }
 }

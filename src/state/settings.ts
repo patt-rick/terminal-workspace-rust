@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { DEFAULT_THEME_ID } from '../themes'
+import { DEFAULT_THEME_ID, THEMES } from '../themes'
 import type { Theme } from '../themes'
 
 export interface EditorSettings {
@@ -40,6 +40,10 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
 
 export interface Settings {
   themeId: string
+  /** When true, a new theme is auto-selected once per calendar day. */
+  themeShuffle: boolean
+  /** Local `YYYY-MM-DD` the shuffle last fired; guards to once per day. */
+  lastShuffleDate: string | null
   editor: EditorSettings
   terminal: TerminalSettings
   /** User-imported themes; merged with the built-in presets at runtime. */
@@ -48,6 +52,8 @@ export interface Settings {
 
 export const SETTINGS_DEFAULTS: Settings = {
   themeId: DEFAULT_THEME_ID,
+  themeShuffle: false,
+  lastShuffleDate: null,
   editor: EDITOR_DEFAULTS,
   terminal: TERMINAL_DEFAULTS,
   customThemes: [],
@@ -64,6 +70,8 @@ export function readStoredSettings(): Settings {
     const parsed = JSON.parse(raw) as Partial<Settings>
     return {
       themeId: parsed.themeId ?? SETTINGS_DEFAULTS.themeId,
+      themeShuffle: parsed.themeShuffle ?? SETTINGS_DEFAULTS.themeShuffle,
+      lastShuffleDate: parsed.lastShuffleDate ?? SETTINGS_DEFAULTS.lastShuffleDate,
       editor: { ...EDITOR_DEFAULTS, ...parsed.editor },
       terminal: { ...TERMINAL_DEFAULTS, ...parsed.terminal },
       customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes : [],
@@ -83,6 +91,14 @@ function persistLocal(s: Settings): void {
 
 interface SettingsState extends Settings {
   setThemeId: (id: string) => void
+  /** Toggle daily theme shuffle. Enabling it applies a fresh theme immediately. */
+  setThemeShuffle: (enabled: boolean) => void
+  /**
+   * Pick a new random theme if shuffle is on and it hasn't fired today. Cheap
+   * and idempotent to call repeatedly (guarded by the stored date), so it can
+   * run on launch and on a timer to catch a midnight rollover.
+   */
+  applyDailyShuffle: () => void
   updateEditor: (patch: Partial<EditorSettings>) => void
   updateTerminal: (patch: Partial<TerminalSettings>) => void
   /**
@@ -104,6 +120,26 @@ function uniqueThemeId(base: string, taken: Set<string>): string {
   return `${base}-${n}`
 }
 
+// Local calendar day as `YYYY-MM-DD`; the shuffle keys off the user's own day.
+function localDateKey(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+// Every selectable theme id (built-in presets + imported custom themes).
+function themePool(customThemes: Theme[]): string[] {
+  return [...THEMES.map((t) => t.meta.id), ...customThemes.map((t) => t.meta.id)]
+}
+
+// A random theme id from the pool that isn't `current`; falls back to `current`
+// when the pool has no alternative.
+function pickDifferentTheme(current: string, customThemes: Theme[]): string {
+  const options = themePool(customThemes).filter((id) => id !== current)
+  if (options.length === 0) return current
+  return options[Math.floor(Math.random() * options.length)]
+}
+
 // Injected by the IPC layer once available, so this store has no hard Tauri
 // dependency (keeps the frontend runnable in a plain browser for dev).
 let backendSync: ((s: Settings) => void) | null = null
@@ -113,8 +149,8 @@ export function setSettingsBackendSync(fn: (s: Settings) => void): void {
 
 export const useSettings = create<SettingsState>((set, get) => {
   const snapshot = (): Settings => {
-    const { themeId, editor, terminal, customThemes } = get()
-    return { themeId, editor, terminal, customThemes }
+    const { themeId, themeShuffle, lastShuffleDate, editor, terminal, customThemes } = get()
+    return { themeId, themeShuffle, lastShuffleDate, editor, terminal, customThemes }
   }
   const commit = (): void => {
     const s = snapshot()
@@ -126,6 +162,30 @@ export const useSettings = create<SettingsState>((set, get) => {
     ...initial,
     setThemeId: (id) => {
       set({ themeId: id })
+      commit()
+    },
+    setThemeShuffle: (enabled) => {
+      if (enabled) {
+        // Apply a fresh theme right away so the effect is immediate, and stamp
+        // today so applyDailyShuffle waits until tomorrow to fire again.
+        set((state) => ({
+          themeShuffle: true,
+          themeId: pickDifferentTheme(state.themeId, state.customThemes),
+          lastShuffleDate: localDateKey(),
+        }))
+      } else {
+        set({ themeShuffle: false })
+      }
+      commit()
+    },
+    applyDailyShuffle: () => {
+      const { themeShuffle, lastShuffleDate } = get()
+      const today = localDateKey()
+      if (!themeShuffle || lastShuffleDate === today) return
+      set((state) => ({
+        themeId: pickDifferentTheme(state.themeId, state.customThemes),
+        lastShuffleDate: today,
+      }))
       commit()
     },
     updateEditor: (patch) => {
@@ -154,6 +214,8 @@ export const useSettings = create<SettingsState>((set, get) => {
     replaceAll: (s) => {
       set({
         themeId: s.themeId,
+        themeShuffle: s.themeShuffle ?? false,
+        lastShuffleDate: s.lastShuffleDate ?? null,
         editor: s.editor,
         terminal: s.terminal,
         customThemes: s.customThemes,

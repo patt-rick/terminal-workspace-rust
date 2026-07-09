@@ -60,6 +60,18 @@ export function applyTheme(theme: Theme): void {
     root.style.setProperty(`--syntax-${kebab(key)}`, value)
   }
 
+  // Optional gradients: written as vars when present, cleared otherwise so a
+  // theme without them falls back to its solid surface (see globals.css).
+  const gradients: Record<keyof NonNullable<Theme['gradients']>, string> = {
+    app: '--gradient-app',
+    titleBar: '--gradient-title-bar',
+  }
+  for (const [key, prop] of Object.entries(gradients)) {
+    const value = theme.gradients?.[key as keyof NonNullable<Theme['gradients']>]
+    if (value) root.style.setProperty(prop, value)
+    else root.style.removeProperty(prop)
+  }
+
   root.setAttribute('data-theme', theme.meta.id)
   root.classList.toggle('dark', theme.meta.appearance === 'dark')
   root.classList.toggle('light', theme.meta.appearance === 'light')
