@@ -1,4 +1,5 @@
 import { WindowControls } from './window-controls'
+import { AccountPill } from './claude-accounts/account-pill'
 import { isTauri } from '../lib/ipc'
 import appIcon from '../../src-tauri/icons/32x32.png'
 
@@ -16,7 +17,10 @@ export function TitleBar() {
         <img src={appIcon} alt="" className="h-4 w-4" />
         <span>Terminal Workspace</span>
       </div>
-      <WindowControls />
+      <div className="flex items-stretch gap-2 pr-1">
+        <AccountPill />
+        <WindowControls />
+      </div>
     </header>
   )
 }
