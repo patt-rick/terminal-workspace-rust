@@ -5,6 +5,7 @@
 pub mod hooks;
 pub mod creds;
 pub mod accounts;
+pub mod oauth;
 pub mod usage;
 
 use crate::error::{AppError, AppResult};
