@@ -3,6 +3,7 @@
 //! summarize them so the UI can list and resume past sessions.
 
 pub mod hooks;
+pub mod creds;
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
