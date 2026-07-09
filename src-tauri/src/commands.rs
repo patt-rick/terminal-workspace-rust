@@ -1,4 +1,5 @@
 use crate::apikeys::{ApiKey, ApiKeyMeta, ApiKeyStore, DetectedEnvKey, TestResult};
+use crate::claude::accounts::{CachedUsage, ClaudeAccount, ClaudeAccountStore, ClaudeAccountsList};
 use crate::error::{AppError, AppResult};
 use crate::fs::{FsEntry, ReadResult};
 use crate::git::discover::RepoInfo;
@@ -932,6 +933,389 @@ pub async fn binary_exists(name: String) -> bool {
 #[tauri::command]
 pub async fn python_module_exists(module: String) -> bool {
     crate::apikeys::python_module_importable(&module)
+}
+
+// ---------- claude accounts ----------
+
+/// Cancel flag for the (single) in-flight OAuth login. Starting a new login
+/// cancels any previous one.
+#[derive(Default)]
+pub struct ClaudeOauthFlow {
+    cancel: parking_lot::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl ClaudeOauthFlow {
+    fn begin(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        let mut slot = self.cancel.lock();
+        if let Some(old) = slot.take() {
+            old.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *slot = Some(flag.clone());
+        flag
+    }
+
+    pub fn cancel_pending(&self) {
+        if let Some(flag) = self.cancel.lock().take() {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+fn http_client() -> AppResult<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Msg(e.to_string()))
+}
+
+/// Strip ambient Claude credential env vars from new terminals while a
+/// managed login account is active, so the credentials file decides auth.
+pub fn claude_ambient_env_remove(app: &AppHandle) -> Vec<String> {
+    if app.state::<ClaudeAccountStore>().has_active_login_account() {
+        crate::claude::accounts::AMBIENT_CLAUDE_ENV
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Absorb credential-file drift: when the CLI refreshed tokens (file token !=
+/// last synced), identify the file's account via the profile endpoint and
+/// update that account's stored credentials. Best-effort — any failure skips.
+async fn capture_credentials_drift(
+    app: &AppHandle,
+    store: &ClaudeAccountStore,
+    client: &reqwest::Client,
+) {
+    let Ok(home) = home_dir(app) else { return };
+    let path = crate::claude::creds::credentials_path(&home);
+    let Some(file_creds) = crate::claude::creds::read_credentials_file(&path) else {
+        return;
+    };
+    let Some(file_token) = crate::claude::creds::creds_str(&file_creds, "accessToken") else {
+        return;
+    };
+    if store.last_synced_access_token().as_deref() == Some(file_token.as_str()) {
+        return; // no drift
+    }
+    let Ok(profile) = crate::claude::oauth::fetch_profile(client, &file_token).await else {
+        return; // can't attribute — leave for next time
+    };
+    if let Some(account) = store.account_by_email(&profile.email) {
+        if store.set_creds(&account.id, &file_creds).is_ok() {
+            store.set_last_synced_access_token(Some(file_token));
+            store.set_refresh_dead(&account.id, false);
+        }
+    }
+}
+
+/// Return fresh credentials for an account, refreshing through the token
+/// endpoint when inside the expiry buffer. Rotated tokens persist to the
+/// keychain before anything else happens.
+async fn ensure_fresh_creds(
+    store: &ClaudeAccountStore,
+    client: &reqwest::Client,
+    id: &str,
+) -> AppResult<serde_json::Value> {
+    let mut creds = store
+        .creds(id)
+        .ok_or_else(|| AppError::Msg("no token stored — log in again".to_string()))?;
+    let expires_at = crate::claude::creds::creds_i64(&creds, "expiresAt");
+    let now = crate::claude::creds::now_ms();
+    if !crate::claude::creds::needs_refresh(expires_at, now) {
+        return Ok(creds);
+    }
+    let refresh_token = crate::claude::creds::creds_str(&creds, "refreshToken")
+        .ok_or_else(|| AppError::Msg("no refresh token — log in again".to_string()))?;
+    match crate::claude::oauth::do_refresh(client, &refresh_token).await {
+        crate::claude::oauth::RefreshOutcome::Fresh(t) => {
+            let obj = creds.as_object_mut().expect("creds blob is an object");
+            obj.insert("accessToken".into(), t.access_token.clone().into());
+            obj.insert("refreshToken".into(), t.refresh_token.into());
+            obj.insert(
+                "expiresAt".into(),
+                serde_json::Value::from(now + t.expires_in * 1000),
+            );
+            store.set_creds(id, &creds)?;
+            store.set_refresh_dead(id, false);
+            Ok(creds)
+        }
+        crate::claude::oauth::RefreshOutcome::Dead => {
+            store.set_refresh_dead(id, true);
+            Err(AppError::Msg("session expired — log in again".to_string()))
+        }
+        crate::claude::oauth::RefreshOutcome::Transient(msg) => {
+            // Token may still be usable if not FULLY expired (buffer only).
+            if expires_at.is_some_and(|exp| now < exp) {
+                Ok(creds)
+            } else {
+                Err(AppError::Msg(format!("token refresh failed: {msg}")))
+            }
+        }
+    }
+}
+
+/// Write an account's credentials to ~/.claude/.credentials.json and record
+/// it as active. Also disables enabled Anthropic provider keys so
+/// ANTHROPIC_API_KEY doesn't override the login in new claude sessions.
+fn activate_login_account(
+    app: &AppHandle,
+    store: &ClaudeAccountStore,
+    creds: &serde_json::Value,
+    id: &str,
+) -> AppResult<()> {
+    let home = home_dir(app)?;
+    let path = crate::claude::creds::credentials_path(&home);
+    crate::claude::creds::write_credentials_file(&path, creds)?;
+    store.set_active(Some(id.to_string()));
+    store.set_last_synced_access_token(crate::claude::creds::creds_str(creds, "accessToken"));
+    let apikeys = app.state::<ApiKeyStore>();
+    for k in apikeys.keys_snapshot() {
+        if k.provider == "anthropic" && k.enabled {
+            apikeys.set_enabled(&k.id, false);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_accounts_list(store: State<ClaudeAccountStore>) -> ClaudeAccountsList {
+    store.list()
+}
+
+#[tauri::command]
+pub async fn claude_accounts_add_via_oauth(
+    app: AppHandle,
+    store: State<'_, ClaudeAccountStore>,
+    flow: State<'_, ClaudeOauthFlow>,
+    login_hint: Option<String>,
+) -> AppResult<ClaudeAccountsList> {
+    let cancel = flow.begin();
+    let (verifier, challenge) = crate::claude::oauth::pkce_pair();
+    let state_param = crate::claude::oauth::random_state();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| AppError::Msg(format!("could not bind callback port: {e}")))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| AppError::Msg(e.to_string()))?
+        .port();
+    let redirect_uri = format!("http://localhost:{port}/callback");
+    let url = crate::claude::oauth::build_authorize_url(
+        &challenge,
+        &state_param,
+        port,
+        login_hint.as_deref(),
+    );
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<String>)
+        .map_err(|e| AppError::Msg(format!("could not open browser: {e}")))?;
+
+    let expected = state_param.clone();
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        crate::claude::oauth::wait_for_callback(
+            listener,
+            &expected,
+            cancel,
+            crate::claude::oauth::LOGIN_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))??;
+
+    let client = http_client()?;
+    let tokens =
+        crate::claude::oauth::exchange_code(&client, &code, &verifier, &redirect_uri, &state_param)
+            .await?;
+    let now = crate::claude::creds::now_ms();
+    let creds = serde_json::json!({
+        "accessToken": tokens.access_token,
+        "refreshToken": tokens.refresh_token,
+        "expiresAt": now + tokens.expires_in * 1000,
+        "scopes": crate::claude::oauth::OAUTH_SCOPES,
+    });
+    let profile = crate::claude::oauth::fetch_profile(&client, &tokens.access_token).await?;
+
+    // Absorb any CLI-rotated tokens for the PREVIOUS account before the new
+    // account's credentials overwrite the file.
+    capture_credentials_drift(&app, &store, &client).await;
+
+    let account = store.upsert(
+        ClaudeAccount {
+            id: Uuid::new_v4().to_string(),
+            email: profile.email,
+            display_name: profile.display_name,
+            plan: profile.plan,
+            added_at: now,
+            refresh_dead: false,
+        },
+        &creds,
+    )?;
+    activate_login_account(&app, &store, &creds, &account.id)?;
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub fn claude_accounts_login_cancel(flow: State<ClaudeOauthFlow>) {
+    flow.cancel_pending();
+}
+
+#[tauri::command]
+pub async fn claude_accounts_import_cli(
+    app: AppHandle,
+    store: State<'_, ClaudeAccountStore>,
+) -> AppResult<ClaudeAccountsList> {
+    let home = home_dir(&app)?;
+    let path = crate::claude::creds::credentials_path(&home);
+    let creds = crate::claude::creds::read_credentials_file(&path).ok_or_else(|| {
+        AppError::Msg("no CLI credentials found — run `claude` and log in first".to_string())
+    })?;
+    let token = crate::claude::creds::creds_str(&creds, "accessToken")
+        .ok_or_else(|| AppError::Msg("credentials file has no access token".to_string()))?;
+    let client = http_client()?;
+    let profile = crate::claude::oauth::fetch_profile(&client, &token)
+        .await
+        .map_err(|_| {
+            AppError::Msg(
+                "could not identify the CLI account — its token may be expired; run `claude` to refresh it, then retry"
+                    .to_string(),
+            )
+        })?;
+    let account = store.upsert(
+        ClaudeAccount {
+            id: Uuid::new_v4().to_string(),
+            email: profile.email,
+            display_name: profile.display_name,
+            plan: profile.plan,
+            added_at: crate::claude::creds::now_ms(),
+            refresh_dead: false,
+        },
+        &creds,
+    )?;
+    // The file already IS this account: mark active without rewriting it.
+    store.set_active(Some(account.id.clone()));
+    store.set_last_synced_access_token(Some(token));
+    Ok(store.list())
+}
+
+#[tauri::command]
+pub async fn claude_accounts_switch(
+    app: AppHandle,
+    store: State<'_, ClaudeAccountStore>,
+    id: String,
+) -> AppResult<ClaudeAccountsList> {
+    let client = http_client()?;
+    capture_credentials_drift(&app, &store, &client).await;
+    let creds = ensure_fresh_creds(&store, &client, &id).await?;
+    activate_login_account(&app, &store, &creds, &id)?;
+    Ok(store.list())
+}
+
+/// Switch to "API Key" auth: enable the given Anthropic provider entry. The
+/// credentials file is left alone (ANTHROPIC_API_KEY wins for claude).
+#[tauri::command]
+pub fn claude_accounts_switch_to_apikey(
+    apikeys: State<ApiKeyStore>,
+    id: String,
+) -> Vec<ApiKeyMeta> {
+    apikeys.set_enabled(&id, true);
+    apikeys.list()
+}
+
+#[tauri::command]
+pub fn claude_accounts_remove(store: State<ClaudeAccountStore>, id: String) -> ClaudeAccountsList {
+    store.remove(&id);
+    store.list()
+}
+
+#[tauri::command]
+pub async fn claude_accounts_usage(
+    app: AppHandle,
+    store: State<'_, ClaudeAccountStore>,
+    force: bool,
+) -> AppResult<Vec<crate::claude::usage::AccountUsage>> {
+    use crate::claude::usage::AccountUsage;
+    let client = http_client()?;
+    capture_credentials_drift(&app, &store, &client).await;
+    let now = crate::claude::creds::now_ms();
+    let mut out = Vec::new();
+    for account in store.accounts_snapshot() {
+        if !force {
+            if let Some(hit) = store.cached_usage(&account.id, now) {
+                out.push(AccountUsage {
+                    account_id: account.id.clone(),
+                    usage: hit.usage,
+                    error: hit.error,
+                });
+                continue;
+            }
+        }
+        let entry = fetch_account_usage(&store, &client, &account.id).await;
+        store.put_usage(
+            &account.id,
+            CachedUsage {
+                usage: entry.usage.clone(),
+                error: entry.error.clone(),
+                fetched_at: crate::claude::creds::now_ms(),
+            },
+        );
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+/// One account's usage: fresh token -> fetch -> map, with a single
+/// refresh+retry on 401 and stale-while-error fallback.
+async fn fetch_account_usage(
+    store: &ClaudeAccountStore,
+    client: &reqwest::Client,
+    id: &str,
+) -> crate::claude::usage::AccountUsage {
+    use crate::claude::usage::{fetch_usage_raw, map_usage_response, AccountUsage, UsageFetch};
+    let stale = |error: String| AccountUsage {
+        account_id: id.to_string(),
+        usage: store.stale_usage(id).and_then(|c| c.usage),
+        error: Some(error),
+    };
+    let creds = match ensure_fresh_creds(store, client, id).await {
+        Ok(c) => c,
+        Err(e) => return stale(e.to_string()),
+    };
+    let token = match crate::claude::creds::creds_str(&creds, "accessToken") {
+        Some(t) => t,
+        None => return stale("no access token".to_string()),
+    };
+    match fetch_usage_raw(client, &token).await {
+        UsageFetch::Ok(v) => AccountUsage {
+            account_id: id.to_string(),
+            usage: Some(map_usage_response(&v, crate::claude::creds::now_ms())),
+            error: None,
+        },
+        UsageFetch::AuthFailed => {
+            // Access token rejected despite looking valid — force refresh once.
+            match ensure_fresh_creds(store, client, id).await {
+                Ok(fresh) => {
+                    let t2 = crate::claude::creds::creds_str(&fresh, "accessToken")
+                        .unwrap_or_default();
+                    match fetch_usage_raw(client, &t2).await {
+                        UsageFetch::Ok(v) => AccountUsage {
+                            account_id: id.to_string(),
+                            usage: Some(map_usage_response(&v, crate::claude::creds::now_ms())),
+                            error: None,
+                        },
+                        UsageFetch::AuthFailed => stale("auth rejected".to_string()),
+                        UsageFetch::Err(e) => stale(e),
+                    }
+                }
+                Err(e) => stale(e.to_string()),
+            }
+        }
+        UsageFetch::Err(e) => stale(e),
+    }
 }
 
 // ---------- remote access (feature-gated) ----------

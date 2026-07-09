@@ -256,6 +256,28 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    // Windows Credential Manager races on concurrent create/delete of distinct
+    // targets; serialize the real-keychain tests among themselves (the rest of
+    // the suite still runs in parallel). Recover from poisoning so one failing
+    // assertion doesn't cascade into unrelated panics.
+    static KEYCHAIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn keychain_guard() -> std::sync::MutexGuard<'static, ()> {
+        KEYCHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A deleted Windows credential isn't always visible to an immediate
+    /// re-read under heavy parallel load; poll briefly for the delete to land.
+    fn assert_creds_cleared(store: &ClaudeAccountStore, id: &str) {
+        for _ in 0..40 {
+            if store.creds(id).is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(store.creds(id).is_none(), "keychain entry not cleared");
+    }
+
     fn acct(id: &str, email: &str) -> ClaudeAccount {
         ClaudeAccount {
             id: id.to_string(),
@@ -273,6 +295,7 @@ mod tests {
 
     #[test]
     fn upsert_dedupes_by_email_and_clears_dead() {
+        let _g = keychain_guard();
         let dir = tempdir().unwrap();
         let store = ClaudeAccountStore::new(dir.path().join("a.json"));
         let uid = format!("test-{}", uuid::Uuid::new_v4());
@@ -290,6 +313,7 @@ mod tests {
 
     #[test]
     fn remove_clears_active_and_roundtrips_disk() {
+        let _g = keychain_guard();
         let dir = tempdir().unwrap();
         let path = dir.path().join("a.json");
         let uid = format!("test-{}", uuid::Uuid::new_v4());
@@ -320,6 +344,7 @@ mod tests {
 
     #[test]
     fn creds_roundtrip_through_keychain() {
+        let _g = keychain_guard();
         let dir = tempdir().unwrap();
         let store = ClaudeAccountStore::new(dir.path().join("a.json"));
         let uid = format!("test-{}", uuid::Uuid::new_v4());
@@ -327,6 +352,6 @@ mod tests {
         let v = store.creds(&uid).expect("creds stored");
         assert_eq!(v["accessToken"], "tok-round");
         store.remove(&uid);
-        assert!(store.creds(&uid).is_none());
+        assert_creds_cleared(&store, &uid);
     }
 }

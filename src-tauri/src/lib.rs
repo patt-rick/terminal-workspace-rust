@@ -64,6 +64,10 @@ pub fn run() {
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
             app.manage(ApiKeyStore::new(data_dir.join("keys.json")));
+            app.manage(claude::accounts::ClaudeAccountStore::new(
+                data_dir.join("claude-accounts.json"),
+            ));
+            app.manage(commands::ClaudeOauthFlow::default());
             app.manage(PtyManager::new());
             // Claude hook events (Notification/Stop) land in the spool dir; the
             // watcher routes them to terminals as attention events. Cheap no-op
@@ -155,6 +159,14 @@ pub fn run() {
             commands::claude_hooks_status,
             commands::claude_hooks_enable,
             commands::claude_hooks_disable,
+            commands::claude_accounts_list,
+            commands::claude_accounts_add_via_oauth,
+            commands::claude_accounts_login_cancel,
+            commands::claude_accounts_import_cli,
+            commands::claude_accounts_switch,
+            commands::claude_accounts_switch_to_apikey,
+            commands::claude_accounts_remove,
+            commands::claude_accounts_usage,
             commands::identity_list_accounts,
             commands::identity_get_config,
             commands::identity_save_account,
