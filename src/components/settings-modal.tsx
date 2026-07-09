@@ -9,6 +9,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
+import { ClaudeAccountsSection } from './claude-accounts/claude-accounts-section'
 import { useUi } from '../state/ui'
 
 type SettingsTabId = 'general' | 'ai' | 'github' | 'remote' | 'updates'
@@ -273,6 +274,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
                 <ClaudeHooksToggle />
               </Section>
+
+              <ClaudeAccountsSection />
 
               <ProvidersSection />
             </>
