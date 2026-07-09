@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useClaudeAccounts } from '../../state/claude-accounts'
+import { useApiKeys } from '../../state/apikeys'
 import { sortAccounts } from '../../lib/claude-accounts'
 import { AccountRow } from './account-row'
 
@@ -10,6 +11,10 @@ import { AccountRow } from './account-row'
  */
 export function ClaudeAccountsSection() {
   const s = useClaudeAccounts()
+  const apiKeys = useApiKeys((st) => st.keys)
+  // An enabled Anthropic key wins over the login for claude, so no login row
+  // is "active" while one is on (same rule as the popover).
+  const apiKeyActive = apiKeys.some((k) => k.provider === 'anthropic' && k.enabled && k.hasValue)
 
   useEffect(() => {
     if (!s.loaded) void s.load()
@@ -70,7 +75,7 @@ export function ClaudeAccountsSection() {
             key={a.id}
             account={a}
             usage={s.usage[a.id]}
-            isActive={a.id === s.activeAccountId}
+            isActive={a.id === s.activeAccountId && !apiKeyActive}
             busy={s.busy || s.loggingIn}
             onSwitch={() => void s.switchTo(a.id)}
             onRemove={() => void s.remove(a.id)}
