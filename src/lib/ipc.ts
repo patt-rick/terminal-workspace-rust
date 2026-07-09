@@ -286,6 +286,51 @@ export interface DetectedEnvKey {
   maskedTail: string
 }
 
+export interface ClaudeAccountMeta {
+  id: string
+  email: string
+  displayName: string | null
+  /** raw Anthropic tier, e.g. "max_20x" — humanize with formatPlanName */
+  plan: string | null
+  /** epoch millis */
+  addedAt: number
+  /** refresh token rejected — needs re-login */
+  refreshDead: boolean
+  hasToken: boolean
+}
+
+export interface ClaudeAccountsList {
+  accounts: ClaudeAccountMeta[]
+  activeAccountId: string | null
+}
+
+export interface ClaudeUsageBucket {
+  /** 0-100, may exceed 100 when over quota */
+  utilization: number
+  resetsAt: string | null
+}
+
+export interface ClaudeExtraUsage {
+  isEnabled: boolean | null
+  monthlyLimit: number | null
+  usedCredits: number | null
+  utilization: number | null
+}
+
+export interface ClaudeUsage {
+  fiveHour: ClaudeUsageBucket | null
+  sevenDay: ClaudeUsageBucket | null
+  extraUsage: ClaudeExtraUsage | null
+  /** epoch millis */
+  fetchedAt: number
+}
+
+export interface ClaudeAccountUsage {
+  accountId: string
+  usage: ClaudeUsage | null
+  error: string | null
+}
+
 /** Connectivity mode for remote access. */
 export type RemoteMode = 'cloudflare' | 'local' | 'tailscale'
 
@@ -460,6 +505,20 @@ export const ipc = {
     hooksStatus: () => invoke<boolean>('claude_hooks_status'),
     hooksEnable: () => invoke<void>('claude_hooks_enable'),
     hooksDisable: () => invoke<void>('claude_hooks_disable'),
+  },
+
+  claudeAccounts: {
+    list: () => invoke<ClaudeAccountsList>('claude_accounts_list'),
+    addViaOauth: (loginHint?: string) =>
+      invoke<ClaudeAccountsList>('claude_accounts_add_via_oauth', { loginHint }),
+    loginCancel: () => invoke<void>('claude_accounts_login_cancel'),
+    importCli: () => invoke<ClaudeAccountsList>('claude_accounts_import_cli'),
+    switchTo: (id: string) => invoke<ClaudeAccountsList>('claude_accounts_switch', { id }),
+    switchToApiKey: (id: string) =>
+      invoke<ApiKeyMeta[]>('claude_accounts_switch_to_apikey', { id }),
+    remove: (id: string) => invoke<ClaudeAccountsList>('claude_accounts_remove', { id }),
+    usage: (force = false) =>
+      invoke<ClaudeAccountUsage[]>('claude_accounts_usage', { force }),
   },
 
   identity: {
