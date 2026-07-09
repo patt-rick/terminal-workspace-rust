@@ -149,6 +149,7 @@ pub fn terminal_create(
             rows: args.rows.unwrap_or(24),
             startup_command: args.startup_command.clone(),
             env: app.state::<ApiKeyStore>().resolved_env(),
+            env_remove: claude_ambient_env_remove(&app),
         },
     )?;
 

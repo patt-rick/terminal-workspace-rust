@@ -99,6 +99,7 @@ fn spawn_terminal(
             rows: 24,
             startup_command,
             env: app.state::<crate::apikeys::ApiKeyStore>().resolved_env(),
+            env_remove: crate::commands::claude_ambient_env_remove(app),
         },
     )
     .map_err(|e| e.to_string())?;

@@ -187,6 +187,8 @@ pub struct CreateOpts {
     /// Extra env pairs applied after TERM* and before shell-integration env.
     /// Later pairs override earlier ones (provider-key collision rule).
     pub env: Vec<(String, String)>,
+    /// Vars removed from the child env (ambient credential stripping).
+    pub env_remove: Vec<String>,
 }
 
 #[derive(Default)]
@@ -220,6 +222,9 @@ impl PtyManager {
 
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(&opts.cwd);
+        for k in &opts.env_remove {
+            cmd.env_remove(k);
+        }
         // Advertise a modern terminal profile (matches the Electron app).
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "ghostty");
