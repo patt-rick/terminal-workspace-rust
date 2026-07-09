@@ -4,6 +4,8 @@
 
 pub mod hooks;
 pub mod creds;
+pub mod accounts;
+pub mod usage;
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
