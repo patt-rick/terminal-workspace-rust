@@ -999,7 +999,8 @@ async fn capture_credentials_drift(
     let Some(file_token) = crate::claude::creds::creds_str(&file_creds, "accessToken") else {
         return;
     };
-    if store.last_synced_access_token().as_deref() == Some(file_token.as_str()) {
+    let file_hash = crate::claude::accounts::token_hash(&file_token);
+    if store.last_synced_token_hash().as_deref() == Some(file_hash.as_str()) {
         return; // no drift
     }
     let Ok(profile) = crate::claude::oauth::fetch_profile(client, &file_token).await else {
@@ -1007,9 +1008,53 @@ async fn capture_credentials_drift(
     };
     if let Some(account) = store.account_by_email(&profile.email) {
         if store.set_creds(&account.id, &file_creds).is_ok() {
-            store.set_last_synced_access_token(Some(file_token));
+            store.set_last_synced_token_hash(Some(file_hash));
             store.set_refresh_dead(&account.id, false);
         }
+    }
+}
+
+/// Outcome of a persisted token refresh (see `refresh_creds`).
+enum RefreshResult {
+    /// creds blob updated in place and persisted to the keychain
+    Fresh,
+    /// invalid_grant — refresh_dead set; re-login required
+    Dead,
+    /// transient failure — old tokens left as they were
+    Transient(String),
+}
+
+/// Refresh an account's tokens through the token endpoint, updating the blob
+/// in place and persisting the rotated pair to the keychain before returning.
+/// Err only for a keychain write failure (rotated tokens must never be used
+/// unpersisted — the old refresh token may already be invalidated).
+async fn refresh_creds(
+    store: &ClaudeAccountStore,
+    client: &reqwest::Client,
+    id: &str,
+    creds: &mut serde_json::Value,
+) -> AppResult<RefreshResult> {
+    let refresh_token = crate::claude::creds::creds_str(creds, "refreshToken")
+        .ok_or_else(|| AppError::Msg("no refresh token — log in again".to_string()))?;
+    match crate::claude::oauth::do_refresh(client, &refresh_token).await {
+        crate::claude::oauth::RefreshOutcome::Fresh(t) => {
+            let now = crate::claude::creds::now_ms();
+            let obj = creds.as_object_mut().expect("creds blob is an object");
+            obj.insert("accessToken".into(), t.access_token.clone().into());
+            obj.insert("refreshToken".into(), t.refresh_token.into());
+            obj.insert(
+                "expiresAt".into(),
+                serde_json::Value::from(now + t.expires_in * 1000),
+            );
+            store.set_creds(id, creds)?;
+            store.set_refresh_dead(id, false);
+            Ok(RefreshResult::Fresh)
+        }
+        crate::claude::oauth::RefreshOutcome::Dead => {
+            store.set_refresh_dead(id, true);
+            Ok(RefreshResult::Dead)
+        }
+        crate::claude::oauth::RefreshOutcome::Transient(msg) => Ok(RefreshResult::Transient(msg)),
     }
 }
 
@@ -1029,26 +1074,10 @@ async fn ensure_fresh_creds(
     if !crate::claude::creds::needs_refresh(expires_at, now) {
         return Ok(creds);
     }
-    let refresh_token = crate::claude::creds::creds_str(&creds, "refreshToken")
-        .ok_or_else(|| AppError::Msg("no refresh token — log in again".to_string()))?;
-    match crate::claude::oauth::do_refresh(client, &refresh_token).await {
-        crate::claude::oauth::RefreshOutcome::Fresh(t) => {
-            let obj = creds.as_object_mut().expect("creds blob is an object");
-            obj.insert("accessToken".into(), t.access_token.clone().into());
-            obj.insert("refreshToken".into(), t.refresh_token.into());
-            obj.insert(
-                "expiresAt".into(),
-                serde_json::Value::from(now + t.expires_in * 1000),
-            );
-            store.set_creds(id, &creds)?;
-            store.set_refresh_dead(id, false);
-            Ok(creds)
-        }
-        crate::claude::oauth::RefreshOutcome::Dead => {
-            store.set_refresh_dead(id, true);
-            Err(AppError::Msg("session expired — log in again".to_string()))
-        }
-        crate::claude::oauth::RefreshOutcome::Transient(msg) => {
+    match refresh_creds(store, client, id, &mut creds).await? {
+        RefreshResult::Fresh => Ok(creds),
+        RefreshResult::Dead => Err(AppError::Msg("session expired — log in again".to_string())),
+        RefreshResult::Transient(msg) => {
             // Token may still be usable if not FULLY expired (buffer only).
             if expires_at.is_some_and(|exp| now < exp) {
                 Ok(creds)
@@ -1072,7 +1101,10 @@ fn activate_login_account(
     let path = crate::claude::creds::credentials_path(&home);
     crate::claude::creds::write_credentials_file(&path, creds)?;
     store.set_active(Some(id.to_string()));
-    store.set_last_synced_access_token(crate::claude::creds::creds_str(creds, "accessToken"));
+    store.set_last_synced_token_hash(
+        crate::claude::creds::creds_str(creds, "accessToken")
+            .map(|t| crate::claude::accounts::token_hash(&t)),
+    );
     let apikeys = app.state::<ApiKeyStore>();
     for k in apikeys.keys_snapshot() {
         if k.provider == "anthropic" && k.enabled {
@@ -1199,7 +1231,7 @@ pub async fn claude_accounts_import_cli(
     )?;
     // The file already IS this account: mark active without rewriting it.
     store.set_active(Some(account.id.clone()));
-    store.set_last_synced_access_token(Some(token));
+    store.set_last_synced_token_hash(Some(crate::claude::accounts::token_hash(&token)));
     Ok(store.list())
 }
 
@@ -1297,9 +1329,12 @@ async fn fetch_account_usage(
             error: None,
         },
         UsageFetch::AuthFailed => {
-            // Access token rejected despite looking valid — force refresh once.
-            match ensure_fresh_creds(store, client, id).await {
-                Ok(fresh) => {
+            // Access token rejected despite a future expiresAt (revocation,
+            // server-side invalidation) — the buffer check would be a no-op,
+            // so force a refresh directly and retry once.
+            let mut fresh = creds;
+            match refresh_creds(store, client, id, &mut fresh).await {
+                Ok(RefreshResult::Fresh) => {
                     let t2 = crate::claude::creds::creds_str(&fresh, "accessToken")
                         .unwrap_or_default();
                     match fetch_usage_raw(client, &t2).await {
@@ -1312,6 +1347,8 @@ async fn fetch_account_usage(
                         UsageFetch::Err(e) => stale(e),
                     }
                 }
+                Ok(RefreshResult::Dead) => stale("session expired — log in again".to_string()),
+                Ok(RefreshResult::Transient(msg)) => stale(format!("token refresh failed: {msg}")),
                 Err(e) => stale(e.to_string()),
             }
         }

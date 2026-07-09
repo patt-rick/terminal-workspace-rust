@@ -53,11 +53,11 @@ struct Data {
     accounts: Vec<ClaudeAccount>,
     #[serde(default)]
     active_account_id: Option<String>,
-    /// accessToken this app last wrote to (or absorbed from) the credentials
-    /// file — drift detection baseline. Not a secret by itself but still only
-    /// ever compared, never logged.
+    /// SHA-256 hex of the accessToken this app last wrote to (or absorbed
+    /// from) the credentials file — drift detection baseline. Never the token
+    /// itself: this file holds no secrets.
     #[serde(default)]
-    last_synced_access_token: Option<String>,
+    last_synced_token_hash: Option<String>,
 }
 
 /// One cached usage result per account (10-minute TTL).
@@ -186,13 +186,13 @@ impl ClaudeAccountStore {
         self.persist(&d);
     }
 
-    pub fn last_synced_access_token(&self) -> Option<String> {
-        self.inner.lock().last_synced_access_token.clone()
+    pub fn last_synced_token_hash(&self) -> Option<String> {
+        self.inner.lock().last_synced_token_hash.clone()
     }
 
-    pub fn set_last_synced_access_token(&self, token: Option<String>) {
+    pub fn set_last_synced_token_hash(&self, hash: Option<String>) {
         let mut d = self.inner.lock();
-        d.last_synced_access_token = token;
+        d.last_synced_token_hash = hash;
         self.persist(&d);
     }
 
@@ -224,6 +224,12 @@ impl ClaudeAccountStore {
     pub fn put_usage(&self, id: &str, entry: CachedUsage) {
         self.usage_cache.lock().insert(id.to_string(), entry);
     }
+}
+
+/// SHA-256 hex digest of a token, for compare-only persistence.
+pub fn token_hash(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 // ---- keychain ----
@@ -319,16 +325,32 @@ mod tests {
         let uid = format!("test-{}", uuid::Uuid::new_v4());
         {
             let store = ClaudeAccountStore::new(path.clone());
-            store.upsert(acct(&uid, "a@b.c"), &creds("t")).unwrap();
+            store.upsert(acct(&uid, "a@b.c"), &creds("tok-secret")).unwrap();
             store.set_active(Some(uid.clone()));
-            store.set_last_synced_access_token(Some("t".to_string()));
+            store.set_last_synced_token_hash(Some(token_hash("tok-secret")));
         }
+        // The metadata file carries the hash only, never the token.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("tok-secret"));
+        assert!(on_disk.contains(&token_hash("tok-secret")));
         let store = ClaudeAccountStore::new(path); // reload from disk
         assert!(store.has_active_login_account());
-        assert_eq!(store.last_synced_access_token().as_deref(), Some("t"));
+        assert_eq!(
+            store.last_synced_token_hash().as_deref(),
+            Some(token_hash("tok-secret").as_str())
+        );
         store.remove(&uid);
         assert!(!store.has_active_login_account());
         assert!(store.list().accounts.is_empty());
+    }
+
+    #[test]
+    fn token_hash_is_deterministic_sha256_hex() {
+        let h = token_hash("tok");
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, token_hash("tok"));
+        assert_ne!(h, token_hash("tok2"));
     }
 
     #[test]
