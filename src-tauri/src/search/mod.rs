@@ -1,6 +1,5 @@
 //! Quick-open file search: a per-project, in-memory fuzzy index over file paths.
 
-use crate::error::AppResult;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{WalkBuilder, WalkState};
 use parking_lot::Mutex;
@@ -25,11 +24,185 @@ fn now_ms() -> u64 {
 
 pub mod watcher;
 
-/// Placeholder so `pub mod watcher;` resolves; replaced in later tasks.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResult {
+    pub status: IndexStatus,
+    pub total: usize,
+    pub hits: Vec<Hit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexStatusResult {
+    pub status: IndexStatus,
+    pub file_count: usize,
+    pub truncated: bool,
+    pub built_at: Option<u64>,
+}
+
+/// Full build on a background thread: walk, cache the ignore matcher, publish the
+/// Ready index, then (re)start the watcher. Watcher failure marks the index
+/// degraded so ensure_active can TTL-rebuild it.
+fn run_build(
+    indices: Arc<Mutex<HashMap<String, ProjectIndex>>>,
+    watchers: Arc<Mutex<HashMap<String, watcher::Handle>>>,
+    project_id: String,
+    root: PathBuf,
+) {
+    std::thread::spawn(move || {
+        let (paths, truncated) = build_paths_capped(&root, MAX_FILES);
+        let ignore = Arc::new(build_ignore(&root));
+        indices.lock().insert(
+            project_id.clone(),
+            ProjectIndex {
+                root: root.clone(),
+                paths,
+                status: IndexStatus::Ready,
+                truncated,
+                built_at: now_ms(),
+                ignore,
+                degraded: false,
+            },
+        );
+        match watcher::start(indices.clone(), project_id.clone(), root.clone()) {
+            Ok(handle) => {
+                watchers.lock().insert(project_id, handle);
+            }
+            Err(_) => {
+                watchers.lock().remove(&project_id);
+                if let Some(p) = indices.lock().get_mut(&project_id) {
+                    p.degraded = true;
+                }
+            }
+        }
+    });
+}
+
+/// Rebuild paths + ignore matcher in place, keeping the existing watcher. Used by
+/// the watcher for .gitignore changes and overflow rescans.
+pub(crate) fn refresh_paths(
+    indices: Arc<Mutex<HashMap<String, ProjectIndex>>>,
+    project_id: String,
+    root: PathBuf,
+) {
+    std::thread::spawn(move || {
+        let (paths, truncated) = build_paths_capped(&root, MAX_FILES);
+        let ignore = Arc::new(build_ignore(&root));
+        if let Some(p) = indices.lock().get_mut(&project_id) {
+            p.paths = paths;
+            p.truncated = truncated;
+            p.ignore = ignore;
+            p.built_at = now_ms();
+            p.status = IndexStatus::Ready;
+        }
+    });
+}
+
 #[derive(Default)]
 pub struct SearchStore {
     pub(crate) indices: Arc<Mutex<HashMap<String, ProjectIndex>>>,
     watchers: Arc<Mutex<HashMap<String, watcher::Handle>>>,
+}
+
+impl SearchStore {
+    /// Make `project_id` the single active index: drop every other project and
+    /// its watcher, then build this one if missing or a degraded TTL has expired.
+    pub fn ensure_active(&self, project_id: &str, root: PathBuf) {
+        {
+            let mut idx = self.indices.lock();
+            let mut w = self.watchers.lock();
+            let others: Vec<String> =
+                idx.keys().filter(|k| k.as_str() != project_id).cloned().collect();
+            for k in &others {
+                idx.remove(k);
+                w.remove(k); // dropping the Handle stops the watcher
+            }
+        }
+        let need_build = match self.indices.lock().get(project_id) {
+            None => true,
+            Some(p) => p.degraded && now_ms().saturating_sub(p.built_at) > TTL_MS,
+        };
+        if need_build {
+            self.spawn_build(project_id.to_string(), root);
+        }
+    }
+
+    fn spawn_build(&self, project_id: String, root: PathBuf) {
+        {
+            let mut idx = self.indices.lock();
+            match idx.get_mut(&project_id) {
+                Some(p) => p.status = IndexStatus::Stale, // keep old paths queryable
+                None => {
+                    idx.insert(
+                        project_id.clone(),
+                        ProjectIndex {
+                            root: root.clone(),
+                            paths: Vec::new(),
+                            status: IndexStatus::Building,
+                            truncated: false,
+                            built_at: 0,
+                            ignore: Arc::new(Gitignore::empty()),
+                            degraded: false,
+                        },
+                    );
+                }
+            }
+        }
+        run_build(self.indices.clone(), self.watchers.clone(), project_id, root);
+    }
+
+    pub fn rebuild(&self, project_id: &str, root: PathBuf) {
+        let exists = self.indices.lock().contains_key(project_id);
+        if exists {
+            if let Some(p) = self.indices.lock().get_mut(project_id) {
+                p.status = IndexStatus::Stale;
+            }
+            refresh_paths(self.indices.clone(), project_id.to_string(), root);
+        } else {
+            self.ensure_active(project_id, root);
+        }
+    }
+
+    pub fn drop_project(&self, project_id: &str) {
+        self.indices.lock().remove(project_id);
+        self.watchers.lock().remove(project_id);
+    }
+
+    pub fn query(&self, project_id: &str, query: &str, limit: usize) -> QueryResult {
+        let map = self.indices.lock();
+        let Some(p) = map.get(project_id) else {
+            return QueryResult {
+                status: IndexStatus::Building,
+                total: 0,
+                hits: Vec::new(),
+            };
+        };
+        let hits = query_paths(&p.paths, query, limit);
+        QueryResult {
+            status: p.status,
+            total: p.paths.len(),
+            hits,
+        }
+    }
+
+    pub fn status_of(&self, project_id: &str) -> IndexStatusResult {
+        let map = self.indices.lock();
+        match map.get(project_id) {
+            Some(p) => IndexStatusResult {
+                status: p.status,
+                file_count: p.paths.len(),
+                truncated: p.truncated,
+                built_at: (p.built_at != 0).then_some(p.built_at),
+            },
+            None => IndexStatusResult {
+                status: IndexStatus::Building,
+                file_count: 0,
+                truncated: false,
+                built_at: None,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -228,6 +401,31 @@ mod tests {
         let (paths, truncated) = build_paths_capped(root, 2);
         assert!(truncated);
         assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn store_query_reports_building_when_missing_and_hits_when_present() {
+        let store = SearchStore::default();
+        let empty = store.query("missing", "x", 10);
+        assert!(matches!(empty.status, IndexStatus::Building));
+        assert_eq!(empty.total, 0);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "config.rs", "x");
+        store
+            .indices
+            .lock()
+            .insert("p1".to_string(), index_for(root));
+
+        let res = store.query("p1", "config", 10);
+        assert!(matches!(res.status, IndexStatus::Ready));
+        assert_eq!(res.total, 1);
+        assert_eq!(res.hits[0].path, "config.rs");
+
+        let status = store.status_of("p1");
+        assert_eq!(status.file_count, 1);
+        assert!(!status.truncated);
     }
 
     fn index_for(root: &Path) -> ProjectIndex {
