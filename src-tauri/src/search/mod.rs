@@ -343,7 +343,7 @@ pub(crate) fn query_paths(paths: &[String], query: &str, limit: usize) -> Vec<Hi
     let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
 
     let mut ranked: Vec<(&String, u32)> = pattern.match_list(paths.iter(), &mut matcher);
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
     ranked.truncate(limit);
 
     ranked
