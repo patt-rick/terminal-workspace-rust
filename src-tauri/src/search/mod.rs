@@ -98,6 +98,49 @@ pub(crate) fn build_ignore(root: &Path) -> Gitignore {
     b.build().unwrap_or_else(|_| Gitignore::empty())
 }
 
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Hit {
+    pub path: String,
+    pub score: u32,
+    /// Matched character positions (char indices) for highlighting.
+    pub indices: Vec<u32>,
+}
+
+/// Fuzzy-rank `paths` against `query`, returning the top `limit` hits with
+/// nucleo's path/filename bonus behavior and matched-character indices.
+pub(crate) fn query_paths(paths: &[String], query: &str, limit: usize) -> Vec<Hit> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+
+    let mut ranked: Vec<(&String, u32)> = pattern.match_list(paths.iter(), &mut matcher);
+    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked.truncate(limit);
+
+    ranked
+        .into_iter()
+        .map(|(path, score)| {
+            let mut buf: Vec<char> = Vec::new();
+            let mut indices: Vec<u32> = Vec::new();
+            let hay = Utf32Str::new(path.as_str(), &mut buf);
+            pattern.indices(hay, &mut matcher, &mut indices);
+            indices.sort_unstable();
+            indices.dedup();
+            Hit {
+                path: path.clone(),
+                score,
+                indices,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +178,18 @@ mod tests {
         let (paths, truncated) = build_paths_capped(root, 2);
         assert!(truncated);
         assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn filename_match_beats_scattered_path_match() {
+        // A clean filename match ("config" == the whole filename) must outrank a
+        // match where the query characters are scattered across path segments.
+        let paths = vec![
+            "src/cortex/onboard/native/fixtures/img/graph.rs".to_string(),
+            "config.rs".to_string(),
+        ];
+        let hits = query_paths(&paths, "config", 10);
+        assert_eq!(hits.first().map(|h| h.path.as_str()), Some("config.rs"));
+        assert!(!hits[0].indices.is_empty());
     }
 }
