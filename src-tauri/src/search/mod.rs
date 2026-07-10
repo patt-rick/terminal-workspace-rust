@@ -53,30 +53,53 @@ fn run_build(
     std::thread::spawn(move || {
         let (paths, truncated) = build_paths_capped(&root, MAX_FILES);
         let ignore = Arc::new(build_ignore(&root));
-        indices.lock().insert(
-            project_id.clone(),
-            ProjectIndex {
-                root: root.clone(),
-                paths,
-                status: IndexStatus::Ready,
-                truncated,
-                built_at: now_ms(),
-                ignore,
-                degraded: false,
-            },
-        );
-        match watcher::start(indices.clone(), project_id.clone(), root.clone()) {
-            Ok(handle) => {
-                watchers.lock().insert(project_id, handle);
-            }
-            Err(_) => {
-                watchers.lock().remove(&project_id);
-                if let Some(p) = indices.lock().get_mut(&project_id) {
-                    p.degraded = true;
-                }
+        finish_build(indices, watchers, project_id, root, paths, truncated, ignore);
+    });
+}
+
+/// Publish a completed walk. The entry inserted by `ensure_active` is the
+/// liveness token: if the project was dropped mid-build (rapid project switch,
+/// removal), skip publishing and don't start a watcher — otherwise a zombie
+/// index and watcher thread would be resurrected.
+fn finish_build(
+    indices: Arc<Mutex<HashMap<String, ProjectIndex>>>,
+    watchers: Arc<Mutex<HashMap<String, watcher::Handle>>>,
+    project_id: String,
+    root: PathBuf,
+    paths: Vec<String>,
+    truncated: bool,
+    ignore: Arc<Gitignore>,
+) {
+    {
+        let mut map = indices.lock();
+        let Some(p) = map.get_mut(&project_id) else {
+            return;
+        };
+        p.paths = paths;
+        p.status = IndexStatus::Ready;
+        p.truncated = truncated;
+        p.built_at = now_ms();
+        p.ignore = ignore;
+        p.degraded = false;
+    }
+    match watcher::start(indices.clone(), project_id.clone(), root) {
+        Ok(handle) => {
+            // Same lock order as ensure_active (indices, then watchers). If the
+            // project was dropped while the watcher started, the handle is
+            // dropped here, stopping it.
+            let map = indices.lock();
+            let mut w = watchers.lock();
+            if map.contains_key(&project_id) {
+                w.insert(project_id, handle);
             }
         }
-    });
+        Err(_) => {
+            watchers.lock().remove(&project_id);
+            if let Some(p) = indices.lock().get_mut(&project_id) {
+                p.degraded = true;
+            }
+        }
+    }
 }
 
 /// Rebuild paths + ignore matcher in place, keeping the existing watcher. Used by
@@ -109,7 +132,7 @@ impl SearchStore {
     /// Make `project_id` the single active index: drop every other project and
     /// its watcher, then build this one if missing or a degraded TTL has expired.
     pub fn ensure_active(&self, project_id: &str, root: PathBuf) {
-        {
+        let need_build = {
             let mut idx = self.indices.lock();
             let mut w = self.watchers.lock();
             let others: Vec<String> =
@@ -118,24 +141,12 @@ impl SearchStore {
                 idx.remove(k);
                 w.remove(k); // dropping the Handle stops the watcher
             }
-        }
-        let need_build = match self.indices.lock().get(project_id) {
-            None => true,
-            Some(p) => p.degraded && now_ms().saturating_sub(p.built_at) > TTL_MS,
-        };
-        if need_build {
-            self.spawn_build(project_id.to_string(), root);
-        }
-    }
-
-    fn spawn_build(&self, project_id: String, root: PathBuf) {
-        {
-            let mut idx = self.indices.lock();
-            match idx.get_mut(&project_id) {
-                Some(p) => p.status = IndexStatus::Stale, // keep old paths queryable
+            // Check-and-mark under the same lock so near-simultaneous calls
+            // (palette status poll + first query) can't spawn duplicate walks.
+            match idx.get_mut(project_id) {
                 None => {
                     idx.insert(
-                        project_id.clone(),
+                        project_id.to_string(),
                         ProjectIndex {
                             root: root.clone(),
                             paths: Vec::new(),
@@ -146,10 +157,24 @@ impl SearchStore {
                             degraded: false,
                         },
                     );
+                    true
                 }
+                Some(p) if p.degraded && now_ms().saturating_sub(p.built_at) > TTL_MS => {
+                    p.status = IndexStatus::Stale; // keep old paths queryable
+                    p.degraded = false; // finish_build re-marks on watcher failure
+                    true
+                }
+                Some(_) => false,
             }
+        };
+        if need_build {
+            run_build(
+                self.indices.clone(),
+                self.watchers.clone(),
+                project_id.to_string(),
+                root,
+            );
         }
-        run_build(self.indices.clone(), self.watchers.clone(), project_id, root);
     }
 
     pub fn rebuild(&self, project_id: &str, root: PathBuf) {
@@ -401,6 +426,68 @@ mod tests {
         let (paths, truncated) = build_paths_capped(root, 2);
         assert!(truncated);
         assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn finish_build_skips_publish_and_watcher_when_project_dropped_mid_build() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        write(&root, "a.rs", "x");
+        let (paths, truncated) = build_paths_capped(&root, MAX_FILES);
+        let ignore = Arc::new(build_ignore(&root));
+
+        // No entry for "gone": the project was dropped while the walk ran.
+        let indices: Arc<Mutex<HashMap<String, ProjectIndex>>> = Arc::default();
+        let watchers: Arc<Mutex<HashMap<String, watcher::Handle>>> = Arc::default();
+        finish_build(
+            indices.clone(),
+            watchers.clone(),
+            "gone".to_string(),
+            root,
+            paths,
+            truncated,
+            ignore,
+        );
+        assert!(indices.lock().is_empty()); // not resurrected
+        assert!(watchers.lock().is_empty()); // no zombie watcher
+    }
+
+    #[test]
+    fn finish_build_publishes_when_placeholder_still_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        write(&root, "a.rs", "x");
+        let (paths, truncated) = build_paths_capped(&root, MAX_FILES);
+        let ignore = Arc::new(build_ignore(&root));
+
+        let indices: Arc<Mutex<HashMap<String, ProjectIndex>>> = Arc::default();
+        let watchers: Arc<Mutex<HashMap<String, watcher::Handle>>> = Arc::default();
+        indices.lock().insert(
+            "p1".to_string(),
+            ProjectIndex {
+                root: root.clone(),
+                paths: Vec::new(),
+                status: IndexStatus::Building,
+                truncated: false,
+                built_at: 0,
+                ignore: Arc::new(Gitignore::empty()),
+                degraded: false,
+            },
+        );
+        finish_build(
+            indices.clone(),
+            watchers.clone(),
+            "p1".to_string(),
+            root,
+            paths,
+            truncated,
+            ignore,
+        );
+        let map = indices.lock();
+        let p = map.get("p1").unwrap();
+        assert!(matches!(p.status, IndexStatus::Ready));
+        assert!(p.paths.iter().any(|x| x == "a.rs"));
+        assert!(p.built_at > 0);
     }
 
     #[test]
