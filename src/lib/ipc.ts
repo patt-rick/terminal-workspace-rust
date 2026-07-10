@@ -61,6 +61,29 @@ export type ReadResult =
   | { kind: 'binary' }
   | { kind: 'tooLarge' }
 
+export type SearchStatus = 'building' | 'ready' | 'stale'
+
+export interface SearchHit {
+  path: string
+  score: number
+  /** matched character positions (char indices) for highlighting */
+  indices: number[]
+}
+
+export interface SearchQueryResult {
+  status: SearchStatus
+  total: number
+  hits: SearchHit[]
+}
+
+export interface SearchIndexStatus {
+  status: SearchStatus
+  fileCount: number
+  truncated: boolean
+  /** epoch millis of last full build, or null while first build is pending */
+  builtAt: number | null
+}
+
 export interface RepoInfo {
   id: string
   /** Absolute working-directory path (opaque to the UI). */
@@ -442,6 +465,14 @@ export const ipc = {
       invoke<string>('fs_save_temp_paste', { bytes, ext }),
     exportText: (path: string, content: string) =>
       invoke<void>('fs_export_text', { path, content }),
+  },
+
+  search: {
+    query: (projectId: string, query: string, limit?: number) =>
+      invoke<SearchQueryResult>('search_query', { projectId, query, limit }),
+    indexStatus: (projectId: string) =>
+      invoke<SearchIndexStatus>('search_index_status', { projectId }),
+    rebuild: (projectId: string) => invoke<void>('search_rebuild', { projectId }),
   },
 
   git: {
