@@ -567,6 +567,7 @@ export const ipc = {
       invoke<IdentityResolution>('identity_resolve', { repoId }),
     apply: (repoId: string, accountId: string) =>
       invoke<ApplyResult>('identity_apply', { repoId, accountId }),
+    unmap: (repoId: string) => invoke<void>('identity_unmap', { repoId }),
     current: (repoId: string) =>
       invoke<CurrentIdentity>('identity_current', { repoId }),
     applyGlobal: (accountId: string) =>

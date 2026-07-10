@@ -142,14 +142,26 @@ impl IdentityStore {
     }
 
     pub fn remove_account(&self, id: &str) -> Vec<Account> {
-        let mut d = self.inner.lock();
-        d.accounts.retain(|a| a.id != id);
-        d.mapping.retain(|_, v| v != id);
-        if d.default_account_id.as_deref() == Some(id) {
-            d.default_account_id = None;
+        let (accounts, unmapped) = {
+            let mut d = self.inner.lock();
+            d.accounts.retain(|a| a.id != id);
+            let unmapped: Vec<String> = d
+                .mapping
+                .iter()
+                .filter(|(_, v)| v.as_str() == id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            d.mapping.retain(|_, v| v != id);
+            if d.default_account_id.as_deref() == Some(id) {
+                d.default_account_id = None;
+            }
+            self.persist(&d);
+            (d.accounts.clone(), unmapped)
+        };
+        for path in unmapped {
+            let _ = clear_credential_routing(Path::new(&path));
         }
-        self.persist(&d);
-        d.accounts.clone()
+        accounts
     }
 
     pub fn set_config(
@@ -197,6 +209,17 @@ impl IdentityStore {
             current,
             routing_skipped,
         })
+    }
+
+    /// Forget a repo's mapping and remove its credential routing (restore the
+    /// inherited helper chain). Author identity in the repo is left untouched.
+    pub fn unmap(&self, repo_path: &str) {
+        {
+            let mut d = self.inner.lock();
+            d.mapping.remove(repo_path);
+            self.persist(&d);
+        }
+        let _ = clear_credential_routing(Path::new(repo_path));
     }
 
     /// Read the current identity for a repo, including its mapped account (if any).
@@ -829,6 +852,27 @@ mod tests {
         repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
         apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
         clear_credential_routing(dir.path()).unwrap();
+        assert!(get_all_credential_helper(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn unmap_and_remove_account_clear_routing() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        let store = IdentityStore::new(dir.path().join("identity.json"));
+        store.save_account(acct("a1", "octocat"));
+        let path = dir.path().to_string_lossy().to_string();
+
+        store.apply(&path, "a1").unwrap();
+        assert_eq!(get_all_credential_helper(dir.path()).len(), 2);
+
+        store.unmap(&path);
+        assert!(get_all_credential_helper(dir.path()).is_empty());
+
+        // Re-apply, then remove the account: routing must be cleared too.
+        store.apply(&path, "a1").unwrap();
+        store.remove_account("a1");
         assert!(get_all_credential_helper(dir.path()).is_empty());
     }
 }

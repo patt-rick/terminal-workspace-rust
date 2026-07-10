@@ -848,6 +848,17 @@ pub fn identity_apply(
 }
 
 #[tauri::command]
+pub fn identity_unmap(
+    ids: State<IdentityStore>,
+    store: State<StateStore>,
+    repo_id: String,
+) -> AppResult<()> {
+    let root = repo_root(&store, &repo_id)?;
+    ids.unmap(&root);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn identity_current(
     ids: State<IdentityStore>,
     store: State<StateStore>,
