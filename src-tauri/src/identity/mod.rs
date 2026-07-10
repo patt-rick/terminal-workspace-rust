@@ -344,6 +344,18 @@ pub fn apply_global(account: &Account) -> AppResult<()> {
     Ok(())
 }
 
+/// The inline `sh` credential helper written to a repo's local `credential.helper`.
+/// Git for Windows runs `!`-prefixed helpers via its bundled `sh`, appending the
+/// operation (`get`/`store`/`erase`) as `$1`. We answer only `get`; `store`/`erase`
+/// short-circuit to a no-op. `login` is constrained to `[A-Za-z0-9-]` by the
+/// account form, so it needs no shell escaping. The token is resolved at fill
+/// time from gh's keyring and never persisted.
+fn credential_helper_value(login: &str) -> String {
+    format!(
+        "!f() {{ test $1 = get && echo username={login} && echo password=$(gh auth token --user {login}); }}; f"
+    )
+}
+
 /// Read the effective identity + embedded origin login for display. `account_id`
 /// is the mapped account for this repo (passed through unchanged).
 pub fn current_identity(repo_path: &Path, account_id: Option<String>) -> CurrentIdentity {
@@ -682,5 +694,13 @@ mod tests {
             "git@github.com:acme/infra.git"
         );
         assert_eq!(current_identity(c.path(), None).remote_login, None);
+    }
+
+    #[test]
+    fn credential_helper_value_is_exact() {
+        assert_eq!(
+            credential_helper_value("octocat"),
+            "!f() { test $1 = get && echo username=octocat && echo password=$(gh auth token --user octocat); }; f"
+        );
     }
 }
