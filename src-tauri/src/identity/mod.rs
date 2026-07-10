@@ -633,6 +633,23 @@ pub fn detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     Ok(accounts)
 }
 
+/// Make `login` the active gh account (`gh auth switch --user <login>`). This is
+/// the ONE feature that mutates global gh state, so it's opt-in. Errors when gh
+/// is missing or the switch fails.
+pub fn align_gh(login: &str) -> AppResult<()> {
+    use std::process::Command;
+    let out = Command::new("gh")
+        .args(["auth", "switch", "--user", login])
+        .output()
+        .map_err(|_| AppError::Msg("GitHub CLI (gh) not found on PATH".to_string()))?;
+    if !out.status.success() {
+        return Err(AppError::Msg(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

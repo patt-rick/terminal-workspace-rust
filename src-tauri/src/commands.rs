@@ -888,6 +888,11 @@ pub fn identity_detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
     crate::identity::detect_gh_accounts()
 }
 
+#[tauri::command]
+pub fn identity_align_gh(login: String) -> AppResult<()> {
+    crate::identity::align_gh(&login)
+}
+
 // ---------- provider API keys ----------
 
 #[tauri::command]

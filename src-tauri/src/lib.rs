@@ -184,6 +184,7 @@ pub fn run() {
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,
+            commands::identity_align_gh,
             commands::apikeys_list,
             commands::apikeys_save,
             commands::apikeys_remove,

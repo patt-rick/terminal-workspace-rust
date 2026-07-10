@@ -582,6 +582,7 @@ export const ipc = {
       invoke<void>('identity_apply_global', { accountId }),
     detectGhAccounts: () =>
       invoke<DetectedGhAccount[]>('identity_detect_gh_accounts'),
+    alignGh: (login: string) => invoke<void>('identity_align_gh', { login }),
   },
 
   apikeys: {
