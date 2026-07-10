@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ProjectList } from './components/sidebar/project-list'
 import { TerminalPane } from './components/workspace/terminal-pane'
 import { FileViewer } from './components/workspace/file-viewer'
@@ -6,6 +6,7 @@ import { RightSidebar } from './components/right-sidebar/right-sidebar'
 import { DiffViewer } from './components/diff/diff-viewer'
 import { ConfirmDialog } from './components/confirm-dialog'
 import { SettingsModal } from './components/settings-modal'
+import { QuickOpen } from './components/quick-open/quick-open'
 import { IdentityAutoApply } from './components/identity/identity-auto-apply'
 import { ModelPicker } from './components/apikeys/model-picker'
 import { InstallPrompt } from './components/apikeys/install-prompt'
@@ -20,7 +21,7 @@ import { useUi } from './state/ui'
 import { useApiKeys } from './state/apikeys'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
-import { isTauri, type Project, type TerminalRecord } from './lib/ipc'
+import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
 
 export default function App() {
@@ -52,6 +53,8 @@ export default function App() {
   const openSettings = useUi((s) => s.openSettings)
   const closeSettings = useUi((s) => s.closeSettings)
   const toggleSettings = useUi((s) => s.toggleSettings)
+
+  const [quickOpen, setQuickOpen] = useState(false)
 
   const activeTerminalId = selectedProject
     ? activeTerminalByProject[selectedProject.id] ?? null
@@ -99,6 +102,11 @@ export default function App() {
         else toggleSidebar()
         return
       }
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault()
+        if (selectedProject) setQuickOpen((v) => !v)
+        return
+      }
       if (!selectedProject) return
       const key = e.key.toLowerCase()
       const newClaude = (startupCommand: string): void => {
@@ -126,6 +134,12 @@ export default function App() {
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
   }, [activeTerminalId, clearUnread])
+
+  // Build + watch the search index for the selected project (and drop others).
+  useEffect(() => {
+    if (!isTauri || !selectedProject) return
+    void ipc.search.indexStatus(selectedProject.id).catch(() => {})
+  }, [selectedProject?.id])
 
   // Typed attention from the Rust core (Claude hooks, failed commands, prompt
   // waits): notify + unread-dot when the terminal isn't front-and-center.
@@ -353,6 +367,9 @@ export default function App() {
       />
 
       <SettingsModal open={settingsOpen} onClose={closeSettings} />
+      {quickOpen && selectedProject && (
+        <QuickOpen projectId={selectedProject.id} onClose={() => setQuickOpen(false)} />
+      )}
       <IdentityAutoApply />
       <ModelPicker />
       <InstallPrompt />
