@@ -315,6 +315,8 @@ pub fn apply_identity(repo_path: &Path, account: &Account) -> AppResult<bool> {
         Some(new_url) => {
             repo.remote_set_url("origin", &new_url)
                 .map_err(|e| AppError::Msg(e.to_string()))?;
+            // HTTPS github origin: route push auth through gh for this repo.
+            write_credential_routing(repo_path, &account.login)?;
             false
         }
         None => true,
@@ -354,6 +356,55 @@ fn credential_helper_value(login: &str) -> String {
     format!(
         "!f() {{ test $1 = get && echo username={login} && echo password=$(gh auth token --user {login}); }}; f"
     )
+}
+
+/// Run a `git config` subcommand in `repo_path`, erroring on a non-success exit.
+fn run_git_config(repo_path: &Path, args: &[&str]) -> AppResult<()> {
+    use std::process::Command;
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .output()
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    if !out.status.success() {
+        return Err(AppError::Msg(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Route this HTTPS github repo's push auth through `gh auth token --user <login>`.
+/// Resets the inherited helper chain (GCM + global gh) with an empty first entry,
+/// then adds our inline helper. `--unset-all` first makes re-apply idempotent and
+/// re-map overwrite. CLI (not git2) for correct multi-value + Windows quoting.
+fn write_credential_routing(repo_path: &Path, login: &str) -> AppResult<()> {
+    // Exit code 5 = "nothing to unset"; ignore any failure here (best-effort reset).
+    let _ = run_git_config(
+        repo_path,
+        &["config", "--local", "--unset-all", "credential.helper"],
+    );
+    run_git_config(
+        repo_path,
+        &["config", "--local", "--add", "credential.helper", ""],
+    )?;
+    let helper = credential_helper_value(login);
+    run_git_config(
+        repo_path,
+        &["config", "--local", "--add", "credential.helper", &helper],
+    )?;
+    Ok(())
+}
+
+/// Remove all local `credential.helper` entries, restoring the inherited chain.
+/// Used on unmap and account removal. Ignores "nothing to unset".
+fn clear_credential_routing(repo_path: &Path) -> AppResult<()> {
+    let _ = run_git_config(
+        repo_path,
+        &["config", "--local", "--unset-all", "credential.helper"],
+    );
+    Ok(())
 }
 
 /// Read the effective identity + embedded origin login for display. `account_id`
@@ -702,5 +753,82 @@ mod tests {
             credential_helper_value("octocat"),
             "!f() { test $1 = get && echo username=octocat && echo password=$(gh auth token --user octocat); }; f"
         );
+    }
+
+    // Reads local credential.helper as an ordered Vec (empty entries preserved).
+    fn get_all_credential_helper(repo: &std::path::Path) -> Vec<String> {
+        let out = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(repo)
+            .args(["config", "--local", "--get-all", "credential.helper"])
+            .output()
+            .unwrap();
+        if !out.status.success() {
+            return Vec::new();
+        }
+        let s = String::from_utf8_lossy(&out.stdout);
+        s.strip_suffix('\n')
+            .unwrap_or(&s)
+            .split('\n')
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn routing_written_with_reset_entry_first() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        assert!(!apply_identity(dir.path(), &acct("a1", "octocat")).unwrap());
+
+        let vals = get_all_credential_helper(dir.path());
+        assert_eq!(vals.len(), 2, "expected reset entry + helper");
+        assert_eq!(vals[0], "");
+        assert_eq!(
+            vals[1],
+            "!f() { test $1 = get && echo username=octocat && echo password=$(gh auth token --user octocat); }; f"
+        );
+    }
+
+    #[test]
+    fn routing_is_idempotent_on_reapply() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+        apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+        assert_eq!(get_all_credential_helper(dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn routing_overwrites_on_remap() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+        apply_identity(dir.path(), &acct("a2", "hubot")).unwrap();
+        let vals = get_all_credential_helper(dir.path());
+        assert_eq!(vals.len(), 2);
+        assert!(vals[1].contains("--user hubot"));
+        assert!(!vals[1].contains("octocat"));
+    }
+
+    #[test]
+    fn no_routing_for_ssh_origin() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "git@github.com:acme/widgets.git").unwrap();
+        assert!(apply_identity(dir.path(), &acct("a1", "octocat")).unwrap());
+        assert!(get_all_credential_helper(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn clear_routing_removes_all_entries() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
+        clear_credential_routing(dir.path()).unwrap();
+        assert!(get_all_credential_helper(dir.path()).is_empty());
     }
 }
