@@ -32,7 +32,57 @@ pub struct SearchStore {
     watchers: Arc<Mutex<HashMap<String, watcher::Handle>>>,
 }
 
-pub struct ProjectIndex;
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IndexStatus {
+    Building,
+    Ready,
+    Stale,
+}
+
+pub struct ProjectIndex {
+    pub root: PathBuf,
+    /// Sorted, project-relative, forward-slash file paths.
+    pub paths: Vec<String>,
+    pub status: IndexStatus,
+    pub truncated: bool,
+    /// Epoch millis of the last full build; 0 while first build is pending.
+    pub built_at: u64,
+    /// Cached ignore matcher for incremental membership checks.
+    pub ignore: Arc<Gitignore>,
+    /// Native watcher failed — ensure_active falls back to TTL rebuilds.
+    pub degraded: bool,
+}
+
+/// Reconcile a single changed absolute path against the index: insert it when it
+/// exists on disk, is a file, and isn't ignored; remove it when it's gone.
+pub(crate) fn apply_change(index: &mut ProjectIndex, abs: &Path) {
+    let rel = match abs.strip_prefix(&index.root) {
+        Ok(r) => r.to_string_lossy().replace('\\', "/"),
+        Err(_) => return,
+    };
+    if rel.is_empty() || rel.split('/').any(|c| c == ".git") {
+        return;
+    }
+    let is_file = abs.is_file();
+    let ignored = index
+        .ignore
+        .matched_path_or_any_parents(abs, false)
+        .is_ignore();
+    let should_have = is_file && !ignored;
+    match index.paths.binary_search(&rel) {
+        Ok(pos) => {
+            if !should_have {
+                index.paths.remove(pos);
+            }
+        }
+        Err(pos) => {
+            if should_have && index.paths.len() < MAX_FILES {
+                index.paths.insert(pos, rel);
+            }
+        }
+    }
+}
 
 /// Walk `root` in parallel, returning sorted, project-relative, forward-slash
 /// file paths and whether `cap` was hit. Gitignored entries and `.git` are
@@ -178,6 +228,61 @@ mod tests {
         let (paths, truncated) = build_paths_capped(root, 2);
         assert!(truncated);
         assert_eq!(paths.len(), 2);
+    }
+
+    fn index_for(root: &Path) -> ProjectIndex {
+        let (paths, truncated) = build_paths_capped(root, MAX_FILES);
+        ProjectIndex {
+            root: root.to_path_buf(),
+            paths,
+            status: IndexStatus::Ready,
+            truncated,
+            built_at: 1,
+            ignore: Arc::new(build_ignore(root)),
+            degraded: false,
+        }
+    }
+
+    #[test]
+    fn apply_change_adds_removes_and_respects_ignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, ".gitignore", "*.log\n");
+        write(root, "a/keep.rs", "x");
+        let mut idx = index_for(root);
+        assert!(!idx.paths.iter().any(|p| p == "a/new.rs"));
+
+        // create -> added
+        write(root, "a/new.rs", "x");
+        apply_change(&mut idx, &root.join("a/new.rs"));
+        assert!(idx.paths.iter().any(|p| p == "a/new.rs"));
+
+        // ignored create -> not added
+        write(root, "a/noise.log", "x");
+        apply_change(&mut idx, &root.join("a/noise.log"));
+        assert!(!idx.paths.iter().any(|p| p == "a/noise.log"));
+
+        // remove -> dropped
+        fs::remove_file(root.join("a/new.rs")).unwrap();
+        apply_change(&mut idx, &root.join("a/new.rs"));
+        assert!(!idx.paths.iter().any(|p| p == "a/new.rs"));
+    }
+
+    #[test]
+    fn gitignore_change_rebuild_excludes_newly_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "keep.rs", "x");
+        write(root, "gen.rs", "x");
+        let before = index_for(root);
+        assert!(before.paths.iter().any(|p| p == "gen.rs"));
+
+        // A .gitignore change triggers a full rebuild in the running app; here we
+        // verify the rebuilt path set honors the new rule.
+        write(root, ".gitignore", "gen.rs\n");
+        let (paths, _) = build_paths_capped(root, MAX_FILES);
+        assert!(paths.iter().any(|p| p == "keep.rs"));
+        assert!(!paths.iter().any(|p| p == "gen.rs"));
     }
 
     #[test]
