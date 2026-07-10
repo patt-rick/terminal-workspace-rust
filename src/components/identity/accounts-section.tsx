@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ipc, type Account, type UnmappedBehavior } from '../../lib/ipc'
 import { addAccountViaGhAuth } from '../../lib/add-account'
 import { useIdentity } from '../../state/identity'
+import { useSettings } from '../../state/settings'
 
 const blank = (): Account => ({
   id: crypto.randomUUID(),
@@ -26,6 +27,8 @@ export function AccountsSection() {
   const removeAccount = useIdentity((s) => s.removeAccount)
   const importGhAccounts = useIdentity((s) => s.importGhAccounts)
   const setConfig = useIdentity((s) => s.setConfig)
+  const alignGh = useSettings((s) => s.identity.alignGhOnSelect)
+  const updateIdentity = useSettings((s) => s.updateIdentity)
 
   const [draft, setDraft] = useState<Account | null>(null)
   const [globalMsg, setGlobalMsg] = useState<string | null>(null)
@@ -277,6 +280,27 @@ export function AccountsSection() {
             </select>
           </div>
         )}
+      </div>
+
+      {/* opt-in: align gh CLI on repo select */}
+      <div className="mt-4 border-t border-border pt-3">
+        <label className="flex items-start gap-2 text-sm text-foreground/80">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={alignGh}
+            onChange={(e) => updateIdentity({ alignGhOnSelect: e.target.checked })}
+          />
+          <span>
+            Align gh CLI on repo select
+            <span className="mt-0.5 block text-xs text-muted">
+              When you select a repo in the Git panel, run{' '}
+              <code className="font-mono">gh auth switch</code> to its mapped account so bare{' '}
+              <code className="font-mono">gh</code> commands (e.g. <code className="font-mono">gh pr create</code>)
+              act as that account. This is the only feature that changes your global gh state.
+            </span>
+          </span>
+        </label>
       </div>
     </div>
   )
