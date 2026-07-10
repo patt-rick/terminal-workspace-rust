@@ -72,6 +72,11 @@ export function applyTheme(theme: Theme): void {
     else root.style.removeProperty(prop)
   }
 
+  // Optional title-bar text override; cleared so a theme without it falls back
+  // to `--foreground` (see globals.css `.app-titlebar`).
+  if (theme.titleBarText) root.style.setProperty('--title-bar-text', theme.titleBarText)
+  else root.style.removeProperty('--title-bar-text')
+
   root.setAttribute('data-theme', theme.meta.id)
   root.classList.toggle('dark', theme.meta.appearance === 'dark')
   root.classList.toggle('light', theme.meta.appearance === 'light')

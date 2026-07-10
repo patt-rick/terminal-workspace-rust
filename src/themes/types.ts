@@ -94,4 +94,11 @@ export interface Theme {
   terminal: TerminalTokens
   syntax: SyntaxTokens
   gradients?: GradientTokens
+  /**
+   * Optional override for the text/glyph color on the title bar (app title,
+   * window controls, account pill). Falls back to `chrome.foreground` when
+   * omitted. Set this when a light `gradients.titleBar` background on a dark
+   * theme would otherwise swallow the title bar text.
+   */
+  titleBarText?: string
 }

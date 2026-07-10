@@ -16,7 +16,7 @@ export function TitleBar() {
       className="app-titlebar flex h-8 flex-shrink-0 select-none items-stretch justify-between border-b border-border"
       style={{ background: 'var(--gradient-title-bar, var(--surface))' }}
     >
-      <div className="flex items-center gap-2 pl-2.5 text-xs font-medium text-foreground/55">
+      <div className="flex items-center gap-2 pl-2.5 text-xs font-medium text-[var(--title-bar-fg-faint)]">
         <img src={appIcon} alt="" className="h-4 w-4" />
         <span>Terminal Workspace</span>
       </div>

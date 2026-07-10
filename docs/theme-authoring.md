@@ -26,12 +26,13 @@ so you do not need to pick a unique id yourself — just give it a good `name`.
   "chrome":   { /* 20 color tokens, all required */ },
   "terminal": { "cursor": color, "selection": color, "ansi": { /* 16 colors */ } },
   "syntax":   { /* 14 color tokens, all required */ },
-  "gradients": { /* OPTIONAL: "app"?, "titleBar"? */ }
+  "gradients": { /* OPTIONAL: "app"?, "titleBar"? */ },
+  "titleBarText": color // OPTIONAL: title bar text/glyph color
 }
 ```
 
 Every key listed as required must be present. Extra unknown keys are ignored.
-`gradients` is the only optional block.
+`gradients` and `titleBarText` are the optional keys.
 
 ## Value formats
 
@@ -136,6 +137,22 @@ Either key may be provided independently; omit the block entirely for a flat
 theme. Keep gradients subtle and anchored to your palette's darkest surfaces so
 UI text over them stays readable.
 
+## `titleBarText` (optional)
+
+A single color (same value formats as any other color token) that sets the
+text/glyph color on the title bar — the app title, the minimize/maximize/close
+window controls, and the account pill. When omitted it falls back to
+`chrome.foreground`.
+
+Set it when a `gradients.titleBar` (or otherwise light) title bar would leave the
+title bar text illegible — e.g. a dark theme with a light title bar wants a dark
+`titleBarText` so the text stays visible. The value is softened slightly for the
+title and idle controls and shown at full strength on hover.
+
+```jsonc
+"titleBarText": "#1b1b1f"
+```
+
 ## Complete example
 
 A valid dark theme with gradients. Copy, edit values, and import.
@@ -219,7 +236,9 @@ A valid dark theme with gradients. Copy, edit values, and import.
 > `syntax` token; use only hex or rgba/hsla color values; make `accentForeground`
 > contrast with `accent`; make `terminal.selection` a translucent rgba; keep
 > `comment` low-contrast; optionally add subtle `gradients.app` and
-> `gradients.titleBar` anchored to the darkest surfaces. Output only the JSON.
+> `gradients.titleBar` anchored to the darkest surfaces, and if the title bar is
+> lighter than the app, set `titleBarText` to a color that stays legible on it.
+> Output only the JSON.
 
 ## Validation checklist
 
@@ -228,4 +247,5 @@ A valid dark theme with gradients. Copy, edit values, and import.
 - [ ] `terminal.cursor`, `terminal.selection`, and all 16 `terminal.ansi` slots present.
 - [ ] All 14 `syntax` tokens present.
 - [ ] Any `gradients` values are a single CSS gradient function with no `;`, `{`, `}`, quotes, or `url(...)`.
+- [ ] `titleBarText`, if present, is a single color (not a gradient).
 - [ ] No color slot contains a gradient or `url(...)`.

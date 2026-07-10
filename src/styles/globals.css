@@ -87,9 +87,15 @@ body {
   background-clip: content-box;
 }
 
-/* The custom title bar drag region (set on the header element). */
+/* The custom title bar drag region (set on the header element). The title bar
+   text/glyph color resolves from the optional `--title-bar-text` theme override,
+   falling back to the app foreground; `-dim`/`-faint` are the softened levels the
+   bar's contents use (see title-bar / window-controls / account-pill). */
 .app-titlebar {
   -webkit-app-region: drag;
+  --title-bar-fg: var(--title-bar-text, var(--foreground));
+  --title-bar-fg-dim: color-mix(in srgb, var(--title-bar-fg) 70%, transparent);
+  --title-bar-fg-faint: color-mix(in srgb, var(--title-bar-fg) 55%, transparent);
 }
 .app-titlebar button,
 .app-titlebar a,

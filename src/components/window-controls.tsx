@@ -32,7 +32,7 @@ export function WindowControls() {
         onClick={() => void win.minimize()}
         title="Minimize"
         aria-label="Minimize"
-        className="flex w-[46px] items-center justify-center text-foreground/70 transition-colors hover:bg-foreground/10 hover:text-foreground"
+        className="flex w-[46px] items-center justify-center text-[var(--title-bar-fg-dim)] transition-colors hover:bg-foreground/10 hover:text-[var(--title-bar-fg)]"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
           <line x1="0" y1="5" x2="10" y2="5" />
@@ -43,7 +43,7 @@ export function WindowControls() {
         onClick={() => void win.toggleMaximize()}
         title={maximized ? 'Restore' : 'Maximize'}
         aria-label={maximized ? 'Restore' : 'Maximize'}
-        className="flex w-[46px] items-center justify-center text-foreground/70 transition-colors hover:bg-foreground/10 hover:text-foreground"
+        className="flex w-[46px] items-center justify-center text-[var(--title-bar-fg-dim)] transition-colors hover:bg-foreground/10 hover:text-[var(--title-bar-fg)]"
       >
         {maximized ? (
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
@@ -61,7 +61,7 @@ export function WindowControls() {
         onClick={() => void win.close()}
         title="Close"
         aria-label="Close"
-        className="flex w-[46px] items-center justify-center text-foreground/70 transition-colors hover:bg-[#e81123] hover:text-white"
+        className="flex w-[46px] items-center justify-center text-[var(--title-bar-fg-dim)] transition-colors hover:bg-[#e81123] hover:text-white"
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
           <line x1="0" y1="0" x2="10" y2="10" />

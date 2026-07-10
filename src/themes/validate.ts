@@ -132,6 +132,16 @@ export function parseThemeJson(raw: string): ParseResult {
     }
   }
 
+  // Optional title-bar text color: a solid color like the chrome tokens, so it
+  // runs through the same allowlist before being injected as a CSS variable.
+  let titleBarText: string | undefined
+  if (t.titleBarText !== undefined) {
+    if (!isColor(t.titleBarText)) {
+      return { ok: false, error: `Invalid color for titleBarText: ${JSON.stringify(t.titleBarText)}` }
+    }
+    titleBarText = (t.titleBarText as string).trim()
+  }
+
   const theme: Theme = {
     meta: {
       id: slugify(meta.name),
@@ -142,6 +152,7 @@ export function parseThemeJson(raw: string): ParseResult {
     terminal: terminal as unknown as Theme['terminal'],
     syntax: syntax as unknown as Theme['syntax'],
     ...(gradients ? { gradients } : {}),
+    ...(titleBarText ? { titleBarText } : {}),
   }
   return { ok: true, theme }
 }

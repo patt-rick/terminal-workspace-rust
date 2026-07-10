@@ -38,7 +38,7 @@ export function AccountPill() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title="Claude accounts"
-        className="flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs text-foreground/70 hover:bg-foreground/5 hover:text-foreground"
+        className="flex items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs text-[var(--title-bar-fg-dim)] hover:bg-foreground/5 hover:text-[var(--title-bar-fg)]"
       >
         <span
           className={`h-1.5 w-1.5 rounded-full ${
