@@ -15,6 +15,7 @@ import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
+import { useRepos } from './state/repos'
 import { useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
 import { useUi } from './state/ui'
@@ -28,10 +29,12 @@ export default function App() {
   const { projects, selectedProject, addProject } = useProjects()
 
   const openFiles = useFiles((s) => s.openFiles)
+  const openFile = useFiles((s) => s.openFile)
   const filePaneWidth = useFiles((s) => s.filePaneWidth)
   const setFilePaneWidth = useFiles((s) => s.setFilePaneWidth)
   const activeDiffRaw = useDiffView((s) => s.active)
   const closeDiff = useDiffView((s) => s.close)
+  const reposByProject = useRepos((s) => s.reposByProject)
 
   const activeTerminalByProject = useWorkspace((s) => s.activeTerminalByProject)
   const titleByTerminal = useWorkspace((s) => s.titleByTerminal)
@@ -205,6 +208,18 @@ export default function App() {
       : null
   const showFilePane = !!selectedProject && (!!activeDiff || hasOpenFiles)
 
+  const openDiffFile = useCallback(() => {
+    if (!activeDiff) return
+    const repo = (reposByProject[activeDiff.projectId] ?? []).find(
+      (r) => r.id === activeDiff.repoId
+    )
+    const path = repo?.relativePath
+      ? `${repo.relativePath}/${activeDiff.file.path}`
+      : activeDiff.file.path
+    openFile({ projectId: activeDiff.projectId, path })
+    closeDiff()
+  }, [activeDiff, reposByProject, openFile, closeDiff])
+
   return (
     <div className="flex h-screen w-screen flex-col bg-surface text-foreground">
       <TitleBar />
@@ -320,7 +335,7 @@ export default function App() {
               />
               <div style={{ width: filePaneWidth }} className="h-full min-w-0 flex-shrink-0">
                 {activeDiff ? (
-                  <DiffViewer file={activeDiff.file} onClose={closeDiff} />
+                  <DiffViewer file={activeDiff.file} onClose={closeDiff} onOpen={openDiffFile} />
                 ) : (
                   <FileViewer projectId={selectedProject.id} />
                 )}
@@ -396,14 +411,14 @@ function EmptyState({
   onTertiary?: () => void
 }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center">
-      <div className="flex flex-col items-center gap-3">
+    <div className="@container absolute inset-0 flex items-center justify-center">
+      <div className="flex w-full flex-col items-center gap-3 px-4">
         <div className="text-sm text-muted">{title}</div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col items-stretch gap-2 @sm:w-auto @sm:flex-row @sm:items-center">
           <button
             type="button"
             onClick={onAction}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90"
+            className="whitespace-nowrap rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground hover:opacity-90"
           >
             {actionLabel}
           </button>
@@ -411,7 +426,7 @@ function EmptyState({
             <button
               type="button"
               onClick={onSecondary}
-              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
+              className="whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
             >
               {secondaryLabel}
             </button>
@@ -420,7 +435,7 @@ function EmptyState({
             <button
               type="button"
               onClick={onTertiary}
-              className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
+              className="whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground hover:bg-foreground/5"
             >
               {tertiaryLabel}
             </button>

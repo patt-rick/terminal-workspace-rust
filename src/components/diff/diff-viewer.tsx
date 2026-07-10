@@ -22,7 +22,15 @@ const lineClass = (origin: string): string => {
 
 const num = (n: number | null): string => (n === null ? '' : String(n))
 
-export function DiffViewer({ file, onClose }: { file: FileDiff; onClose: () => void }) {
+export function DiffViewer({
+  file,
+  onClose,
+  onOpen,
+}: {
+  file: FileDiff
+  onClose: () => void
+  onOpen?: () => void
+}) {
   return (
     <div className="flex h-full flex-col border-l border-border bg-background">
       <div className="flex h-9 flex-shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
@@ -32,6 +40,20 @@ export function DiffViewer({ file, onClose }: { file: FileDiff; onClose: () => v
         )}
         <span className="truncate font-medium text-foreground">{file.path}</span>
         <div className="flex-1" />
+        {onOpen && file.status !== 'deleted' && (
+          <button
+            type="button"
+            onClick={onOpen}
+            title="Open file"
+            className="flex h-5 w-5 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           onClick={onClose}
