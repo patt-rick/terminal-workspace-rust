@@ -5,6 +5,7 @@ import { ThemeProvider } from './themes/theme-provider'
 import { applyTheme, resolveTheme } from './themes'
 import {
   EDITOR_DEFAULTS,
+  IDENTITY_DEFAULTS,
   readStoredSettings,
   setSettingsBackendSync,
   TERMINAL_DEFAULTS,
@@ -37,6 +38,7 @@ async function bootstrap(): Promise<void> {
         ...remote,
         editor: { ...EDITOR_DEFAULTS, ...remote.editor },
         terminal: { ...TERMINAL_DEFAULTS, ...remote.terminal },
+        identity: { ...IDENTITY_DEFAULTS, ...remote.identity },
         customThemes: remote.customThemes ?? [],
       }
       useSettings.getState().replaceAll(merged)

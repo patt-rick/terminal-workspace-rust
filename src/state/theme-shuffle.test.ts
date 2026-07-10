@@ -6,13 +6,14 @@ const BUILTIN_IDS = THEMES.map((t) => t.meta.id)
 
 describe('daily theme shuffle', () => {
   beforeEach(() => {
-    const { editor, terminal } = useSettings.getState()
+    const { editor, terminal, identity } = useSettings.getState()
     useSettings.getState().replaceAll({
       themeId: THEMES[0].meta.id,
       themeShuffle: false,
       lastShuffleDate: null,
       editor,
       terminal,
+      identity,
       customThemes: [],
     })
     vi.useFakeTimers()

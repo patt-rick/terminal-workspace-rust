@@ -38,6 +38,15 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   claudeSkipPermissions: false,
 }
 
+export interface IdentitySettings {
+  /** Opt-in: run `gh auth switch` for the selected repo's account on selection. */
+  alignGhOnSelect: boolean
+}
+
+export const IDENTITY_DEFAULTS: IdentitySettings = {
+  alignGhOnSelect: false,
+}
+
 export interface Settings {
   themeId: string
   /** When true, a new theme is auto-selected once per calendar day. */
@@ -46,6 +55,7 @@ export interface Settings {
   lastShuffleDate: string | null
   editor: EditorSettings
   terminal: TerminalSettings
+  identity: IdentitySettings
   /** User-imported themes; merged with the built-in presets at runtime. */
   customThemes: Theme[]
 }
@@ -56,6 +66,7 @@ export const SETTINGS_DEFAULTS: Settings = {
   lastShuffleDate: null,
   editor: EDITOR_DEFAULTS,
   terminal: TERMINAL_DEFAULTS,
+  identity: IDENTITY_DEFAULTS,
   customThemes: [],
 }
 
@@ -74,6 +85,7 @@ export function readStoredSettings(): Settings {
       lastShuffleDate: parsed.lastShuffleDate ?? SETTINGS_DEFAULTS.lastShuffleDate,
       editor: { ...EDITOR_DEFAULTS, ...parsed.editor },
       terminal: { ...TERMINAL_DEFAULTS, ...parsed.terminal },
+      identity: { ...IDENTITY_DEFAULTS, ...parsed.identity },
       customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes : [],
     }
   } catch {
@@ -101,6 +113,7 @@ interface SettingsState extends Settings {
   applyDailyShuffle: () => void
   updateEditor: (patch: Partial<EditorSettings>) => void
   updateTerminal: (patch: Partial<TerminalSettings>) => void
+  updateIdentity: (patch: Partial<IdentitySettings>) => void
   /**
    * Add an imported theme. Its id is made unique against existing themes, and
    * the stored theme (with the final id) is returned so callers can select it.
@@ -149,8 +162,8 @@ export function setSettingsBackendSync(fn: (s: Settings) => void): void {
 
 export const useSettings = create<SettingsState>((set, get) => {
   const snapshot = (): Settings => {
-    const { themeId, themeShuffle, lastShuffleDate, editor, terminal, customThemes } = get()
-    return { themeId, themeShuffle, lastShuffleDate, editor, terminal, customThemes }
+    const { themeId, themeShuffle, lastShuffleDate, editor, terminal, identity, customThemes } = get()
+    return { themeId, themeShuffle, lastShuffleDate, editor, terminal, identity, customThemes }
   }
   const commit = (): void => {
     const s = snapshot()
@@ -196,6 +209,10 @@ export const useSettings = create<SettingsState>((set, get) => {
       set((state) => ({ terminal: { ...state.terminal, ...patch } }))
       commit()
     },
+    updateIdentity: (patch) => {
+      set((state) => ({ identity: { ...state.identity, ...patch } }))
+      commit()
+    },
     addCustomTheme: (theme) => {
       const taken = new Set(get().customThemes.map((t) => t.meta.id))
       const id = uniqueThemeId(theme.meta.id, taken)
@@ -218,6 +235,7 @@ export const useSettings = create<SettingsState>((set, get) => {
         lastShuffleDate: s.lastShuffleDate ?? null,
         editor: s.editor,
         terminal: s.terminal,
+        identity: s.identity ?? IDENTITY_DEFAULTS,
         customThemes: s.customThemes,
       })
       persistLocal(s)
