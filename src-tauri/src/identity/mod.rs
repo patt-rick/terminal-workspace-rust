@@ -228,6 +228,24 @@ impl IdentityStore {
         current_identity(Path::new(repo_path), mapped)
     }
 
+    /// Preflight the mapped account's push credentials for a repo. Only HTTPS
+    /// github origins depend on gh; others (unmapped, SSH) return ok with no login.
+    pub fn preflight(&self, repo_path: &str) -> PreflightResult {
+        let login = {
+            let d = self.inner.lock();
+            d.mapping
+                .get(repo_path)
+                .and_then(|id| d.accounts.iter().find(|a| &a.id == id))
+                .map(|a| a.login.clone())
+        };
+        let effective = if origin_is_https_github(Path::new(repo_path)) {
+            login.as_deref()
+        } else {
+            None
+        };
+        evaluate_preflight(effective, real_gh_probe)
+    }
+
     /// Set the account as the global git identity (`git config --global`).
     pub fn apply_global(&self, account_id: &str) -> AppResult<()> {
         let account = self
@@ -428,6 +446,78 @@ fn clear_credential_routing(repo_path: &Path) -> AppResult<()> {
         &["config", "--local", "--unset-all", "credential.helper"],
     );
     Ok(())
+}
+
+/// Outcome of probing `gh` for a login's token.
+#[derive(Clone, Copy)]
+pub enum GhProbe {
+    /// `gh` binary not found on PATH.
+    Missing,
+    /// `gh auth token --user <login>` exited 0 with a token.
+    TokenOk,
+    /// `gh` present but the token could not be fetched (account logged out).
+    TokenFailed,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightResult {
+    pub ok: bool,
+    pub reason: Option<String>,
+    pub login: Option<String>,
+}
+
+/// Decide whether a push for `login` will authenticate, given a gh probe. Pure so
+/// it can be unit-tested with a stubbed probe (no real `gh` needed). `login=None`
+/// (repo unmapped or non-HTTPS remote) means gh is not in the loop — always ok.
+pub fn evaluate_preflight(
+    login: Option<&str>,
+    probe: impl FnOnce(&str) -> GhProbe,
+) -> PreflightResult {
+    let Some(login) = login else {
+        return PreflightResult { ok: true, reason: None, login: None };
+    };
+    match probe(login) {
+        GhProbe::Missing => PreflightResult {
+            ok: false,
+            reason: Some(
+                "GitHub CLI (gh) not found on PATH — install gh or use an SSH remote".to_string(),
+            ),
+            login: Some(login.to_string()),
+        },
+        GhProbe::TokenOk => PreflightResult {
+            ok: true,
+            reason: None,
+            login: Some(login.to_string()),
+        },
+        GhProbe::TokenFailed => PreflightResult {
+            ok: false,
+            reason: Some(format!("{login} isn't logged in to gh — run `gh auth login`")),
+            login: Some(login.to_string()),
+        },
+    }
+}
+
+/// Real gh probe: spawn errors ⇒ Missing; non-zero/empty ⇒ TokenFailed.
+fn real_gh_probe(login: &str) -> GhProbe {
+    use std::process::Command;
+    match Command::new("gh")
+        .args(["auth", "token", "--user", login])
+        .output()
+    {
+        Err(_) => GhProbe::Missing,
+        Ok(out) if out.status.success() && !out.stdout.trim_ascii().is_empty() => GhProbe::TokenOk,
+        Ok(_) => GhProbe::TokenFailed,
+    }
+}
+
+/// True when `origin` is an HTTPS github.com remote (routing applies).
+fn origin_is_https_github(repo_path: &Path) -> bool {
+    Repository::discover(repo_path)
+        .ok()
+        .and_then(|r| r.find_remote("origin").ok().and_then(|rm| rm.url().map(String::from)))
+        .and_then(|u| rewrite_remote_url(&u, "x"))
+        .is_some()
 }
 
 /// Read the effective identity + embedded origin login for display. `account_id`
@@ -874,5 +964,34 @@ mod tests {
         store.apply(&path, "a1").unwrap();
         store.remove_account("a1");
         assert!(get_all_credential_helper(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn preflight_ok_when_unmapped() {
+        let r = evaluate_preflight(None, |_| GhProbe::TokenOk);
+        assert!(r.ok);
+        assert!(r.login.is_none());
+        assert!(r.reason.is_none());
+    }
+
+    #[test]
+    fn preflight_fails_when_gh_missing() {
+        let r = evaluate_preflight(Some("jephtta"), |_| GhProbe::Missing);
+        assert!(!r.ok);
+        assert!(r.reason.unwrap().contains("gh"));
+    }
+
+    #[test]
+    fn preflight_fails_when_token_unavailable() {
+        let r = evaluate_preflight(Some("jephtta"), |_| GhProbe::TokenFailed);
+        assert!(!r.ok);
+        assert!(r.reason.unwrap().contains("jephtta"));
+    }
+
+    #[test]
+    fn preflight_ok_when_token_present() {
+        let r = evaluate_preflight(Some("jephtta"), |_| GhProbe::TokenOk);
+        assert!(r.ok);
+        assert_eq!(r.login.as_deref(), Some("jephtta"));
     }
 }

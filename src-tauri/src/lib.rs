@@ -180,6 +180,7 @@ pub fn run() {
             commands::identity_resolve,
             commands::identity_apply,
             commands::identity_unmap,
+            commands::identity_push_preflight,
             commands::identity_current,
             commands::identity_apply_global,
             commands::identity_detect_gh_accounts,

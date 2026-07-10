@@ -274,6 +274,12 @@ export interface ApplyResult {
   routingSkipped: boolean
 }
 
+export interface PreflightResult {
+  ok: boolean
+  reason: string | null
+  login: string | null
+}
+
 export interface DetectedGhAccount {
   login: string
   active: boolean
@@ -568,6 +574,8 @@ export const ipc = {
     apply: (repoId: string, accountId: string) =>
       invoke<ApplyResult>('identity_apply', { repoId, accountId }),
     unmap: (repoId: string) => invoke<void>('identity_unmap', { repoId }),
+    pushPreflight: (repoId: string) =>
+      invoke<PreflightResult>('identity_push_preflight', { repoId }),
     current: (repoId: string) =>
       invoke<CurrentIdentity>('identity_current', { repoId }),
     applyGlobal: (accountId: string) =>

@@ -10,7 +10,7 @@ use crate::github::{
 };
 use crate::identity::{
     Account, ApplyResult, CurrentIdentity, DetectedGhAccount, IdentityConfig, IdentityStore,
-    Resolution, UnmappedBehavior,
+    PreflightResult, Resolution, UnmappedBehavior,
 };
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::search::{IndexStatusResult, QueryResult, SearchStore};
@@ -856,6 +856,16 @@ pub fn identity_unmap(
     let root = repo_root(&store, &repo_id)?;
     ids.unmap(&root);
     Ok(())
+}
+
+#[tauri::command]
+pub fn identity_push_preflight(
+    ids: State<IdentityStore>,
+    store: State<StateStore>,
+    repo_id: String,
+) -> AppResult<PreflightResult> {
+    let root = repo_root(&store, &repo_id)?;
+    Ok(ids.preflight(&root))
 }
 
 #[tauri::command]
