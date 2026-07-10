@@ -15,6 +15,7 @@ mod identity;
 mod pty;
 #[cfg(feature = "remote-access")]
 mod remote;
+mod search;
 mod settings;
 mod state;
 
@@ -69,6 +70,7 @@ pub fn run() {
             ));
             app.manage(commands::ClaudeOauthFlow::default());
             app.manage(PtyManager::new());
+            app.manage(search::SearchStore::default());
             // Claude hook events (Notification/Stop) land in the spool dir; the
             // watcher routes them to terminals as attention events. Cheap no-op
             // polling when hooks aren't installed.

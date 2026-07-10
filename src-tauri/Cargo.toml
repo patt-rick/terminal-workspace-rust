@@ -47,6 +47,11 @@ parking_lot = "0.12"
 # gitignore-aware file listing
 ignore = "0.4"
 
+# Quick-open file search: fuzzy matcher (Helix engine) + debounced fs watcher.
+# notify-debouncer-mini re-exports `notify`, so we don't depend on notify directly.
+nucleo-matcher = "0.3"
+notify-debouncer-mini = "0.7"
+
 # git: libgit2 (vendored so no system lib is required); push shells out to git CLI
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 
