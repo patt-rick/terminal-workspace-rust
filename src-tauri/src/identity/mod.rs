@@ -387,11 +387,18 @@ pub fn apply_global(account: &Account) -> AppResult<()> {
     Ok(())
 }
 
+/// GitHub logins are ASCII alphanumerics and hyphens. Enforced server-side
+/// before a login is embedded in the sh credential helper, so injection safety
+/// doesn't rest on the frontend form validation alone.
+fn valid_login(login: &str) -> bool {
+    !login.is_empty() && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// The inline `sh` credential helper written to a repo's local `credential.helper`.
 /// Git for Windows runs `!`-prefixed helpers via its bundled `sh`, appending the
 /// operation (`get`/`store`/`erase`) as `$1`. We answer only `get`; `store`/`erase`
-/// short-circuit to a no-op. `login` is constrained to `[A-Za-z0-9-]` by the
-/// account form, so it needs no shell escaping. The token is resolved at fill
+/// short-circuit to a no-op. `login` is validated by `valid_login` before it is
+/// embedded, so it needs no shell escaping. The token is resolved at fill
 /// time from gh's keyring and never persisted.
 fn credential_helper_value(login: &str) -> String {
     format!(
@@ -421,6 +428,11 @@ fn run_git_config(repo_path: &Path, args: &[&str]) -> AppResult<()> {
 /// then adds our inline helper. `--unset-all` first makes re-apply idempotent and
 /// re-map overwrite. CLI (not git2) for correct multi-value + Windows quoting.
 fn write_credential_routing(repo_path: &Path, login: &str) -> AppResult<()> {
+    if !valid_login(login) {
+        return Err(AppError::Msg(format!(
+            "invalid GitHub login {login:?} — refusing to write credential helper"
+        )));
+    }
     // Exit code 5 = "nothing to unset"; ignore any failure here (best-effort reset).
     let _ = run_git_config(
         repo_path,
@@ -959,6 +971,16 @@ mod tests {
         repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
         apply_identity(dir.path(), &acct("a1", "octocat")).unwrap();
         clear_credential_routing(dir.path()).unwrap();
+        assert!(get_all_credential_helper(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn routing_rejects_login_with_shell_metacharacters() {
+        let dir = tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://github.com/acme/widgets.git").unwrap();
+        let err = apply_identity(dir.path(), &acct("a1", "x; rm -rf ~")).unwrap_err();
+        assert!(err.to_string().contains("invalid GitHub login"));
         assert!(get_all_credential_helper(dir.path()).is_empty());
     }
 
