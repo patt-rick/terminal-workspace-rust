@@ -11,6 +11,37 @@ import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
 import { ClaudeAccountsSection } from './claude-accounts/claude-accounts-section'
 import { useUi } from '../state/ui'
+import themeGuideMarkdown from '../../docs/theme-authoring.md?raw'
+
+// Save text to a file, picking the right mechanism per platform. In the Tauri
+// webview the <a download> trick is a no-op, so we go through a native save
+// dialog + backend file write; on the web we use a Blob download link.
+async function saveTextFile(
+  filename: string,
+  content: string,
+  filter: { name: string; extension: string; mime: string },
+) {
+  if (isTauri) {
+    const path = await save({
+      defaultPath: filename,
+      filters: [{ name: filter.name, extensions: [filter.extension] }],
+    })
+    if (!path) return // user cancelled
+    await ipc.fs.exportText(path, content)
+  } else {
+    const blob = new Blob([content], { type: filter.mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // Revoke after the click is processed, not synchronously (which can
+    // abort the download).
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+}
 
 type SettingsTabId = 'general' | 'ai' | 'github' | 'remote' | 'updates'
 
@@ -68,31 +99,27 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     const json = JSON.stringify(activeTheme, null, 2)
     const filename = `${activeTheme.meta.id.replace(/^custom:/, '')}.theme.json`
     try {
-      if (isTauri) {
-        // The WebView2 <a download> mechanism is a no-op in the Tauri webview,
-        // so saving goes through a native save dialog + backend file write.
-        const path = await save({
-          defaultPath: filename,
-          filters: [{ name: 'Theme JSON', extensions: ['json'] }],
-        })
-        if (!path) return // user cancelled
-        await ipc.fs.exportText(path, json)
-      } else {
-        const blob = new Blob([json], { type: 'application/json' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = filename
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        // Revoke after the click is processed, not synchronously (which can
-        // abort the download).
-        setTimeout(() => URL.revokeObjectURL(url), 0)
-      }
+      await saveTextFile(filename, json, {
+        name: 'Theme JSON',
+        extension: 'json',
+        mime: 'application/json',
+      })
       setThemeError(null)
     } catch (err) {
       setThemeError(`Export failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const downloadThemeGuide = async () => {
+    try {
+      await saveTextFile('theme-authoring.md', themeGuideMarkdown, {
+        name: 'Markdown',
+        extension: 'md',
+        mime: 'text/markdown',
+      })
+      setThemeError(null)
+    } catch (err) {
+      setThemeError(`Download failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -218,6 +245,19 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </div>
           <div className="text-xs text-muted">
             Export the active theme, edit the JSON, then import it back.
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void downloadThemeGuide()}
+              className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5"
+            >
+              Download theme guide…
+            </button>
+          </div>
+          <div className="text-xs text-muted">
+            Hand this Markdown spec to an LLM (ChatGPT, Claude, …) and ask it to generate a theme,
+            then import the JSON it produces.
           </div>
           {themeError && <div className="text-xs text-danger">{themeError}</div>}
         </Section>
