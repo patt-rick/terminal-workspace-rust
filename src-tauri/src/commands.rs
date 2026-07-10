@@ -13,12 +13,13 @@ use crate::identity::{
     Resolution, UnmappedBehavior,
 };
 use crate::pty::{shell, CreateOpts, PtyManager};
+use crate::search::{IndexStatusResult, QueryResult, SearchStore};
 use crate::settings::SettingsStore;
 use crate::state::{AppState, Project, StateStore, TerminalRecord};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -61,8 +62,9 @@ pub fn projects_add(store: State<StateStore>, path: String) -> Project {
 }
 
 #[tauri::command]
-pub fn projects_remove(store: State<StateStore>, id: String) {
-    store.remove_project(&id)
+pub fn projects_remove(store: State<StateStore>, search: State<SearchStore>, id: String) {
+    search.drop_project(&id);
+    store.remove_project(&id);
 }
 
 #[tauri::command]
@@ -274,6 +276,43 @@ pub fn fs_save_temp_paste(bytes: Vec<u8>, ext: String) -> AppResult<String> {
 #[tauri::command]
 pub fn fs_export_text(path: String, content: String) -> AppResult<()> {
     crate::fs::write_text_abs(&path, &content)
+}
+
+// ---------- search (quick open) ----------
+
+#[tauri::command]
+pub fn search_query(
+    store: State<StateStore>,
+    search: State<SearchStore>,
+    project_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> AppResult<QueryResult> {
+    let root = project_root(&store, &project_id)?;
+    search.ensure_active(&project_id, PathBuf::from(&root));
+    Ok(search.query(&project_id, &query, limit.unwrap_or(50)))
+}
+
+#[tauri::command]
+pub fn search_index_status(
+    store: State<StateStore>,
+    search: State<SearchStore>,
+    project_id: String,
+) -> AppResult<IndexStatusResult> {
+    let root = project_root(&store, &project_id)?;
+    search.ensure_active(&project_id, PathBuf::from(&root));
+    Ok(search.status_of(&project_id))
+}
+
+#[tauri::command]
+pub fn search_rebuild(
+    store: State<StateStore>,
+    search: State<SearchStore>,
+    project_id: String,
+) -> AppResult<()> {
+    let root = project_root(&store, &project_id)?;
+    search.rebuild(&project_id, PathBuf::from(&root));
+    Ok(())
 }
 
 // ---------- git ----------
