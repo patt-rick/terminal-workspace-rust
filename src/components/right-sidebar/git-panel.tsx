@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ipc, type CurrentIdentity, type FileDiff, type GitInfo, type RepoInfo } from '../../lib/ipc'
+import { ipc, type CurrentIdentity, type FileDiff, type GitInfo, type PreflightResult, type RepoInfo } from '../../lib/ipc'
 import { useDiffView } from '../../state/diff'
 import { useIdentity } from '../../state/identity'
 import { useRepos } from '../../state/repos'
+import { useSettings } from '../../state/settings'
 
 const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
 
@@ -141,6 +142,8 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const [pushing, setPushing] = useState(false)
   const [pushMsg, setPushMsg] = useState<string | null>(null)
   const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null)
+  const alignGhOnSelect = useSettings((s) => s.identity.alignGhOnSelect)
   const accounts = useIdentity((s) => s.accounts)
   const appliedTick = useIdentity((s) => s.appliedTick)
   const openPicker = useIdentity((s) => s.openPicker)
@@ -152,6 +155,13 @@ export function GitPanel({ projectId }: { projectId: string }) {
     () => repos.find((r) => r.id === selectedId) ?? null,
     [repos, selectedId]
   )
+
+  const mappedAccount = identity?.accountId
+    ? accounts.find((a) => a.id === identity.accountId)
+    : undefined
+  const pushLogin = identity?.remoteLogin ?? mappedAccount?.login ?? null
+  const routingSkipped = !!identity?.accountId && !identity?.remoteLogin
+  const preflightBad = !!preflight && !preflight.ok
 
   // Discover repos (cached) whenever the project changes.
   useEffect(() => {
@@ -176,6 +186,7 @@ export function GitPanel({ projectId }: { projectId: string }) {
       })
       .finally(() => setLoading(false))
     ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+    ipc.identity.pushPreflight(selectedId).then(setPreflight).catch(() => setPreflight(null))
     void refreshDirty(projectId)
   }, [selectedId, projectId, refreshDirty])
 
@@ -185,7 +196,14 @@ export function GitPanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!selectedId) return
     ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
+    ipc.identity.pushPreflight(selectedId).then(setPreflight).catch(() => setPreflight(null))
   }, [selectedId, appliedTick])
+
+  // Opt-in: keep the gh CLI's active account aligned with the selected repo.
+  useEffect(() => {
+    if (!alignGhOnSelect || !pushLogin) return
+    ipc.identity.alignGh(pushLogin).catch(() => {})
+  }, [alignGhOnSelect, pushLogin, selectedId])
 
   const onSelectRepo = (repoId: string): void => {
     if (repoId === selectedId) return
@@ -199,8 +217,11 @@ export function GitPanel({ projectId }: { projectId: string }) {
     setPushing(true)
     setPushMsg(null)
     try {
+      const pf = await ipc.identity.pushPreflight(selectedId).catch(() => null)
+      setPreflight(pf)
+      const warn = pf && !pf.ok ? `${pf.reason ?? 'Credential preflight failed'}\n` : ''
       const res = await ipc.git.push(selectedId, info.branch)
-      setPushMsg(res.ok ? 'Pushed.' : res.output || 'Push failed')
+      setPushMsg(warn + (res.ok ? 'Pushed.' : res.output || 'Push failed'))
       if (res.ok) refresh()
     } catch (e) {
       setPushMsg(String(e))
@@ -299,6 +320,20 @@ export function GitPanel({ projectId }: { projectId: string }) {
           </button>
         </div>
       </div>
+
+      {pushLogin && (
+        <div
+          className={`px-3 pb-1 text-[11px] ${
+            preflightBad || routingSkipped ? 'text-warning' : 'text-muted'
+          }`}
+        >
+          {preflightBad
+            ? preflight?.reason
+            : routingSkipped
+            ? `Author only — ${pushLogin} not routed (non-HTTPS remote)`
+            : `Pushing as ${pushLogin}`}
+        </div>
+      )}
 
       {(info.dirty || info.ahead > 0 || !info.hasUpstream) && info.branch && (
         <div className="px-3 pb-2">
