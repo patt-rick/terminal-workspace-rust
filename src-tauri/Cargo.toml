@@ -1,6 +1,6 @@
 [package]
 name = "terminal-workspace"
-version = "0.3.7"
+version = "0.3.8"
 description = "Multi-project, multi-terminal workspace IDE built with Tauri and Rust"
 authors = ["patt-rick"]
 edition = "2021"
