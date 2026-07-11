@@ -77,11 +77,11 @@ function ProjectRow({ project }: { project: Project }) {
     useWorkspace.getState().setProjectExpanded(project.id, true)
     fn()
   }
-  const newClaude = (yolo: boolean): void =>
+  const newClaude = (): void =>
     expandAnd(() =>
       void createProjectTerminal(project.id, {
         name: 'Claude Code',
-        startupCommand: yolo ? 'claude --dangerously-skip-permissions' : 'claude',
+        startupCommand: 'claude',
       })
     )
   const commitRename = (value: string): void => {
@@ -104,17 +104,7 @@ function ProjectRow({ project }: { project: Project }) {
       trailing: <Hint>{kbd('T')}</Hint>,
       onClick: () => expandAnd(() => void createProjectTerminal(project.id)),
     },
-    { label: 'Claude Code', trailing: <Hint>{kbd('⇧T')}</Hint>, onClick: () => newClaude(false) },
-    {
-      label: 'Claude Code',
-      trailing: (
-        <span className="flex items-center gap-2">
-          <span className="text-accent">⚡</span>
-          <Hint>{kbd('⇧D')}</Hint>
-        </span>
-      ),
-      onClick: () => newClaude(true),
-    },
+    { label: 'Claude Code', trailing: <Hint>{kbd('⇧T')}</Hint>, onClick: () => newClaude() },
     {
       label: 'Use other models…',
       onClick: () => expandAnd(() => useApiKeys.getState().openLauncher(project.id)),
