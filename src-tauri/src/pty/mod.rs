@@ -1,5 +1,7 @@
 #[cfg(feature = "remote-access")]
 pub mod detect;
+#[cfg(windows)]
+mod job;
 pub mod shell;
 
 use crate::error::{AppError, AppResult};
@@ -113,6 +115,11 @@ struct PtyHandle {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     out: Arc<Mutex<OutputState>>,
+    /// Job Object owning the shell's process tree. Terminating it on kill takes
+    /// down anything the shell spawned — including a grandchild that would
+    /// otherwise keep the ConPTY (and this entry) alive forever.
+    #[cfg(windows)]
+    job: Option<job::JobObject>,
     /// Last size the desktop pane requested. A remote attach resizes the shared
     /// PTY to the phone's dimensions; on detach we snap back to this (R3.14).
     #[cfg(feature = "remote-access")]
@@ -245,6 +252,13 @@ impl PtyManager {
             .map_err(|e| AppError::Msg(e.to_string()))?;
         drop(pair.slave);
 
+        #[cfg(windows)]
+        let job = job::JobObject::new().ok().and_then(|j| {
+            let pid = child.process_id()?;
+            j.assign_pid(pid).ok()?;
+            Some(j)
+        });
+
         let reader = pair
             .master
             .try_clone_reader()
@@ -265,6 +279,8 @@ impl PtyManager {
                 writer: writer.clone(),
                 child: child.clone(),
                 out: out.clone(),
+                #[cfg(windows)]
+                job,
                 #[cfg(feature = "remote-access")]
                 local_size: (opts.cols, opts.rows),
                 #[cfg(feature = "remote-access")]
@@ -445,15 +461,31 @@ impl PtyManager {
     }
 
     pub fn kill(&self, id: &str) {
-        if let Some(handle) = self.entries.lock().get(id) {
-            let _ = handle.child.lock().kill();
+        // Remove the entry up front (releasing the map lock before teardown) so
+        // that dropping `handle` at the end of this scope drops the PTY master —
+        // ClosePseudoConsole then terminates any client still attached to the
+        // ConPTY. On Windows the job kill takes down the shell's whole tree,
+        // including a grandchild that would otherwise hold the ConPTY open and
+        // stop the reader from ever hitting EOF.
+        let Some(handle) = self.entries.lock().remove(id) else {
+            return;
+        };
+        #[cfg(windows)]
+        if let Some(job) = &handle.job {
+            job.terminate();
         }
-        // The reader thread emits exit + removes the entry on EOF.
+        let _ = handle.child.lock().kill();
+        // The reader thread still EOFs and emits `terminals:exit` via its own Arc
+        // clones; its `entries.remove(&id)` on exit is now a harmless no-op.
     }
 
     pub fn dispose_all(&self) {
-        let entries = self.entries.lock();
-        for handle in entries.values() {
+        let handles: Vec<PtyHandle> = self.entries.lock().drain().map(|(_, h)| h).collect();
+        for handle in handles {
+            #[cfg(windows)]
+            if let Some(job) = &handle.job {
+                job.terminate();
+            }
             let _ = handle.child.lock().kill();
         }
     }

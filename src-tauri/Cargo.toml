@@ -64,6 +64,10 @@ sha2 = "0.10"
 # rustls, so this adds no new download — important on the filtered dev network.
 ring = { version = "0.17", optional = true }
 
+# Windows Job Object tree-kill for PTY teardown (see src/pty/job.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile = "3"
 
