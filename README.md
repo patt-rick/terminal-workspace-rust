@@ -24,7 +24,9 @@ fine as a general terminal multiplexer with a built-in editor and git tooling.
 - **Bring-your-own-LLM keys.** Store provider API keys (Anthropic, OpenAI, Gemini, DeepSeek,
   xAI, Mistral, Groq, OpenRouter, Qwen, or any custom OpenAI-compatible endpoint) in the OS
   keychain; they're injected as env vars into every new terminal, and a model picker launches the
-  matching CLI — offering to install it first if it's missing. See
+  matching CLI — offering to install it first if it's missing. Launch-scoped "Claude Code"
+  presets can point the `claude` CLI itself at Anthropic-compatible providers (DeepSeek,
+  Kimi, GLM, OpenRouter, local Ollama) without affecting other terminals. See
   [docs/multi-llm-provider-keys.md](docs/multi-llm-provider-keys.md).
 - **Files.** gitignore-aware file tree, CodeMirror 6 editor (12 languages, syntax-themed to the
   active palette), markdown preview, 5 MB text cap with binary detection, and fuzzy quick-open

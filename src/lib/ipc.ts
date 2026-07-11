@@ -291,7 +291,7 @@ export interface DetectedGhAccount {
 
 export interface ApiKeyMeta {
   id: string
-  /** preset id: anthropic | openai | gemini | deepseek | grok | mistral | groq | openrouter | qwen | custom */
+  /** preset id: anthropic | openai | gemini | deepseek | grok | mistral | groq | openrouter | qwen | deepseek-claude | kimi-claude | glm-claude | openrouter-claude | ollama-claude | custom */
   provider: string
   label: string
   /** env var carrying the secret, e.g. OPENAI_API_KEY */

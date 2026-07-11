@@ -4,7 +4,8 @@
 flow, binary-on-PATH checks, ready-only model picker) — see
 `docs/superpowers/specs/2026-07-03-multi-llm-provider-keys-design.md` for the original locked
 decisions and `docs/superpowers/specs/2026-07-05-one-click-provider-setup-design.md` for the v2
-design.
+design; extended by the v3 launch-scoped Claude Code presets — see
+docs/superpowers/specs/2026-07-11-claude-code-third-party-models-design.md.
 **Goal:** Let users bring their own API keys for any LLM provider (Claude, ChatGPT/OpenAI,
 DeepSeek, Qwen, and anything OpenAI-compatible) so that agent CLIs launched in the app's
 terminals can use them. "Plug in what's needed and start working."
@@ -215,11 +216,36 @@ Because "Custom" exists, **any** OpenAI-compatible provider is supported without
 
 **Claude (unchanged):** add an Anthropic key, or keep using existing `gh`/subscription auth.
 
-> Compatibility note: Claude Code speaks the **Anthropic** wire format; DeepSeek/Qwen/OpenAI speak
-> the **OpenAI** format. A key alone doesn't make Claude Code talk to DeepSeek — the user picks a
-> CLI that speaks the target provider's format (aider/codex for OpenAI-style, Claude Code for
-> Anthropic-style), or runs a translating proxy. The app injects credentials; it does not translate
-> protocols.
+> Compatibility note: Claude Code speaks the **Anthropic** wire format. Providers with native
+> Anthropic-compatible endpoints (DeepSeek, Kimi/Moonshot, GLM/Z.ai, OpenRouter, local Ollama)
+> can back Claude Code directly via the launch-scoped "X (Claude Code)" presets, which inject
+> `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` only into terminals launched from that entry.
+> OpenAI-format-only providers (OpenAI, Groq, Mistral, xAI) still use a CLI that speaks their
+> format (codex/aider) or a translating proxy.
+
+---
+
+## 9b. Claude Code on third-party models (launch-scoped entries)
+
+Entries have an injection scope: **global** (default — env goes into every new terminal, the
+v1 behavior) or **launch** (env goes only into terminals started from that entry's ▶ Launch
+button or the model picker). The "X (Claude Code)" presets default to launch scope so a
+DeepSeek/Kimi/GLM/OpenRouter/Ollama-backed Claude Code never hijacks normal `claude`
+terminals, the ⌘⇧T/⌘⇧D shortcuts, or the active managed Claude account.
+
+Preset `extraEnv` values (base URL, `ANTHROPIC_MODEL`, …) are fully initialised but editable.
+Values matching a superseded release's defaults are silently upgraded on load
+(`LEGACY_EXTRA_ENV`); values that differ from the current defaults show a per-entry warning
+with one-click **Reset to defaults**.
+
+Known limitations:
+- Resuming a session from the Sessions tab (`claude --resume`) does not re-inject a
+  launch-scoped entry's env — the resumed session runs on the default Claude credentials.
+- On third-party backends Claude Code loses web search, prompt caching, and Anthropic
+  thinking betas (`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is preset to avoid header
+  errors); tool-calling quality varies by model.
+- The scope is per-terminal: any command run later in a launch-scoped terminal sees the
+  injected env.
 
 ---
 

@@ -254,6 +254,12 @@ pub fn build_test_request(
         let base = base_url
             .unwrap_or("https://api.anthropic.com")
             .trim_end_matches('/');
+        if base.contains("openrouter.ai") {
+            return TestRequest {
+                url: format!("{base}/v1/key"),
+                headers: vec![("Authorization".to_string(), format!("Bearer {secret}"))],
+            };
+        }
         TestRequest {
             url: format!("{base}/v1/models"),
             headers: vec![
@@ -538,6 +544,20 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k == "anthropic-version" && !v.is_empty()));
+    }
+
+    #[test]
+    fn test_request_anthropic_wire_openrouter_base_probes_key_endpoint() {
+        let r = build_test_request(
+            "openrouter-claude",
+            Some("https://openrouter.ai/api"),
+            "sk-x",
+            true,
+        );
+        assert_eq!(r.url, "https://openrouter.ai/api/v1/key");
+        assert!(r
+            .headers
+            .contains(&("Authorization".to_string(), "Bearer sk-x".to_string())));
     }
 
     #[test]

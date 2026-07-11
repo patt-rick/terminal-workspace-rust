@@ -6,6 +6,7 @@ import {
   nextLabel,
   PROVIDER_PRESETS,
   presetById,
+  presetEnvDrift,
 } from '../../lib/apikey-presets'
 import { useApiKeys } from '../../state/apikeys'
 import { useWorkspace } from '../../state/store'
@@ -101,6 +102,16 @@ export function ProvidersSection() {
     if (!selectedProjectId || !k.launchCommand) return
     closeSettings()
     await requestLaunch(selectedProjectId, k)
+  }
+
+  const onResetDefaults = async (k: ApiKeyMeta): Promise<void> => {
+    const preset = presetById(k.provider)
+    if (!preset) return
+    const { hasValue: _, ...entry } = k
+    const defaults = Object.fromEntries(
+      Object.entries(preset.extraEnv).filter(([, v]) => v !== '')
+    )
+    await save({ ...entry, extraEnv: { ...entry.extraEnv, ...defaults } }, null)
   }
 
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -208,7 +219,9 @@ export function ProvidersSection() {
 
       <p className="mb-2 text-xs text-muted">
         Keys are stored in the OS keychain and injected into terminals opened after saving —
-        CLIs like claude, aider, and codex pick them up automatically.
+        CLIs like claude, aider, and codex pick them up automatically. Launch-only entries
+        (e.g. Claude Code on another provider) are injected only into terminals started from
+        their ▶ Launch button or the model picker.
       </p>
 
       {/* key list */}
@@ -216,6 +229,7 @@ export function ProvidersSection() {
         {keys.length === 0 && <div className="py-1 text-xs text-muted">No provider keys yet.</div>}
         {keys.map((k) => {
           const note = conflictNote(k)
+          const drift = presetEnvDrift(k.provider, k.extraEnv)
           const blocker = !selectedProjectId ? 'Select a project first' : launchBlocker(k)
           return (
             <div key={k.id} className="rounded-md border border-border px-3 py-2">
@@ -231,6 +245,7 @@ export function ProvidersSection() {
                     {k.keyEnvVar} {k.hasValue ? '= ••••••••' : '(no value stored)'}
                     {Object.keys(k.extraEnv).length > 0 &&
                       ` · +${Object.keys(k.extraEnv).length} env`}
+                    {k.scope === 'launch' && ' · launch-only'}
                   </div>
                 </div>
                 <label className="flex items-center gap-1 text-xs text-muted" title="Inject into new terminals">
@@ -274,6 +289,22 @@ export function ProvidersSection() {
               </div>
               {testMsg[k.id] && <div className="mt-1 text-xs text-muted">{testMsg[k.id]}</div>}
               {note && <div className="mt-1 text-xs text-danger">⚠ {note}</div>}
+              {drift.length > 0 && (
+                <div className="mt-1 flex items-center gap-2 text-xs text-warning">
+                  <span>
+                    ⚠ {drift.join(', ')} differ
+                    {drift.length === 1 ? 's' : ''} from the preset default — provider endpoints
+                    and model ids go stale
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void onResetDefaults(k)}
+                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-foreground/5"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}
@@ -368,6 +399,19 @@ export function ProvidersSection() {
                 onChange={(v) => setDraft({ ...draft, launchCommand: v })}
                 placeholder="aider --model deepseek/deepseek-chat"
               />
+              <label className="block">
+                <span className="text-xs text-muted">Inject env vars into</span>
+                <select
+                  value={draft.scope}
+                  onChange={(e) =>
+                    setDraft({ ...draft, scope: e.target.value as 'global' | 'launch' })
+                  }
+                  className="mt-0.5 w-full rounded border border-border bg-field-background px-2 py-1 text-sm text-foreground outline-none focus:border-accent"
+                >
+                  <option value="global">Every new terminal</option>
+                  <option value="launch">Only terminals launched from this entry</option>
+                </select>
+              </label>
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-xs text-muted">Extra env (base URLs etc. — not secret)</span>
@@ -382,38 +426,49 @@ export function ProvidersSection() {
                   </button>
                 </div>
                 {draft.extraEnv.map((pair, i) => (
-                  <div key={i} className="mb-1 flex items-center gap-1">
-                    <input
-                      type="text"
-                      value={pair.name}
-                      placeholder="OPENAI_BASE_URL"
-                      onChange={(e) => {
-                        const extraEnv = [...draft.extraEnv]
-                        extraEnv[i] = { ...pair, name: e.target.value }
-                        setDraft({ ...draft, extraEnv })
-                      }}
-                      className="w-2/5 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
-                    />
-                    <input
-                      type="text"
-                      value={pair.value}
-                      placeholder="https://…"
-                      onChange={(e) => {
-                        const extraEnv = [...draft.extraEnv]
-                        extraEnv[i] = { ...pair, value: e.target.value }
-                        setDraft({ ...draft, extraEnv })
-                      }}
-                      className="flex-1 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraft({ ...draft, extraEnv: draft.extraEnv.filter((_, j) => j !== i) })
-                      }
-                      className="rounded border border-border px-2 py-1 text-xs text-danger hover:bg-foreground/5"
-                    >
-                      ✕
-                    </button>
+                  <div key={i}>
+                    <div className="mb-1 flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={pair.name}
+                        placeholder="OPENAI_BASE_URL"
+                        onChange={(e) => {
+                          const extraEnv = [...draft.extraEnv]
+                          extraEnv[i] = { ...pair, name: e.target.value }
+                          setDraft({ ...draft, extraEnv })
+                        }}
+                        className="w-2/5 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
+                      />
+                      <input
+                        type="text"
+                        value={pair.value}
+                        placeholder="https://…"
+                        onChange={(e) => {
+                          const extraEnv = [...draft.extraEnv]
+                          extraEnv[i] = { ...pair, value: e.target.value }
+                          setDraft({ ...draft, extraEnv })
+                        }}
+                        className="flex-1 rounded border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none focus:border-accent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraft({ ...draft, extraEnv: draft.extraEnv.filter((_, j) => j !== i) })
+                        }
+                        className="rounded border border-border px-2 py-1 text-xs text-danger hover:bg-foreground/5"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {(() => {
+                      const def = presetById(draft.provider)?.extraEnv[pair.name]
+                      return def && def !== pair.value ? (
+                        <div className="mb-1 text-xs text-warning">
+                          Changed from the preset default ({def}) — make sure this value is still
+                          valid for the provider
+                        </div>
+                      ) : null
+                    })()}
                   </div>
                 ))}
               </div>
