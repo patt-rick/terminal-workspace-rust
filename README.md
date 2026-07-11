@@ -1,38 +1,57 @@
 # Terminal Workspace (Rust)
 
 A multi-project, multi-terminal workspace IDE — a **Tauri 2 + Rust** rewrite of wTerm with a
-fresh React 19 frontend and a live, token-driven theming system.
+React 19 frontend and a live, token-driven theming system.
 
-Built for agent CLI workflows (`claude`, `aider`, dev servers, test watchers) but works fine as
-a general terminal multiplexer with a built-in editor and git tooling.
+Built for agent CLI workflows (`claude`, `aider`, `codex`, dev servers, test watchers) but works
+fine as a general terminal multiplexer with a built-in editor and git tooling.
 
 ## Features
 
 - **Projects & terminals.** Add folders as projects; run many live terminals per project. All
   terminals stay mounted, so switching never kills your `vim` / `claude` / `npm run dev` — and
-  scrollback survives navigation.
+  scrollback survives navigation. Closing a terminal kills its **entire process tree** (Windows
+  Job Objects), so no orphaned dev servers.
 - **Agent-aware.** Background-bell notifications, sidebar unread dots, and a "working" indicator
-  driven by the title spinner that agent TUIs (Claude Code) emit.
-- **Session history.** Browse a project's past Claude Code sessions — read straight from Claude's
-  own on-disk transcripts (`~/.claude/projects`) — and resume any of them in a fresh terminal
-  (`claude --resume`), even after the original terminal is gone. Sessions that are live right now
-  are flagged and focused instead of re-opened; deleting one removes its transcript from disk.
+  driven by the title spinner that agent TUIs (Claude Code) emit. Optional Claude hooks deliver
+  precise "needs permission" / "finished" badges — including push notifications to a paired phone.
+- **Claude Code sessions.** Browse a project's past sessions straight from Claude's on-disk
+  transcripts (`~/.claude/projects`) and resume any of them in a fresh terminal
+  (`claude --resume`), even after the original terminal is gone. Live sessions are flagged and
+  focused instead of re-opened; deleting one removes its transcript from disk.
+- **Claude accounts.** Add multiple claude.ai accounts (OAuth or import from the CLI) and switch
+  the active one app-wide, with a usage meter per account.
+- **Bring-your-own-LLM keys.** Store provider API keys (Anthropic, OpenAI, Gemini, DeepSeek,
+  xAI, Mistral, Groq, OpenRouter, Qwen, or any custom OpenAI-compatible endpoint) in the OS
+  keychain; they're injected as env vars into every new terminal, and a model picker launches the
+  matching CLI — offering to install it first if it's missing. See
+  [docs/multi-llm-provider-keys.md](docs/multi-llm-provider-keys.md).
 - **Files.** gitignore-aware file tree, CodeMirror 6 editor (12 languages, syntax-themed to the
-  active palette), markdown preview, 5 MB text cap with binary detection.
+  active palette), markdown preview, 5 MB text cap with binary detection, and fuzzy quick-open
+  (⌘/Ctrl P) backed by an incremental, watcher-refreshed index.
 - **Git + working-tree diff viewer.** Branch / ahead-behind / dirty status, push/publish, and a
-  unified, color-coded diff of uncommitted changes (powered by libgit2).
+  unified, color-coded diff of uncommitted changes with jump-to-file (powered by libgit2).
+- **Git identities.** Import GitHub accounts from the `gh` CLI and route pushes per repo: local
+  `user.name`/`user.email`, an `origin` rewrite, and a credential helper that resolves the token
+  at push time via `gh auth token` (never persisted). The git panel shows the push identity and
+  preflight warnings before you push.
 - **GitHub.** Device-flow or PAT auth (token stored in the OS keychain), pull-request list, and
   Actions runs with re-run / cancel.
-- **Theming.** Five built-in themes (Halcyon, Tokyo Night, Catppuccin Mocha/Latte, One Dark),
-  live-switchable; one set of tokens drives chrome, terminal palette, and editor syntax.
-- **Remote access.** Control your terminals (and view git / push) from a phone or another
-  computer over the web — a paired, single-session web client backed by an embedded server. See
-  [Remote access](#remote-access). *(Built behind the `remote-access` cargo feature.)*
+- **Theming.** Six built-in themes (Halcyon, Tokyo Night, Catppuccin Mocha/Latte, One Dark,
+  Black Ash), live-switchable; one set of tokens drives chrome, terminal palette, and editor
+  syntax. Custom themes import/export as JSON — [docs/theme-authoring.md](docs/theme-authoring.md)
+  is an LLM-ready spec for generating new ones.
+- **Remote access.** Control your terminals (and view git / sessions) from a phone or another
+  computer through a paired, single-session PWA web client backed by an embedded server. See
+  [Remote access](#remote-access).
+- **Auto-updates.** Signed updates from GitHub Releases via the Tauri updater — silent check on
+  launch, one-click restart-and-install.
 
 ## Stack
 
-- **Rust core (Tauri 2)** — PTY (`portable-pty`), git (`git2`), GitHub (`reqwest`), token
-  storage (`keyring`), gitignore listing (`ignore`), atomic JSON persistence.
+- **Rust core (Tauri 2)** — PTY (`portable-pty`, ConPTY + Job Objects on Windows), git (`git2`),
+  GitHub (`reqwest`), secrets (`keyring`), gitignore listing (`ignore`), fuzzy search
+  (`nucleo-matcher` + debounced fs watcher), remote server (`axum`), atomic JSON persistence.
 - **React 19 + Vite 6 + Tailwind v4** — frontend; xterm.js 6 terminals, CodeMirror 6 editor,
   Zustand state.
 - Terminal output streams over a `tauri::ipc::Channel`; everything else is `invoke` + events.
@@ -41,23 +60,32 @@ a general terminal multiplexer with a built-in editor and git tooling.
 
 ```
 src-tauri/src/
-  pty/        portable-pty manager + OSC 133 shell integration
-  state/      projects/selection persistence (state.json)
-  settings/   theme + editor + terminal prefs (settings.json)
-  fs/         gitignore-aware listing, read/write, CRUD
-  git/        info, push, working-tree diff (structured hunks)
-  github/     device flow, REST client, keychain token, models
-  claude/     ~/.claude session transcripts: list/summarize, resume, delete
-  commands.rs #[tauri::command] handlers
+  pty/         portable-pty manager, OSC 133 shell integration, Job Object tree-kill
+  state/       projects/selection persistence (state.json)
+  settings/    theme + editor + terminal prefs (settings.json)
+  fs/          gitignore-aware listing, read/write, CRUD
+  git/         info, push, working-tree diff (structured hunks)
+  github/      device flow, REST client, keychain token, models
+  identity/    gh-account import, per-repo push routing, credential helper
+  apikeys/     LLM provider keys: keychain secrets + env injection
+  claude/      ~/.claude session transcripts: list/summarize, resume, delete
+  search/      quick-open index (nucleo) + fs watcher
+  remote/      embedded axum server, pairing, WS protocol, bridge allowlist
+  commands.rs  #[tauri::command] handlers
 src/
-  themes/     token type, presets, ThemeProvider
-  lib/        ipc bridge, codemirror + platform helpers
-  state/      zustand stores (workspace, files, diff, settings)
-  components/  sidebar, workspace (terminal/editor/markdown), right-sidebar, diff
+  themes/      token type, presets, ThemeProvider
+  lib/         ipc bridge, codemirror + platform helpers, provider presets
+  state/       zustand stores (workspace, files, diff, settings, identity)
+  components/  sidebar, workspace (terminal/editor/markdown), right-sidebar
+               (files/git/github/sessions), diff, quick-open, identity,
+               apikeys, claude-accounts, settings-modal, title-bar
+remote-web/    mobile web client (React + xterm), built to a single self-
+               contained HTML file embedded in the binary at compile time
 ```
 
 State lives in the platform app-data dir. Terminals are session-scoped (their PTYs die on
-quit) and are not restored; projects, selection, settings, and the GitHub token persist.
+quit) and are not restored; projects, selection, settings, identities, and tokens persist.
+Secrets (GitHub token, provider API keys) live in the OS keychain, never in JSON.
 
 ## Development
 
@@ -67,8 +95,17 @@ Requires Node 20+, pnpm, and Rust (MSVC toolchain on Windows + the C++ Build Too
 pnpm install
 pnpm tauri dev      # run the app with HMR
 pnpm build          # typecheck + build the frontend
+pnpm test           # frontend unit tests (vitest)
+cargo test          # Rust tests (run inside src-tauri/)
 pnpm tauri build    # package a desktop installer
 ```
+
+Remote access ships enabled (`default = ["remote-access"]` in `src-tauri/Cargo.toml`); nothing
+binds a socket until you start a session. Build lean with `--no-default-features` if desired.
+
+The remote web client under `remote-web/` is a separate Vite project bundled (via
+`vite-plugin-singlefile`) into `src-tauri/src/remote/web_client.html` and embedded with
+`include_str!` — rebuild it there if you change the client.
 
 > **Windows note:** if `vcvars`/`link.exe` resolution is broken on your machine, the repo
 > includes `src-tauri/build-msvc.cmd` (gitignored) which sets the MSVC + Windows SDK env
@@ -95,18 +132,15 @@ top of the Git tab — the same model VS Code uses for Source Control.
 - **Identity is per-repo.** Account mappings key on the repo path, so each
   sub-repo can push as a different GitHub account; on project switch the app
   applies the right identity to every repo and batches any "which account?"
-  prompts into one dialog.
+  prompts into one dialog. An opt-in setting also runs `gh auth switch` to keep
+  the `gh` CLI aligned with the selected repo.
 - **GitHub** PRs and Actions target the picker-selected repo (owner/repo parsed
   from that repo's origin).
 
 ## Remote access
 
-Control your terminals from another device through a small web client served by an embedded
-`axum` server. It's built behind a cargo feature while the milestone series lands:
-
-```bash
-pnpm tauri dev --features remote-access      # or add it to your tauri build
-```
+Control your terminals from another device through a small PWA web client (installable to a
+phone home screen) served by an embedded `axum` server.
 
 Open **Settings → Remote Access**, pick a connectivity mode, and press **Start Remote Session**.
 You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone and enter the code.
@@ -147,7 +181,18 @@ You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone an
 | Shortcut | Action |
 |---|---|
 | ⌘/Ctrl T | New terminal in the selected project |
+| ⌘/Ctrl ⇧ T | New terminal running `claude` |
+| ⌘/Ctrl ⇧ D | New terminal running `claude --dangerously-skip-permissions` |
 | ⌘/Ctrl W | Close the active terminal (with confirmation) |
+| ⌘/Ctrl P | Quick-open file search |
 | ⌘/Ctrl B | Toggle the project sidebar |
+| ⌘/Ctrl ⇧ B | Toggle the right sidebar |
 | ⌘/Ctrl , | Open settings |
-| ⌘/Ctrl S | Save the active file |
+| ⌘/Ctrl S | Save the active file (in the editor) |
+
+## Docs
+
+- [Theme authoring](docs/theme-authoring.md) — full token spec for building custom themes
+  (written so you can hand it to an LLM and get a valid theme back).
+- [Multi-LLM provider keys](docs/multi-llm-provider-keys.md) — how provider credentials are
+  stored and injected into terminals.
