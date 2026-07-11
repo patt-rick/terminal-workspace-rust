@@ -240,7 +240,9 @@ fn default_base(provider: &str) -> &'static str {
 /// Build the auth-check request. Anthropic-wire entries — those whose key env
 /// var starts with `ANTHROPIC_` — hit `<base>/v1/models` with both `x-api-key`
 /// and a bearer token, since compatible endpoints differ in which they accept;
-/// everything else is OpenAI-format: `<base>/models` with a bearer token, where
+/// except openrouter.ai bases, which probe `<base>/v1/key` because OpenRouter's
+/// `/v1/models` is public (200 without auth) and would pass a bad key.
+/// Everything else is OpenAI-format: `<base>/models` with a bearer token, where
 /// `<base>` is the entry's *_BASE_URL override as the CLI would consume it (so
 /// it may or may not contain `/v1` — DeepSeek's doesn't, OpenRouter's does; we
 /// append only `/models`).
