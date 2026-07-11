@@ -137,8 +137,9 @@ impl ApiKeyStore {
         self.persist(&d);
     }
 
-    /// Flat env pairs for every enabled entry, secrets read from the keychain.
-    /// Called at terminal-spawn time.
+    /// Flat env pairs for every enabled global-scoped entry, secrets read from
+    /// the keychain. Called at terminal-spawn time; launch-scoped entries are
+    /// injected per-launch via `launch_env` instead.
     pub fn resolved_env(&self) -> Vec<(String, String)> {
         let d = self.inner.lock();
         expand_env(&d.keys, keychain_secret)
@@ -279,11 +280,12 @@ pub fn build_test_request(
 
 // ---- pure helpers ----
 
-/// Expand enabled entries into env pairs, in stored order. `secret_for` looks
-/// up an entry's secret by id; an entry whose secret is missing is skipped
-/// entirely (a base URL without its key would misroute tools). When two
-/// entries emit the same var, the later pair wins at apply time — callers set
-/// the pairs sequentially, so "later in stored order" is the deterministic rule.
+/// Expand enabled global-scoped entries into env pairs, in stored order.
+/// `secret_for` looks up an entry's secret by id; an entry whose secret is
+/// missing is skipped entirely (a base URL without its key would misroute
+/// tools). When two entries emit the same var, the later pair wins at apply
+/// time — callers set the pairs sequentially, so "later in stored order" is
+/// the deterministic rule.
 pub fn expand_env(
     keys: &[ApiKey],
     secret_for: impl Fn(&str) -> Option<String>,
