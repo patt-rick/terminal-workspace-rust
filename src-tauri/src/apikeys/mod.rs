@@ -238,10 +238,12 @@ fn default_base(provider: &str) -> &'static str {
 }
 
 /// Build the auth-check request. Anthropic-wire entries — those whose key env
-/// var starts with `ANTHROPIC_` — hit `<base>/v1/models` with both `x-api-key`
-/// and a bearer token, since compatible endpoints differ in which they accept;
-/// except openrouter.ai bases, which probe `<base>/v1/key` because OpenRouter's
-/// `/v1/models` is public (200 without auth) and would pass a bad key.
+/// var starts with `ANTHROPIC_` — hit `<base>/v1/models` with `x-api-key`, plus
+/// a bearer token only for custom/third-party bases, since compatible endpoints
+/// differ in which they accept (the default Anthropic host gets exactly the
+/// pre-feature headers); except openrouter.ai bases, which probe `<base>/v1/key`
+/// because OpenRouter's `/v1/models` is public (200 without auth) and would
+/// pass a bad key.
 /// Everything else is OpenAI-format: `<base>/models` with a bearer token, where
 /// `<base>` is the entry's *_BASE_URL override as the CLI would consume it (so
 /// it may or may not contain `/v1` — DeepSeek's doesn't, OpenRouter's does; we
@@ -262,13 +264,14 @@ pub fn build_test_request(
                 headers: vec![("Authorization".to_string(), format!("Bearer {secret}"))],
             };
         }
+        let mut headers = vec![("x-api-key".to_string(), secret.to_string())];
+        if base_url.is_some() {
+            headers.push(("Authorization".to_string(), format!("Bearer {secret}")));
+        }
+        headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
         TestRequest {
             url: format!("{base}/v1/models"),
-            headers: vec![
-                ("x-api-key".to_string(), secret.to_string()),
-                ("Authorization".to_string(), format!("Bearer {secret}")),
-                ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ],
+            headers,
         }
     } else if provider == "openrouter" && base_url.is_none() {
         // OpenRouter's /models is public (200 without auth), so probe the
@@ -660,6 +663,7 @@ mod tests {
         let r = build_test_request("anthropic", None, "sk-ant-x", true);
         assert_eq!(r.url, "https://api.anthropic.com/v1/models");
         assert!(r.headers.contains(&("x-api-key".to_string(), "sk-ant-x".to_string())));
+        assert!(r.headers.iter().all(|(k, _)| k != "Authorization"));
         assert!(r
             .headers
             .iter()
