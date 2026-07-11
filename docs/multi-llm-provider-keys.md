@@ -246,6 +246,11 @@ Known limitations:
   errors); tool-calling quality varies by model.
 - The scope is per-terminal: any command run later in a launch-scoped terminal sees the
   injected env.
+- When a global entry also defines Anthropic credentials (e.g. an `ANTHROPIC_API_KEY`
+  entry), an entry-launched terminal contains both that and the launch entry's
+  `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`. Which credential the CLI honors follows
+  Claude Code's own precedence (auth token over api key), so the launch entry normally
+  wins — but disable the global Anthropic entry if you see auth conflicts.
 
 ---
 

@@ -248,7 +248,12 @@ export function ProvidersSection() {
                     {k.scope === 'launch' && ' · launch-only'}
                   </div>
                 </div>
-                <label className="flex items-center gap-1 text-xs text-muted" title="Inject into new terminals">
+                <label
+                  className="flex items-center gap-1 text-xs text-muted"
+                  title={
+                    k.scope === 'launch' ? 'Allow launching this entry' : 'Inject into new terminals'
+                  }
+                >
                   <input
                     type="checkbox"
                     checked={k.enabled}
