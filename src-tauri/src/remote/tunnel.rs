@@ -11,12 +11,12 @@
 //! No account or config is required — quick tunnels are anonymous and ephemeral;
 //! the public URL changes every launch.
 
+use crate::proc::hidden_tokio_command;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::oneshot;
 
 /// How long to wait for cloudflared to publish its public URL before giving up.
@@ -38,7 +38,7 @@ impl Tunnel {
         let bin = locate_or_install(&app).await?;
 
         let _ = app.emit("remote:cloudflared-progress", "Starting tunnel…");
-        let mut child = Command::new(&bin)
+        let mut child = hidden_tokio_command(&bin)
             .arg("tunnel")
             .arg("--no-autoupdate")
             .arg("--url")
@@ -242,7 +242,7 @@ fn has_executable_magic(bytes: &[u8]) -> bool {
 async fn verify_runs(bin: &PathBuf) -> Result<(), String> {
     let status = tokio::time::timeout(
         Duration::from_secs(15),
-        Command::new(bin)
+        hidden_tokio_command(bin)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())

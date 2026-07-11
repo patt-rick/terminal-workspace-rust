@@ -3,7 +3,6 @@ pub mod discover;
 use git2::{BranchType, DiffOptions, Patch, Repository};
 use serde::Serialize;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Serialize)]
 pub struct GithubRepo {
@@ -118,7 +117,7 @@ pub fn is_dirty(root: &Path) -> bool {
 }
 
 pub fn push(root: &Path, branch: &str) -> (bool, String) {
-    match Command::new("git")
+    match crate::proc::hidden_command("git")
         .args(["push", "-u", "origin", branch])
         .current_dir(root)
         .env("LANG", "C")

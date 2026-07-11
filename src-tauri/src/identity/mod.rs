@@ -369,12 +369,11 @@ pub fn apply_identity(repo_path: &Path, account: &Account) -> AppResult<bool> {
 /// git CLI (as the push path does) guarantees `~/.gitconfig` is created on first
 /// use, which `git2`'s global config level does not.
 pub fn apply_global(account: &Account) -> AppResult<()> {
-    use std::process::Command;
     for (key, val) in [
         ("user.name", account.name.as_str()),
         ("user.email", account.email.as_str()),
     ] {
-        let out = Command::new("git")
+        let out = crate::proc::hidden_command("git")
             .args(["config", "--global", key, val])
             .output()
             .map_err(|e| AppError::Msg(e.to_string()))?;
@@ -408,8 +407,7 @@ fn credential_helper_value(login: &str) -> String {
 
 /// Run a `git config` subcommand in `repo_path`, erroring on a non-success exit.
 fn run_git_config(repo_path: &Path, args: &[&str]) -> AppResult<()> {
-    use std::process::Command;
-    let out = Command::new("git")
+    let out = crate::proc::hidden_command("git")
         .arg("-C")
         .arg(repo_path)
         .args(args)
@@ -512,8 +510,7 @@ pub fn evaluate_preflight(
 
 /// Real gh probe: spawn errors ⇒ Missing; non-zero/empty ⇒ TokenFailed.
 fn real_gh_probe(login: &str) -> GhProbe {
-    use std::process::Command;
-    match Command::new("gh")
+    match crate::proc::hidden_command("gh")
         .args(["auth", "token", "--user", login])
         .output()
     {
@@ -575,8 +572,7 @@ pub fn current_identity(repo_path: &Path, account_id: Option<String>) -> Current
 /// account with name/email from `gh api user` (best effort). Returns an error
 /// only when the `gh` binary is missing.
 pub fn detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
-    use std::process::Command;
-    let out = Command::new("gh")
+    let out = crate::proc::hidden_command("gh")
         .args(["auth", "status"])
         .output()
         .map_err(|_| AppError::Msg("GitHub CLI (gh) not found on PATH".to_string()))?;
@@ -616,7 +612,7 @@ pub fn detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
 
     // Enrich the active account with name/email (gh api uses the active account).
     if accounts.iter().any(|a| a.active) {
-        if let Ok(u) = Command::new("gh")
+        if let Ok(u) = crate::proc::hidden_command("gh")
             .args(["api", "user", "--jq", "{login: .login, name: .name, email: .email}"])
             .output()
         {
@@ -649,8 +645,7 @@ pub fn detect_gh_accounts() -> AppResult<Vec<DetectedGhAccount>> {
 /// the ONE feature that mutates global gh state, so it's opt-in. Errors when gh
 /// is missing or the switch fails.
 pub fn align_gh(login: &str) -> AppResult<()> {
-    use std::process::Command;
-    let out = Command::new("gh")
+    let out = crate::proc::hidden_command("gh")
         .args(["auth", "switch", "--user", login])
         .output()
         .map_err(|_| AppError::Msg("GitHub CLI (gh) not found on PATH".to_string()))?;

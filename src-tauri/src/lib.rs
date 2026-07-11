@@ -12,6 +12,7 @@ mod fs;
 mod git;
 mod github;
 mod identity;
+mod proc;
 mod pty;
 #[cfg(feature = "remote-access")]
 mod remote;

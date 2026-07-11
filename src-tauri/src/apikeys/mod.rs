@@ -419,7 +419,7 @@ pub fn python_module_importable(module: &str) -> bool {
         return false;
     }
     ["python", "python3"].iter().any(|exe| {
-        std::process::Command::new(exe)
+        crate::proc::hidden_command(exe)
             .args(["-c", &format!("import {module}")])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

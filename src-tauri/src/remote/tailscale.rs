@@ -5,9 +5,9 @@
 //! a stable address, with nothing exposed to the public internet. We detect the
 //! tailnet address (and MagicDNS name) by shelling out to the `tailscale` CLI.
 
+use crate::proc::hidden_command;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +31,7 @@ impl TailscaleInfo {
 /// than failing silently — AC-3.8).
 pub fn detect() -> Option<TailscaleInfo> {
     let bin = locate()?;
-    let out = Command::new(&bin).arg("ip").arg("-4").output().ok()?;
+    let out = hidden_command(&bin).arg("ip").arg("-4").output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -48,7 +48,7 @@ pub fn detect() -> Option<TailscaleInfo> {
 
 /// Best-effort MagicDNS name for this node from `tailscale status --json`.
 fn magic_dns(bin: &PathBuf) -> Option<String> {
-    let out = Command::new(bin).arg("status").arg("--json").output().ok()?;
+    let out = hidden_command(bin).arg("status").arg("--json").output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -97,7 +97,7 @@ pub fn serve_start(port: u16) -> Result<String, String> {
     let Some(dns_name) = info.dns_name.clone() else {
         return Err("MagicDNS is disabled; HTTPS needs the tailnet DNS name".to_string());
     };
-    let out = Command::new(&bin)
+    let out = hidden_command(&bin)
         .args(["serve", "--bg", "--https=443", &format!("http://127.0.0.1:{port}")])
         .output()
         .map_err(|e| format!("tailscale serve failed to run: {e}"))?;
@@ -118,7 +118,7 @@ pub fn serve_start(port: u16) -> Result<String, String> {
 /// Remove the serve config installed by [`serve_start`]. Best-effort.
 pub fn serve_stop() {
     if let Some(bin) = locate() {
-        let _ = Command::new(&bin)
+        let _ = hidden_command(&bin)
             .args(["serve", "--https=443", "off"])
             .output();
     }
