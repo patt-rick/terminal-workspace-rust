@@ -21,6 +21,7 @@ interface Draft {
   extraEnv: { name: string; value: string }[]
   launchCommand: string
   enabled: boolean
+  scope: 'global' | 'launch'
   /** write-only paste field; empty = keep the stored secret */
   secret: string
   hasValue: boolean
@@ -38,6 +39,7 @@ const draftFromPreset = (presetId: string): Draft => {
     extraEnv: Object.entries(p.extraEnv).map(([name, value]) => ({ name, value })),
     launchCommand: p.launchCommand,
     enabled: true,
+    scope: p.scope,
     secret: '',
     hasValue: false,
     advanced: p.id === 'custom',
@@ -52,6 +54,7 @@ const draftFromEntry = (k: ApiKeyMeta): Draft => ({
   extraEnv: Object.entries(k.extraEnv).map(([name, value]) => ({ name, value })),
   launchCommand: k.launchCommand ?? '',
   enabled: k.enabled,
+  scope: k.scope,
   secret: '',
   hasValue: k.hasValue,
   advanced: false,
@@ -69,6 +72,7 @@ const entryFromDraft = (d: Draft): ApiKeyEntry => ({
   ),
   launchCommand: d.launchCommand.trim() || null,
   enabled: d.enabled,
+  scope: d.scope,
 })
 
 /**
@@ -182,6 +186,7 @@ export function ProvidersSection() {
       keyEnvVar: p.keyEnvVar,
       extraEnv: Object.entries(p.extraEnv).map(([name, value]) => ({ name, value })),
       launchCommand: p.launchCommand,
+      scope: p.scope,
       advanced: draft.advanced || p.id === 'custom',
     })
   }

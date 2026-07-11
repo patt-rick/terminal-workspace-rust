@@ -7,7 +7,9 @@ import {
   launchBlocker,
   nextLabel,
   presetById,
+  presetEnvDrift,
   PROVIDER_PRESETS,
+  upgradeExtraEnv,
   upgradeLaunchCommand,
   withInstall,
 } from './apikey-presets'
@@ -17,7 +19,16 @@ const entry = (
   keyEnvVar: string,
   enabled = true,
   extraEnv: Record<string, string> = {}
-) => ({ id, provider: 'custom', label: id, keyEnvVar, extraEnv, enabled, hasValue: true })
+) => ({
+  id,
+  provider: 'custom',
+  label: id,
+  keyEnvVar,
+  extraEnv,
+  enabled,
+  scope: 'global' as const,
+  hasValue: true,
+})
 
 describe('envConflicts', () => {
   it('reports vars defined by two or more enabled entries', () => {
@@ -204,5 +215,73 @@ describe('withInstall', () => {
     expect(withInstall('npm install -g @openai/codex', 'codex')).toBe(
       'npm install -g @openai/codex ; codex'
     )
+  })
+})
+
+const CLAUDE_CODE_PRESET_IDS = [
+  'deepseek-claude',
+  'kimi-claude',
+  'glm-claude',
+  'openrouter-claude',
+  'ollama-claude',
+]
+
+describe('claude-code presets', () => {
+  it.each(CLAUDE_CODE_PRESET_IDS)('%s is a launch-scoped anthropic-wire claude launcher', (id) => {
+    const p = presetById(id)!
+    expect(p.wire).toBe('anthropic')
+    expect(p.scope).toBe('launch')
+    expect(p.keyEnvVar).toBe('ANTHROPIC_AUTH_TOKEN')
+    expect(p.launchCommand).toBe('claude')
+    expect(p.check).toEqual({ kind: 'binary', name: 'claude' })
+    expect(p.installCommand).toBe('npm install -g @anthropic-ai/claude-code')
+    expect(p.extraEnv.ANTHROPIC_BASE_URL).toMatch(/^https?:\/\//)
+    expect(p.extraEnv.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe('1')
+  })
+
+  it('every preset declares a scope and existing presets stay global', () => {
+    for (const p of PROVIDER_PRESETS) expect(['global', 'launch']).toContain(p.scope)
+    expect(presetById('anthropic')!.scope).toBe('global')
+    expect(presetById('deepseek')!.scope).toBe('global')
+  })
+})
+
+describe('presetEnvDrift', () => {
+  it('flags changed and missing preset-defaulted vars, ignores user-added vars', () => {
+    const p = presetById('deepseek-claude')!
+    expect(presetEnvDrift('deepseek-claude', { ...p.extraEnv })).toEqual([])
+    const changed = { ...p.extraEnv, ANTHROPIC_MODEL: 'something-else' }
+    expect(presetEnvDrift('deepseek-claude', changed)).toEqual(['ANTHROPIC_MODEL'])
+    const { ANTHROPIC_BASE_URL: _, ...missing } = p.extraEnv
+    expect(presetEnvDrift('deepseek-claude', missing)).toEqual(['ANTHROPIC_BASE_URL'])
+    const extra = { ...p.extraEnv, MY_CUSTOM: 'x' }
+    expect(presetEnvDrift('deepseek-claude', extra)).toEqual([])
+  })
+
+  it('never flags empty preset defaults or unknown providers', () => {
+    expect(presetEnvDrift('custom', { OPENAI_BASE_URL: 'https://x' })).toEqual([])
+    expect(presetEnvDrift('nope', { A: 'b' })).toEqual([])
+  })
+})
+
+describe('upgradeExtraEnv', () => {
+  it('returns the same reference when nothing matches a legacy snapshot', () => {
+    const env = { ANTHROPIC_MODEL: 'user-picked' }
+    expect(upgradeExtraEnv('deepseek-claude', env)).toBe(env)
+    expect(upgradeExtraEnv('unknown', env)).toBe(env)
+  })
+})
+
+describe('envConflicts scope', () => {
+  it('ignores launch-scoped entries', () => {
+    const mk = (id: string, scope: 'global' | 'launch') => ({
+      id,
+      enabled: true,
+      scope,
+      keyEnvVar: 'ANTHROPIC_AUTH_TOKEN',
+      extraEnv: {},
+    })
+    expect(envConflicts([mk('a', 'launch'), mk('b', 'launch')]).size).toBe(0)
+    expect(envConflicts([mk('a', 'global'), mk('b', 'global')]).size).toBe(1)
   })
 })

@@ -33,6 +33,8 @@ export interface CreateTerminalOptions {
   startupCommand?: string
   cols?: number
   rows?: number
+  /** provider-key entry whose env is injected into this terminal only */
+  apikeyEntryId?: string
 }
 
 export interface ExitPayload {
@@ -299,6 +301,8 @@ export interface ApiKeyMeta {
   /** command auto-run in a terminal launched for this entry */
   launchCommand: string | null
   enabled: boolean
+  /** 'global' = inject into every new terminal; 'launch' = only entry-launched terminals */
+  scope: 'global' | 'launch'
   /** derived from the keychain; the secret itself never crosses IPC */
   hasValue: boolean
 }

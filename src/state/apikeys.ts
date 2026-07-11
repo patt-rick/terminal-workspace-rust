@@ -9,6 +9,7 @@ import {
 import {
   commandUsesCli,
   presetById,
+  upgradeExtraEnv,
   upgradeLaunchCommand,
   withInstall,
   type PresenceCheck,
@@ -63,9 +64,10 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
     let keys = await ipc.apikeys.list()
     // Persist preset-default fixes into entries saved by earlier releases.
     for (const { hasValue: _, ...entry } of keys) {
-      const upgraded = upgradeLaunchCommand(entry.provider, entry.launchCommand)
-      if (upgraded !== entry.launchCommand) {
-        keys = await ipc.apikeys.save({ ...entry, launchCommand: upgraded }, null)
+      const launchCommand = upgradeLaunchCommand(entry.provider, entry.launchCommand)
+      const extraEnv = upgradeExtraEnv(entry.provider, entry.extraEnv)
+      if (launchCommand !== entry.launchCommand || extraEnv !== entry.extraEnv) {
+        keys = await ipc.apikeys.save({ ...entry, launchCommand, extraEnv }, null)
       }
     }
     set({ keys, loaded: true })
@@ -124,7 +126,7 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
       })
       return
     }
-    await launchTerminal(projectId, entry.label, entry.launchCommand)
+    await launchTerminal(projectId, entry.label, entry.launchCommand, { apikeyEntryId: entry.id })
   },
 
   confirmInstall: async () => {
@@ -143,7 +145,7 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
       p.projectId,
       p.entry.label,
       withInstall(p.installCommand, linked.startupCommand),
-      linked.sessionId
+      { claudeSessionId: linked.sessionId, apikeyEntryId: p.entry.id }
     )
   },
 
@@ -160,8 +162,8 @@ async function launchTerminal(
   projectId: string,
   name: string,
   startupCommand: string,
-  claudeSessionId?: string
+  opts?: { claudeSessionId?: string; apikeyEntryId?: string }
 ): Promise<void> {
   useWorkspace.getState().setProjectExpanded(projectId, true)
-  await createProjectTerminal(projectId, { name, startupCommand, claudeSessionId })
+  await createProjectTerminal(projectId, { name, startupCommand, ...opts })
 }

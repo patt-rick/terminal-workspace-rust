@@ -332,7 +332,13 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
 /** Create a terminal for a project, applying the configured startup command. */
 export async function createProjectTerminal(
   projectId: string,
-  opts?: { cwd?: string; name?: string; startupCommand?: string; claudeSessionId?: string }
+  opts?: {
+    cwd?: string
+    name?: string
+    startupCommand?: string
+    claudeSessionId?: string
+    apikeyEntryId?: string
+  }
 ): Promise<TerminalRecord | null> {
   let startupCommand =
     opts?.startupCommand ?? (useSettings.getState().terminal.startupCommand.trim() || undefined)
@@ -358,6 +364,7 @@ export async function createProjectTerminal(
     startupCommand,
     cwd: opts?.cwd,
     name: opts?.name,
+    apikeyEntryId: opts?.apikeyEntryId,
   })
   if (record) {
     useWorkspace.getState().addTerminal(projectId, record)
