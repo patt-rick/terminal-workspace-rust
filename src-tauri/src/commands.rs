@@ -115,6 +115,8 @@ pub struct CreateTerminalArgs {
     pub startup_command: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// provider-key entry whose env is injected into this terminal only
+    pub apikey_entry_id: Option<String>,
 }
 
 #[tauri::command]
@@ -141,6 +143,11 @@ pub fn terminal_create(
         .clone()
         .unwrap_or_else(|| format!("Terminal {}", store.terminal_count(&args.project_id) + 1));
 
+    let mut env = app.state::<ApiKeyStore>().resolved_env();
+    if let Some(kid) = &args.apikey_entry_id {
+        env.extend(app.state::<ApiKeyStore>().launch_env(kid)?);
+    }
+
     pty.create(
         &app,
         CreateOpts {
@@ -150,7 +157,7 @@ pub fn terminal_create(
             cols: args.cols.unwrap_or(80),
             rows: args.rows.unwrap_or(24),
             startup_command: args.startup_command.clone(),
-            env: app.state::<ApiKeyStore>().resolved_env(),
+            env,
             env_remove: claude_ambient_env_remove(&app),
         },
     )?;
@@ -927,8 +934,9 @@ pub fn apikeys_set_enabled(store: State<ApiKeyStore>, id: String, enabled: bool)
 
 #[tauri::command]
 pub async fn apikeys_test(store: State<'_, ApiKeyStore>, id: String) -> AppResult<TestResult> {
-    let (provider, base, secret) = store.test_inputs(&id)?;
-    let req = crate::apikeys::build_test_request(&provider, base.as_deref(), &secret);
+    let (provider, base, secret, anthropic_wire) = store.test_inputs(&id)?;
+    let req =
+        crate::apikeys::build_test_request(&provider, base.as_deref(), &secret, anthropic_wire);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -981,6 +989,7 @@ pub fn apikeys_import_env(
         extra_env: Default::default(),
         launch_command,
         enabled: true,
+        scope: Default::default(),
     };
     store.save(entry, Some(secret.trim().to_string()))?;
     Ok(store.list())

@@ -9,6 +9,16 @@ const KEYRING_SERVICE: &str = "com.patt-rick.terminalworkspace";
 
 // ---- types ----
 
+/// Where an entry's env pairs are injected: into every new terminal, or only
+/// into a terminal launched from this entry (model picker / settings ▶ Launch).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InjectionScope {
+    #[default]
+    Global,
+    Launch,
+}
+
 /// One provider-key entry. Non-secret metadata only — the secret lives in the
 /// OS keychain under `apikey-<id>`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -29,6 +39,8 @@ pub struct ApiKey {
     #[serde(default)]
     pub launch_command: Option<String>,
     pub enabled: bool,
+    #[serde(default)]
+    pub scope: InjectionScope,
 }
 
 /// `list()` response shape: metadata + whether a secret exists in the keychain.
@@ -132,10 +144,24 @@ impl ApiKeyStore {
         expand_env(&d.keys, keychain_secret)
     }
 
-    /// (provider, base-url override, secret) for the reachability test.
-    /// Gathered under the lock and returned owned, so the async command never
-    /// holds the lock across an await.
-    pub fn test_inputs(&self, id: &str) -> AppResult<(String, Option<String>, String)> {
+    /// Env pairs for one entry by id, secrets from the keychain. Used at
+    /// terminal-spawn time for entry-launched terminals (any scope).
+    pub fn launch_env(&self, id: &str) -> AppResult<Vec<(String, String)>> {
+        let k = {
+            let d = self.inner.lock();
+            d.keys
+                .iter()
+                .find(|k| k.id == id)
+                .cloned()
+                .ok_or_else(|| AppError::Msg("key not found".to_string()))?
+        };
+        launch_pairs(&k, keychain_secret)
+    }
+
+    /// (provider, base-url override, secret, anthropic-wire) for the
+    /// reachability test. Gathered under the lock and returned owned, so the
+    /// async command never holds the lock across an await.
+    pub fn test_inputs(&self, id: &str) -> AppResult<(String, Option<String>, String, bool)> {
         let d = self.inner.lock();
         let k = d
             .keys
@@ -148,10 +174,11 @@ impl ApiKeyStore {
             .find(|(name, _)| name.ends_with("BASE_URL"))
             .map(|(_, v)| v.clone());
         let provider = k.provider.clone();
+        let anthropic_wire = k.key_env_var.starts_with("ANTHROPIC_");
         drop(d);
         let secret =
             keychain_secret(id).ok_or_else(|| AppError::Msg("no API key stored".to_string()))?;
-        Ok((provider, base, secret))
+        Ok((provider, base, secret, anthropic_wire))
     }
 }
 
@@ -209,13 +236,20 @@ fn default_base(provider: &str) -> &'static str {
     }
 }
 
-/// Build the auth-check request. Anthropic-format entries hit `<base>/v1/models`
-/// with `x-api-key`; everything else is OpenAI-format: `<base>/models` with a
-/// bearer token, where `<base>` is the entry's *_BASE_URL override as the CLI
-/// would consume it (so it may or may not contain `/v1` — DeepSeek's doesn't,
-/// OpenRouter's does; we append only `/models`).
-pub fn build_test_request(provider: &str, base_url: Option<&str>, secret: &str) -> TestRequest {
-    if provider == "anthropic" {
+/// Build the auth-check request. Anthropic-wire entries — those whose key env
+/// var starts with `ANTHROPIC_` — hit `<base>/v1/models` with both `x-api-key`
+/// and a bearer token, since compatible endpoints differ in which they accept;
+/// everything else is OpenAI-format: `<base>/models` with a bearer token, where
+/// `<base>` is the entry's *_BASE_URL override as the CLI would consume it (so
+/// it may or may not contain `/v1` — DeepSeek's doesn't, OpenRouter's does; we
+/// append only `/models`).
+pub fn build_test_request(
+    provider: &str,
+    base_url: Option<&str>,
+    secret: &str,
+    anthropic_wire: bool,
+) -> TestRequest {
+    if anthropic_wire {
         let base = base_url
             .unwrap_or("https://api.anthropic.com")
             .trim_end_matches('/');
@@ -223,6 +257,7 @@ pub fn build_test_request(provider: &str, base_url: Option<&str>, secret: &str) 
             url: format!("{base}/v1/models"),
             headers: vec![
                 ("x-api-key".to_string(), secret.to_string()),
+                ("Authorization".to_string(), format!("Bearer {secret}")),
                 ("anthropic-version".to_string(), "2023-06-01".to_string()),
             ],
         }
@@ -254,7 +289,10 @@ pub fn expand_env(
     secret_for: impl Fn(&str) -> Option<String>,
 ) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    for k in keys.iter().filter(|k| k.enabled) {
+    for k in keys
+        .iter()
+        .filter(|k| k.enabled && k.scope == InjectionScope::Global)
+    {
         let Some(secret) = secret_for(&k.id) else {
             continue;
         };
@@ -264,6 +302,22 @@ pub fn expand_env(
         }
     }
     out
+}
+
+/// Env pairs for a single entry — the launch-scoped injection path. Unlike
+/// `expand_env`, a missing secret is an error: the user explicitly launched
+/// this entry, so silence would misroute the CLI to default credentials.
+pub fn launch_pairs(
+    k: &ApiKey,
+    secret_for: impl Fn(&str) -> Option<String>,
+) -> AppResult<Vec<(String, String)>> {
+    let secret = secret_for(&k.id)
+        .ok_or_else(|| AppError::Msg(format!("no API key stored for \"{}\"", k.label)))?;
+    let mut out = vec![(k.key_env_var.clone(), secret)];
+    for (name, val) in &k.extra_env {
+        out.push((name.clone(), val.clone()));
+    }
+    Ok(out)
 }
 
 // ---- import from environment ----
@@ -398,7 +452,90 @@ mod tests {
             extra_env: BTreeMap::new(),
             launch_command: None,
             enabled,
+            scope: InjectionScope::Global,
         }
+    }
+
+    #[test]
+    fn scope_defaults_to_global_on_legacy_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        fs::write(
+            &path,
+            r#"{"keys":[{"id":"a","provider":"openai","label":"a","keyEnvVar":"OPENAI_API_KEY","extraEnv":{},"enabled":true}]}"#,
+        )
+        .unwrap();
+        let store = ApiKeyStore::new(path);
+        assert_eq!(store.keys_snapshot()[0].scope, InjectionScope::Global);
+    }
+
+    #[test]
+    fn scope_launch_roundtrips_through_disk() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        {
+            let store = ApiKeyStore::new(path.clone());
+            let mut k = key("a", "ANTHROPIC_AUTH_TOKEN", true);
+            k.scope = InjectionScope::Launch;
+            store.save(k, None).unwrap();
+        }
+        let store = ApiKeyStore::new(path);
+        assert_eq!(store.keys_snapshot()[0].scope, InjectionScope::Launch);
+    }
+
+    #[test]
+    fn expand_skips_launch_scoped_entries() {
+        let mut launch = key("a", "ANTHROPIC_AUTH_TOKEN", true);
+        launch.scope = InjectionScope::Launch;
+        let keys = vec![launch, key("b", "GROQ_API_KEY", true)];
+        let env = expand_env(&keys, |_| Some("sk-x".to_string()));
+        assert_eq!(env, vec![("GROQ_API_KEY".to_string(), "sk-x".to_string())]);
+    }
+
+    #[test]
+    fn launch_pairs_expands_one_entry_with_extra_env() {
+        let mut k = key("a", "ANTHROPIC_AUTH_TOKEN", true);
+        k.scope = InjectionScope::Launch;
+        k.extra_env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://api.deepseek.com/anthropic".to_string(),
+        );
+        let env = launch_pairs(&k, |id| Some(format!("secret-{id}"))).unwrap();
+        assert_eq!(
+            env,
+            vec![
+                ("ANTHROPIC_AUTH_TOKEN".to_string(), "secret-a".to_string()),
+                (
+                    "ANTHROPIC_BASE_URL".to_string(),
+                    "https://api.deepseek.com/anthropic".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_pairs_errors_when_secret_missing() {
+        let k = key("a", "ANTHROPIC_AUTH_TOKEN", true);
+        assert!(launch_pairs(&k, |_| None).is_err());
+    }
+
+    #[test]
+    fn test_request_anthropic_wire_probes_v1_models_with_both_auth_headers() {
+        let r = build_test_request(
+            "deepseek-claude",
+            Some("https://api.deepseek.com/anthropic/"),
+            "sk-x",
+            true,
+        );
+        assert_eq!(r.url, "https://api.deepseek.com/anthropic/v1/models");
+        assert!(r.headers.contains(&("x-api-key".to_string(), "sk-x".to_string())));
+        assert!(r
+            .headers
+            .contains(&("Authorization".to_string(), "Bearer sk-x".to_string())));
+        assert!(r
+            .headers
+            .iter()
+            .any(|(k, v)| k == "anthropic-version" && !v.is_empty()));
     }
 
     #[test]
@@ -496,7 +633,7 @@ mod tests {
 
     #[test]
     fn test_request_anthropic_uses_x_api_key() {
-        let r = build_test_request("anthropic", None, "sk-ant-x");
+        let r = build_test_request("anthropic", None, "sk-ant-x", true);
         assert_eq!(r.url, "https://api.anthropic.com/v1/models");
         assert!(r.headers.contains(&("x-api-key".to_string(), "sk-ant-x".to_string())));
         assert!(r
@@ -507,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_request_openai_defaults_to_openai_base() {
-        let r = build_test_request("openai", None, "sk-x");
+        let r = build_test_request("openai", None, "sk-x", false);
         assert_eq!(r.url, "https://api.openai.com/v1/models");
         assert_eq!(
             r.headers,
@@ -517,9 +654,9 @@ mod tests {
 
     #[test]
     fn test_request_respects_base_url_override_and_trailing_slash() {
-        let r = build_test_request("deepseek", Some("https://api.deepseek.com/"), "sk-x");
+        let r = build_test_request("deepseek", Some("https://api.deepseek.com/"), "sk-x", false);
         assert_eq!(r.url, "https://api.deepseek.com/models");
-        let r2 = build_test_request("custom", Some("https://openrouter.ai/api/v1"), "sk-x");
+        let r2 = build_test_request("custom", Some("https://openrouter.ai/api/v1"), "sk-x", false);
         assert_eq!(r2.url, "https://openrouter.ai/api/v1/models");
     }
 
@@ -557,10 +694,10 @@ mod tests {
             ("custom", "https://api.openai.com/v1/models"),
         ];
         for (provider, url) in cases {
-            assert_eq!(build_test_request(provider, None, "sk-x").url, url, "{provider}");
+            assert_eq!(build_test_request(provider, None, "sk-x", false).url, url, "{provider}");
         }
         // An explicit base override keeps the generic /models probe.
-        let r = build_test_request("openrouter", Some("https://proxy.example/v1"), "sk-x");
+        let r = build_test_request("openrouter", Some("https://proxy.example/v1"), "sk-x", false);
         assert_eq!(r.url, "https://proxy.example/v1/models");
     }
 
