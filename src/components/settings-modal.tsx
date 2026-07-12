@@ -399,7 +399,8 @@ function ClaudeHooksToggle() {
         Adds Notification/Stop hooks to <code className="font-mono">~/.claude/settings.json</code>{' '}
         so the app knows exactly when Claude needs your permission, is waiting for input, or has
         finished — powering precise badges and phone notifications. Your existing hooks are left
-        untouched.
+        untouched. Hooks are also installed into any running WSL distro so Claude Code inside WSL
+        reports too.
       </div>
       {error && <div className="text-xs text-danger">{error}</div>}
     </>

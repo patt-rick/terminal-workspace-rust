@@ -774,18 +774,54 @@ pub fn claude_hooks_status(app: AppHandle) -> AppResult<bool> {
 /// Opt-in: install the Notification/Stop hooks (marker-based, preserves any
 /// existing user hooks).
 #[tauri::command]
-pub fn claude_hooks_enable(app: AppHandle) -> AppResult<()> {
+pub async fn claude_hooks_enable(app: AppHandle) -> AppResult<()> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| AppError::Msg(e.to_string()))?;
-    let spool = crate::claude::hooks::spool_dir(&data_dir);
-    crate::claude::hooks::install(&claude_settings_path(&app)?, &spool).map_err(AppError::Msg)
+    let settings = claude_settings_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let spool = crate::claude::hooks::spool_dir(&data_dir);
+        let cmd = crate::claude::hooks::native_hook_command(&spool)
+            .ok_or_else(|| AppError::Msg("cannot resolve app path".to_string()))?;
+        crate::claude::hooks::install(&settings, &cmd).map_err(AppError::Msg)?;
+        // Best-effort: running distros get the interop command so an in-WSL
+        // Claude reports through the same spool.
+        #[cfg(windows)]
+        if let Some(wsl_cmd) = crate::claude::hooks::wsl_hook_command(&spool) {
+            for d in crate::wsl::list_distros().into_iter().filter(|d| d.running) {
+                if let Some(home) = crate::wsl::distro_home(&d.name) {
+                    let p = crate::wsl::unc_path(&d.name, &home)
+                        .join(".claude")
+                        .join("settings.json");
+                    let _ = crate::claude::hooks::install(&p, &wsl_cmd);
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
 }
 
 #[tauri::command]
-pub fn claude_hooks_disable(app: AppHandle) -> AppResult<()> {
-    crate::claude::hooks::uninstall(&claude_settings_path(&app)?).map_err(AppError::Msg)
+pub async fn claude_hooks_disable(app: AppHandle) -> AppResult<()> {
+    let settings = claude_settings_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::claude::hooks::uninstall(&settings).map_err(AppError::Msg)?;
+        #[cfg(windows)]
+        for d in crate::wsl::list_distros().into_iter().filter(|d| d.running) {
+            if let Some(home) = crate::wsl::distro_home(&d.name) {
+                let p = crate::wsl::unc_path(&d.name, &home)
+                    .join(".claude")
+                    .join("settings.json");
+                let _ = crate::claude::hooks::uninstall(&p);
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
 }
 
 #[tauri::command]

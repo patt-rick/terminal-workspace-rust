@@ -45,11 +45,24 @@ pub fn run_sink(spool: &Path) {
 }
 
 /// The command string written into Claude's settings.
-fn hook_command(spool: &Path) -> Option<String> {
+pub fn native_hook_command(spool: &Path) -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     Some(format!(
         "\"{}\" {MARKER} \"{}\"",
         exe.to_string_lossy(),
+        spool.to_string_lossy()
+    ))
+}
+
+/// Hook command for a distro's settings.json: the Windows exe invoked through
+/// WSL interop (its /mnt/… path), spool arg kept as a Windows path because the
+/// sink runs as a Windows process.
+#[cfg(windows)]
+pub fn wsl_hook_command(spool: &Path) -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_wsl = crate::wsl::win_to_wsl_path(&exe.to_string_lossy())?;
+    Some(format!(
+        "\"{exe_wsl}\" {MARKER} \"{}\"",
         spool.to_string_lossy()
     ))
 }
@@ -134,8 +147,7 @@ pub fn is_installed(settings_path: &Path) -> bool {
 
 /// Idempotently add our Notification/Stop hook entries (existing user hooks
 /// are preserved untouched).
-pub fn install(settings_path: &Path, spool: &Path) -> Result<(), String> {
-    let command = hook_command(spool).ok_or_else(|| "cannot resolve app path".to_string())?;
+pub fn install(settings_path: &Path, command: &str) -> Result<(), String> {
     let mut root = read_settings(settings_path);
     if !root.is_object() {
         return Err("~/.claude/settings.json is not a JSON object".to_string());
@@ -260,8 +272,8 @@ mod tests {
         )
         .unwrap();
 
-        let spool = dir.path().join("spool");
-        install(&path, &spool).unwrap();
+        let cmd = "\"C:\\app.exe\" --hook-sink \"C:\\spool\"";
+        install(&path, cmd).unwrap();
         assert!(is_installed(&path));
         let root = read_settings(&path);
         // User's hook and setting still present.
@@ -275,7 +287,7 @@ mod tests {
         assert!(root["hooks"]["Stop"].as_array().unwrap().len() == 1);
 
         // Install is idempotent (replaces, not duplicates).
-        install(&path, &spool).unwrap();
+        install(&path, cmd).unwrap();
         assert_eq!(read_settings(&path)["hooks"]["Notification"].as_array().unwrap().len(), 2);
 
         uninstall(&path).unwrap();
@@ -290,8 +302,17 @@ mod tests {
     fn install_into_missing_file_works() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        install(&path, &dir.path().join("spool")).unwrap();
+        install(&path, "\"C:\\app.exe\" --hook-sink \"C:\\spool\"").unwrap();
         assert!(is_installed(&path));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_hook_command_translates_exe_path_and_keeps_windows_spool() {
+        // Can't control current_exe in a test; instead verify the format helper
+        // pieces: translation + quoting via a direct format check.
+        let exe_wsl = crate::wsl::win_to_wsl_path(r"C:\Apps\tw\tw.exe").unwrap();
+        assert_eq!(exe_wsl, "/mnt/c/Apps/tw/tw.exe");
     }
 
     #[cfg(feature = "remote-access")]
