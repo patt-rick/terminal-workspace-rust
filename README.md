@@ -139,6 +139,35 @@ top of the Git tab — the same model VS Code uses for Source Control.
 - **GitHub** PRs and Actions target the picker-selected repo (owner/repo parsed
   from that repo's origin).
 
+## WSL support
+
+On Windows, terminals can run inside WSL distros, and the Claude Code integration follows them in.
+
+- **WSL shells.** Pick a distro as the default shell for new terminals (**Settings → Terminal**),
+  or open a one-off WSL terminal from a project's context menu (*New terminal — WSL \<distro\>*).
+  Terminals start in the project directory as seen from inside the distro (`/mnt/c/…` for drive
+  paths). Utility distros (docker-desktop and friends) are hidden from the pickers.
+- **Env forwarding.** Provider API keys and terminal identification are forwarded into the distro
+  automatically via `WSLENV` — no per-distro setup.
+- **Claude Code inside WSL.** Sessions written by a `claude` running in a distro appear in the
+  Sessions panel alongside Windows ones (tagged `WSL <distro>`); resuming one opens a terminal in
+  that distro, and deleting one removes the transcript from the distro's home. Enabling attention
+  hooks also installs them into every *running* distro, so an in-WSL Claude reports through the
+  same badges and notifications. Stopped distros are never booted as a side effect.
+- **Projects on the WSL filesystem.** Folders under `\\wsl$\<distro>\…` (or `\\wsl.localhost\…`)
+  work as projects, and their new terminals default to that distro's shell.
+
+### Limitations
+
+- File watching over `\\wsl$` is unreliable, so the quick-open index can go stale for WSL-rooted
+  projects — use *Rebuild* in the search panel.
+- `git push` and identity operations on `\\wsl$` projects may hit git's `safe.directory`
+  ownership check.
+- Claude account switching applies to the Windows-side Claude only; a `claude` inside WSL uses
+  the distro's own `~/.claude/.credentials.json`.
+- WSL terminals get no OSC 133 shell integration yet; busy detection still works for TUIs that
+  set window titles (e.g. Claude Code).
+
 ## Remote access
 
 Control your terminals from another device through a small PWA web client (installable to a
