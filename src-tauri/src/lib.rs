@@ -19,6 +19,7 @@ mod remote;
 mod search;
 mod settings;
 mod state;
+mod wsl;
 
 use apikeys::ApiKeyStore;
 use github::GithubStore;
