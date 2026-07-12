@@ -24,6 +24,8 @@ pub struct SessionSummary {
     /// File mtime, epoch millis. Newest sessions sort first.
     pub last_active: i64,
     pub git_branch: Option<String>,
+    /// WSL distro whose home holds this transcript; None = the Windows home.
+    pub distro: Option<String>,
 }
 
 /// Encode an absolute path the way Claude Code names its project dirs: every
@@ -202,6 +204,7 @@ fn parse_session(path: &Path, session_id: &str, project_root: &str) -> Option<Se
         message_count: parsed.message_count,
         last_active,
         git_branch: parsed.git_branch,
+        distro: None,
     })
 }
 
@@ -226,6 +229,30 @@ pub fn list_sessions(home: &Path, project_root: &str) -> Vec<SessionSummary> {
         }
     }
     out.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    out
+}
+
+/// Sessions written by a `claude` running inside a WSL distro. Its home (and
+/// therefore ~/.claude) is the distro's, and the encoded cwd is the Linux view
+/// of the project root (/mnt/c/… for drive paths). Only running distros are
+/// consulted — listing sessions must never boot a distro.
+#[cfg(windows)]
+pub fn list_sessions_wsl(project_root: &str) -> Vec<SessionSummary> {
+    let mut out = Vec::new();
+    for d in crate::wsl::list_distros().into_iter().filter(|d| d.running) {
+        let Some(home) = crate::wsl::distro_home(&d.name) else {
+            continue;
+        };
+        let Some(linux_root) = crate::wsl::project_root_in_distro(project_root, &d.name) else {
+            continue;
+        };
+        let home_unc = crate::wsl::unc_path(&d.name, &home);
+        let mut sessions = list_sessions(&home_unc, &linux_root);
+        for s in &mut sessions {
+            s.distro = Some(d.name.clone());
+        }
+        out.extend(sessions);
+    }
     out
 }
 

@@ -750,9 +750,15 @@ pub async fn claude_sessions_list(
     // heavy blocking work; keep it off the main thread so the UI stays live.
     let root = project_root(&store, &project_id)?;
     let home = home_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || crate::claude::list_sessions(&home, &root))
-        .await
-        .map_err(|e| AppError::Msg(e.to_string()))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = crate::claude::list_sessions(&home, &root);
+        #[cfg(windows)]
+        out.extend(crate::claude::list_sessions_wsl(&root));
+        out.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        out
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))
 }
 
 fn claude_settings_path(app: &AppHandle) -> AppResult<std::path::PathBuf> {
@@ -783,15 +789,28 @@ pub fn claude_hooks_disable(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn claude_session_delete(
+pub async fn claude_session_delete(
     app: AppHandle,
-    store: State<StateStore>,
+    store: State<'_, StateStore>,
     project_id: String,
     session_id: String,
+    distro: Option<String>,
 ) -> AppResult<()> {
     let root = project_root(&store, &project_id)?;
     let home = home_dir(&app)?;
-    crate::claude::delete_session(&home, &root, &session_id)
+    tauri::async_runtime::spawn_blocking(move || match distro.as_deref() {
+        #[cfg(windows)]
+        Some(d) => {
+            let dh = crate::wsl::distro_home(d)
+                .ok_or_else(|| AppError::Msg("cannot resolve distro home".to_string()))?;
+            let linux_root = crate::wsl::project_root_in_distro(&root, d)
+                .ok_or_else(|| AppError::Msg("project not visible in distro".to_string()))?;
+            crate::claude::delete_session(&crate::wsl::unc_path(d, &dh), &linux_root, &session_id)
+        }
+        _ => crate::claude::delete_session(&home, &root, &session_id),
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
 }
 
 // ---------- identity (account switcher) ----------
