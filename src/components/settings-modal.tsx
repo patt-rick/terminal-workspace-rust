@@ -11,6 +11,8 @@ import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
 import { ClaudeAccountsSection } from './claude-accounts/claude-accounts-section'
 import { useUi } from '../state/ui'
+import { useWsl } from '../state/wsl'
+import { isWindows } from '../lib/platform'
 import themeGuideMarkdown from '../../docs/theme-authoring.md?raw'
 
 // Save text to a file, picking the right mechanism per platform. In the Tauri
@@ -66,6 +68,11 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   const updateEditor = useSettings((s) => s.updateEditor)
   const terminal = useSettings((s) => s.terminal)
   const updateTerminal = useSettings((s) => s.updateTerminal)
+  const wslDistros = useWsl((s) => s.distros)
+
+  useEffect(() => {
+    void useWsl.getState().load()
+  }, [])
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [themeError, setThemeError] = useState<string | null>(null)
@@ -292,6 +299,23 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
         </Section>
 
               <Section title="Terminal">
+                {isWindows && (
+                  <Row label="Default shell">
+                    <select
+                      value={terminal.defaultShell}
+                      onChange={(e) => updateTerminal({ defaultShell: e.target.value })}
+                      className="rounded-md border border-border bg-field-background px-2 py-1 text-foreground outline-none focus:border-accent"
+                    >
+                      <option value="">PowerShell (default)</option>
+                      <option value="cmd.exe">Command Prompt</option>
+                      {wslDistros.map((d) => (
+                        <option key={d.name} value={`wsl:${d.name}`}>
+                          {`WSL — ${d.name}${d.isDefault ? ' (default distro)' : ''}`}
+                        </option>
+                      ))}
+                    </select>
+                  </Row>
+                )}
                 <div className="text-xs text-muted">Startup command — run in every new terminal tab.</div>
                 <textarea
                   value={terminal.startupCommand}
