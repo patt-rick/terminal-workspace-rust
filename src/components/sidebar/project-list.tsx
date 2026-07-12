@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useProjects } from '../../hooks/use-projects'
 import { useWorkspace, createProjectTerminal } from '../../state/store'
 import { useApiKeys } from '../../state/apikeys'
+import { useWsl } from '../../state/wsl'
 import { ipc, type Project } from '../../lib/ipc'
 import { ContextMenu, type MenuItem } from '../context-menu'
 import { ConfirmDialog } from '../confirm-dialog'
@@ -64,6 +65,7 @@ function ProjectRow({ project }: { project: Project }) {
   const clearUnread = useWorkspace((s) => s.clearUnread)
   const renameProject = useWorkspace((s) => s.renameProject)
   const removeProject = useWorkspace((s) => s.removeProject)
+  const wslDistros = useWsl((s) => s.distros)
 
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [editing, setEditing] = useState(false)
@@ -104,6 +106,17 @@ function ProjectRow({ project }: { project: Project }) {
       trailing: <Hint>{kbd('T')}</Hint>,
       onClick: () => expandAnd(() => void createProjectTerminal(project.id)),
     },
+    ...wslDistros.map((d) => ({
+      label: `New terminal — WSL ${d.name}`,
+      onClick: () =>
+        expandAnd(
+          () =>
+            void createProjectTerminal(project.id, {
+              shell: `wsl:${d.name}`,
+              name: d.name,
+            })
+        ),
+    })),
     { label: 'Claude Code', trailing: <Hint>{kbd('⇧T')}</Hint>, onClick: () => newClaude() },
     {
       label: 'Use other models…',
