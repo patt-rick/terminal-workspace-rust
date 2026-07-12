@@ -108,6 +108,14 @@ fn write_once(name: &str, contents: &str) -> Option<PathBuf> {
 }
 
 pub fn prepare(shell: &str) -> Prepared {
+    // WSL shells get no host-side rc injection; the distro's own shell owns
+    // its rc files. (Also prevents a distro name like "fishtank" matching.)
+    if crate::wsl::parse_shell_token(shell).is_some() {
+        return Prepared {
+            args: Vec::new(),
+            env: Vec::new(),
+        };
+    }
     match detect(shell) {
         ShellKind::Zsh => prepare_zsh(),
         ShellKind::Bash => prepare_bash(),
@@ -206,6 +214,18 @@ mod tests {
         assert!(matches!(detect("/usr/bin/bash"), ShellKind::Bash));
         assert!(matches!(detect("/usr/local/bin/fish"), ShellKind::Fish));
         assert!(matches!(detect("powershell.exe"), ShellKind::Unknown));
+    }
+
+    #[test]
+    fn wsl_tokens_get_no_integration_even_when_distro_name_matches_a_shell() {
+        // "wsl:fishtank" contains "fish" — without the guard, prepare() would
+        // append fish --init-command args to wsl.exe.
+        let p = prepare("wsl:fishtank");
+        assert!(p.args.is_empty());
+        assert!(p.env.is_empty());
+        let p = prepare("wsl:Ubuntu");
+        assert!(p.args.is_empty());
+        assert!(p.env.is_empty());
     }
 
     #[test]

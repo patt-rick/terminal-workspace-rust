@@ -227,7 +227,16 @@ impl PtyManager {
             })
             .map_err(|e| AppError::Msg(e.to_string()))?;
 
-        let mut cmd = CommandBuilder::new(&shell);
+        let mut cmd = match crate::wsl::parse_shell_token(&shell) {
+            Some(distro) => {
+                let mut c = CommandBuilder::new("wsl.exe");
+                for a in crate::wsl::spawn_args(distro, &opts.cwd) {
+                    c.arg(a);
+                }
+                c
+            }
+            None => CommandBuilder::new(&shell),
+        };
         cmd.cwd(&opts.cwd);
         for k in &opts.env_remove {
             cmd.env_remove(k);
@@ -241,6 +250,19 @@ impl PtyManager {
         }
         for (k, v) in &prepared.env {
             cmd.env(k, v);
+        }
+        // WSL only forwards Windows env vars named in WSLENV into the distro.
+        if crate::wsl::parse_shell_token(&shell).is_some() {
+            let mut names: Vec<String> = vec![
+                "TERM_PROGRAM".to_string(),
+                "TERM_PROGRAM_VERSION".to_string(),
+            ];
+            names.extend(opts.env.iter().map(|(k, _)| k.clone()));
+            let existing = std::env::var("WSLENV").ok();
+            cmd.env(
+                "WSLENV",
+                crate::wsl::compose_wslenv(existing.as_deref(), &names),
+            );
         }
         for a in &prepared.args {
             cmd.arg(a);
