@@ -20,6 +20,7 @@ import { useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
 import { useUi } from './state/ui'
 import { useApiKeys } from './state/apikeys'
+import { useWsl } from './state/wsl'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
 import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
@@ -137,6 +138,10 @@ export default function App() {
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
   }, [activeTerminalId, clearUnread])
+
+  useEffect(() => {
+    void useWsl.getState().load()
+  }, [])
 
   // Build + watch the search index for the selected project (and drop others).
   useEffect(() => {

@@ -319,6 +319,12 @@ export interface DetectedEnvKey {
   maskedTail: string
 }
 
+export interface WslDistro {
+  name: string
+  isDefault: boolean
+  running: boolean
+}
+
 export interface ClaudeAccountMeta {
   id: string
   email: string
@@ -606,6 +612,10 @@ export const ipc = {
     /** Import probe for a Python module (prompt-then-install launch flow). */
     pythonModuleExists: (module: string) =>
       invoke<boolean>('python_module_exists', { module }),
+  },
+
+  wsl: {
+    listDistros: () => invoke<WslDistro[]>('wsl_list_distros'),
   },
 
   // Remote access (only present when the app is built with the `remote-access`

@@ -15,6 +15,11 @@ export interface TerminalSettings {
   /** Command run automatically in every new terminal tab. Empty = nothing. */
   startupCommand: string
   /**
+   * Shell for new terminals. '' = platform default (PowerShell on Windows).
+   * Windows extras: 'cmd.exe', or 'wsl:<distro>' ('wsl:' = default distro).
+   */
+  defaultShell: string
+  /**
    * When true, every AI CLI launch appends the CLI's own auto-approve flag
    * (claude `--dangerously-skip-permissions`, codex
    * `--dangerously-bypass-approvals-and-sandbox`, gemini/qwen `--yolo`, aider
@@ -35,6 +40,7 @@ export const EDITOR_DEFAULTS: EditorSettings = {
 
 export const TERMINAL_DEFAULTS: TerminalSettings = {
   startupCommand: '',
+  defaultShell: '',
   claudeSkipPermissions: false,
 }
 

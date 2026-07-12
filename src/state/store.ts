@@ -335,6 +335,7 @@ export async function createProjectTerminal(
   opts?: {
     cwd?: string
     name?: string
+    shell?: string
     startupCommand?: string
     claudeSessionId?: string
     apikeyEntryId?: string
@@ -359,11 +360,13 @@ export async function createProjectTerminal(
     startupCommand = linked.startupCommand
     claudeSessionId = linked.sessionId
   }
+  const shell = opts?.shell ?? (useSettings.getState().terminal.defaultShell || undefined)
   const record = await ipc.terminals.create({
     projectId,
     startupCommand,
     cwd: opts?.cwd,
     name: opts?.name,
+    shell,
     apikeyEntryId: opts?.apikeyEntryId,
   })
   if (record) {
