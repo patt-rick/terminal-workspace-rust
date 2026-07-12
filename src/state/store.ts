@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
+import { distroOfUncPath } from '../lib/wsl-paths'
 import { useSettings } from './settings'
 import { applySkipPermissions, linkClaudeSession } from './claude-command'
 
@@ -360,7 +361,12 @@ export async function createProjectTerminal(
     startupCommand = linked.startupCommand
     claudeSessionId = linked.sessionId
   }
-  const shell = opts?.shell ?? (useSettings.getState().terminal.defaultShell || undefined)
+  const project = useWorkspace.getState().projects.find((p) => p.id === projectId)
+  const projectDistro = project ? distroOfUncPath(project.path) : null
+  const shell =
+    opts?.shell ??
+    (projectDistro ? `wsl:${projectDistro}` : undefined) ??
+    (useSettings.getState().terminal.defaultShell || undefined)
   const record = await ipc.terminals.create({
     projectId,
     startupCommand,
