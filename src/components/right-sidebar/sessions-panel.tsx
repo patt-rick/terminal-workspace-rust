@@ -73,12 +73,13 @@ export function SessionsPanel({ projectId }: { projectId: string }) {
       name: s.title.slice(0, 40) || 'Claude',
       startupCommand: `claude --resume ${s.sessionId}`,
       claudeSessionId: s.sessionId,
+      shell: s.distro ? `wsl:${s.distro}` : undefined,
     })
   }
 
   const onDelete = async (s: ClaudeSession): Promise<void> => {
     try {
-      await ipc.claude.deleteSession(projectId, s.sessionId)
+      await ipc.claude.deleteSession(projectId, s.sessionId, s.distro)
       refresh()
     } catch (e) {
       setError(String(e))
@@ -133,6 +134,7 @@ export function SessionsPanel({ projectId }: { projectId: string }) {
               <div className="mt-0.5 truncate text-xs text-muted">
                 {timeAgo(s.lastActive)} · {s.messageCount} msg
                 {s.gitBranch ? ` · ${s.gitBranch}` : ''}
+                {s.distro ? ` · WSL ${s.distro}` : ''}
                 {open ? ' · open' : ''}
               </div>
             </div>

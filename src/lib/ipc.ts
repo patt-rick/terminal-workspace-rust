@@ -241,6 +241,8 @@ export interface ClaudeSession {
   /** epoch millis (file mtime) */
   lastActive: number
   gitBranch: string | null
+  /** WSL distro the session lives in; null = Windows */
+  distro: string | null
 }
 
 export interface Account {
@@ -547,8 +549,8 @@ export const ipc = {
   claude: {
     listSessions: (projectId: string) =>
       invoke<ClaudeSession[]>('claude_sessions_list', { projectId }),
-    deleteSession: (projectId: string, sessionId: string) =>
-      invoke<void>('claude_session_delete', { projectId, sessionId }),
+    deleteSession: (projectId: string, sessionId: string, distro?: string | null) =>
+      invoke<void>('claude_session_delete', { projectId, sessionId, distro }),
     hooksStatus: () => invoke<boolean>('claude_hooks_status'),
     hooksEnable: () => invoke<void>('claude_hooks_enable'),
     hooksDisable: () => invoke<void>('claude_hooks_disable'),
