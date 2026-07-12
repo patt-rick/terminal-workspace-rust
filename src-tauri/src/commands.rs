@@ -1010,6 +1010,17 @@ pub async fn python_module_exists(module: String) -> bool {
     crate::apikeys::python_module_importable(&module)
 }
 
+// ---------- wsl ----------
+
+/// Installed WSL distros (utility distros like docker-desktop filtered out).
+/// Empty on non-Windows or when WSL isn't installed. Async: spawns wsl.exe.
+#[tauri::command]
+pub async fn wsl_list_distros() -> Vec<crate::wsl::Distro> {
+    tauri::async_runtime::spawn_blocking(crate::wsl::list_distros)
+        .await
+        .unwrap_or_default()
+}
+
 // ---------- claude accounts ----------
 
 /// Cancel flag for the (single) in-flight OAuth login. Starting a new login

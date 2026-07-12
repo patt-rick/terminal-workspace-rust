@@ -196,6 +196,7 @@ pub fn run() {
             commands::apikeys_import_env,
             commands::binary_exists,
             commands::python_module_exists,
+            commands::wsl_list_distros,
             #[cfg(feature = "remote-access")]
             commands::remote_start,
             #[cfg(feature = "remote-access")]
