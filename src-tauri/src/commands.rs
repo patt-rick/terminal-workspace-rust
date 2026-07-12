@@ -1051,18 +1051,32 @@ pub fn apikeys_import_env(
 }
 
 /// PATH lookup for a CLI binary, used by the prompt-then-install launch flow.
-/// Async so the filesystem scan runs off the main thread.
+/// `distro: Some(..)` checks inside that WSL distro ("" = default distro).
 #[tauri::command]
-pub async fn binary_exists(name: String) -> bool {
-    crate::apikeys::binary_on_path(&name)
+pub async fn binary_exists(name: String, distro: Option<String>) -> bool {
+    match distro {
+        #[cfg(windows)]
+        Some(d) => tauri::async_runtime::spawn_blocking(move || {
+            crate::wsl::binary_in_distro(&d, &name)
+        })
+        .await
+        .unwrap_or(false),
+        _ => crate::apikeys::binary_on_path(&name),
+    }
 }
 
-/// Import probe for a Python module, used by the prompt-then-install launch
-/// flow for `python -m` presets. Async so the interpreter spawn runs off the
-/// main thread.
+/// Import probe for a Python module. `distro` as in `binary_exists`.
 #[tauri::command]
-pub async fn python_module_exists(module: String) -> bool {
-    crate::apikeys::python_module_importable(&module)
+pub async fn python_module_exists(module: String, distro: Option<String>) -> bool {
+    match distro {
+        #[cfg(windows)]
+        Some(d) => tauri::async_runtime::spawn_blocking(move || {
+            crate::wsl::python_module_in_distro(&d, &module)
+        })
+        .await
+        .unwrap_or(false),
+        _ => crate::apikeys::python_module_importable(&module),
+    }
 }
 
 // ---------- wsl ----------

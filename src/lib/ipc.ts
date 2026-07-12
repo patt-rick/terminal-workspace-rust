@@ -610,10 +610,11 @@ export const ipc = {
     importEnv: (envVar: string, provider: string, label: string, launchCommand: string | null) =>
       invoke<ApiKeyMeta[]>('apikeys_import_env', { envVar, provider, label, launchCommand }),
     /** PATH lookup for a CLI binary (prompt-then-install launch flow). */
-    binaryExists: (name: string) => invoke<boolean>('binary_exists', { name }),
+    binaryExists: (name: string, distro?: string) =>
+      invoke<boolean>('binary_exists', { name, distro }),
     /** Import probe for a Python module (prompt-then-install launch flow). */
-    pythonModuleExists: (module: string) =>
-      invoke<boolean>('python_module_exists', { module }),
+    pythonModuleExists: (module: string, distro?: string) =>
+      invoke<boolean>('python_module_exists', { module, distro }),
   },
 
   wsl: {

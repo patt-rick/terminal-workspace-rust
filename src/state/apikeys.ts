@@ -152,10 +152,17 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
   cancelInstall: () => set({ pendingInstall: null }),
 }))
 
+/** Distro the default shell runs in, if it's a WSL shell ('' = default distro). */
+function defaultShellDistro(): string | undefined {
+  const shell = useSettings.getState().terminal.defaultShell
+  return shell.startsWith('wsl:') ? shell.slice('wsl:'.length) : undefined
+}
+
 function cliPresent(check: PresenceCheck): Promise<boolean> {
+  const distro = defaultShellDistro()
   return check.kind === 'binary'
-    ? ipc.apikeys.binaryExists(check.name)
-    : ipc.apikeys.pythonModuleExists(check.module)
+    ? ipc.apikeys.binaryExists(check.name, distro)
+    : ipc.apikeys.pythonModuleExists(check.module, distro)
 }
 
 async function launchTerminal(
