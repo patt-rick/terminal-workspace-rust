@@ -14,6 +14,7 @@ import {
   withInstall,
   type PresenceCheck,
 } from '../lib/apikey-presets'
+import { WSL_CLAUDE_INSTALL } from '../lib/wsl-claude'
 import { applySkipPermissions, linkClaudeSession } from './claude-command'
 import { useSettings } from './settings'
 import { createProjectTerminal, useWorkspace } from './store'
@@ -115,12 +116,16 @@ export const useApiKeys = create<ApiKeysState>((set, get) => ({
       commandUsesCli(entry.launchCommand, check) &&
       !(await cliPresent(check))
     ) {
+      // A WSL default shell means the launch (and thus the install) runs in
+      // the distro, where npm may not exist — claude gets the native installer.
+      const wslClaude =
+        defaultShellDistro() !== undefined && check.kind === 'binary' && check.name === 'claude'
       set({
         pendingInstall: {
           projectId,
           entry,
           check,
-          installCommand: preset.installCommand,
+          installCommand: wslClaude ? WSL_CLAUDE_INSTALL : preset.installCommand,
           installUrl: preset.installUrl,
         },
       })

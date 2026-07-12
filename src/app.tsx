@@ -10,6 +10,7 @@ import { QuickOpen } from './components/quick-open/quick-open'
 import { IdentityAutoApply } from './components/identity/identity-auto-apply'
 import { ModelPicker } from './components/apikeys/model-picker'
 import { InstallPrompt } from './components/apikeys/install-prompt'
+import { WslInstallPrompt } from './components/wsl-install-prompt'
 import { UpdateManager } from './components/update-manager'
 import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
@@ -393,6 +394,7 @@ export default function App() {
       <IdentityAutoApply />
       <ModelPicker />
       <InstallPrompt />
+      <WslInstallPrompt />
       <UpdateManager />
     </div>
   )

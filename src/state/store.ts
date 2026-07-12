@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
 import { distroOfUncPath } from '../lib/wsl-paths'
+import { WSL_CLAUDE_INSTALL, wslClaudeCheckTarget } from '../lib/wsl-claude'
 import { useSettings } from './settings'
 import { applySkipPermissions, linkClaudeSession } from './claude-command'
 
@@ -37,6 +38,19 @@ const readNum = (key: string, fallback: number): number => {
   }
 }
 
+/** A Claude launch held back because its WSL distro has no native claude. */
+export interface PendingWslClaudeInstall {
+  projectId: string
+  name?: string
+  cwd?: string
+  shell: string
+  startupCommand: string
+  claudeSessionId?: string
+  apikeyEntryId?: string
+  /** '' = the default distro */
+  distro: string
+}
+
 interface WorkspaceState {
   projects: Project[]
   selectedProjectId: string | null
@@ -47,6 +61,7 @@ interface WorkspaceState {
   busyByTerminal: Record<string, boolean>
   sessionIdByTerminal: Record<string, string>
   pendingTerminalClose: { projectId: string; terminalId: string } | null
+  pendingWslClaudeInstall: PendingWslClaudeInstall | null
 
   sidebarWidth: number
   sidebarCollapsed: boolean
@@ -79,6 +94,9 @@ interface WorkspaceState {
   requestTerminalClose: (projectId: string, terminalId: string) => void
   clearPendingTerminalClose: () => void
 
+  requestWslClaudeInstall: (pending: PendingWslClaudeInstall) => void
+  clearPendingWslClaudeInstall: () => void
+
   setSidebarWidth: (w: number) => void
   setRightSidebarWidth: (w: number) => void
   toggleSidebar: () => void
@@ -95,6 +113,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   busyByTerminal: {},
   sessionIdByTerminal: {},
   pendingTerminalClose: null,
+  pendingWslClaudeInstall: null,
 
   sidebarWidth: clampSidebar(readNum(SIDEBAR_WIDTH_KEY, SIDEBAR_DEFAULT_WIDTH)),
   sidebarCollapsed: (() => {
@@ -287,6 +306,9 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
     set({ pendingTerminalClose: { projectId, terminalId } }),
   clearPendingTerminalClose: () => set({ pendingTerminalClose: null }),
 
+  requestWslClaudeInstall: (pending) => set({ pendingWslClaudeInstall: pending }),
+  clearPendingWslClaudeInstall: () => set({ pendingWslClaudeInstall: null }),
+
   setSidebarWidth: (w) => {
     const next = clampSidebar(w)
     set({ sidebarWidth: next })
@@ -367,6 +389,26 @@ export async function createProjectTerminal(
     opts?.shell ??
     (projectDistro ? `wsl:${projectDistro}` : undefined) ??
     (useSettings.getState().terminal.defaultShell || undefined)
+  // A Windows claude can't run through WSL interop (platform-native binary),
+  // so a claude launch into a distro without its own install would hard-error.
+  // Hold the launch and ask to install instead. Probe failures never block.
+  const wslDistro = wslClaudeCheckTarget(shell, startupCommand)
+  if (wslDistro !== null && shell && startupCommand) {
+    const present = await ipc.apikeys.binaryExists('claude', wslDistro).catch(() => true)
+    if (!present) {
+      useWorkspace.getState().requestWslClaudeInstall({
+        projectId,
+        name: opts?.name,
+        cwd: opts?.cwd,
+        shell,
+        startupCommand,
+        claudeSessionId,
+        apikeyEntryId: opts?.apikeyEntryId,
+        distro: wslDistro,
+      })
+      return null
+    }
+  }
   const record = await ipc.terminals.create({
     projectId,
     startupCommand,
@@ -375,11 +417,40 @@ export async function createProjectTerminal(
     shell,
     apikeyEntryId: opts?.apikeyEntryId,
   })
+  return registerTerminal(projectId, record, claudeSessionId)
+}
+
+/** Adopt a created terminal into the workspace and link its Claude session. */
+function registerTerminal(
+  projectId: string,
+  record: TerminalRecord | null,
+  claudeSessionId?: string
+): TerminalRecord | null {
   if (record) {
     useWorkspace.getState().addTerminal(projectId, record)
     if (claudeSessionId) useWorkspace.getState().setTerminalSession(record.id, claudeSessionId)
   }
   return record
+}
+
+/**
+ * Consented WSL install: create the held-back terminal with the official
+ * installer chained in front of the stashed launch command. Goes straight to
+ * ipc — createProjectTerminal's transforms already ran on the stashed command.
+ */
+export async function confirmWslClaudeInstall(): Promise<void> {
+  const pending = useWorkspace.getState().pendingWslClaudeInstall
+  if (!pending) return
+  useWorkspace.getState().clearPendingWslClaudeInstall()
+  const record = await ipc.terminals.create({
+    projectId: pending.projectId,
+    startupCommand: `${WSL_CLAUDE_INSTALL} ; ${pending.startupCommand}`,
+    cwd: pending.cwd,
+    name: pending.name,
+    shell: pending.shell,
+    apikeyEntryId: pending.apikeyEntryId,
+  })
+  registerTerminal(pending.projectId, record, pending.claudeSessionId)
 }
 
 /** Kill a terminal and drop its record everywhere. */
