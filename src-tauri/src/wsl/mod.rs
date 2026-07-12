@@ -152,7 +152,24 @@ pub fn spawn_args(distro: &str, cwd: &str) -> Vec<String> {
     args
 }
 
-/// True for tokens safe to interpolate into a `sh -lc` line (CLI/module names).
+/// `command -v` line for a plain (non-login) shell. Login shells can abort
+/// while sourcing profiles that choke on interop PATH entries with spaces
+/// (`export: Files/...: bad variable name`), so the common user bin dirs —
+/// where the Claude native installer lands — are added explicitly instead.
+fn presence_probe(token: &str) -> String {
+    format!("PATH=\"$HOME/.local/bin:$HOME/bin:$PATH\" command -v {token}")
+}
+
+/// A resolution counts only when it lands on a distro-native path. Interop
+/// makes Windows installs visible under /mnt/, and those run through the old
+/// in-box conhost (typing artifacts on Windows 10) — offering the native
+/// install is the right call, so they don't count as present.
+fn native_resolution(output: &str) -> bool {
+    let line = output.lines().next().unwrap_or("").trim();
+    !line.is_empty() && !line.starts_with("/mnt/")
+}
+
+/// True for tokens safe to interpolate into a `sh -c` line (CLI/module names).
 fn safe_token(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
@@ -220,19 +237,20 @@ pub fn distro_home(distro: &str) -> Option<String> {
     home
 }
 
-/// `command -v <name>` inside a distro (login shell so ~/.profile PATH counts).
+/// Whether a CLI is installed *natively* inside a distro (interop /mnt/…
+/// fallbacks don't count — see `native_resolution`).
 #[cfg(windows)]
 pub fn binary_in_distro(distro: &str, name: &str) -> bool {
     if !safe_token(name) {
         return false;
     }
-    let probe = format!("command -v {name}");
+    let probe = presence_probe(name);
     let mut args: Vec<&str> = Vec::new();
     if !distro.is_empty() {
         args.extend(["--distribution", distro]);
     }
-    args.extend(["--", "/bin/sh", "-lc", &probe]);
-    run_wsl(&args).is_some_and(|t| !t.trim().is_empty())
+    args.extend(["--", "/bin/sh", "-c", &probe]);
+    run_wsl(&args).is_some_and(|t| native_resolution(&t))
 }
 
 /// `python3 -c "import <module>"` inside a distro.
@@ -364,6 +382,30 @@ mod tests {
             vec!["--distribution", "Ubuntu", "--cd", r"C:\p"]
         );
         assert_eq!(spawn_args("", r"C:\p"), vec!["--cd", r"C:\p"]);
+    }
+
+    #[test]
+    fn native_resolution_rejects_interop_paths_and_empty_output() {
+        // A Windows install visible through interop (/mnt/…) runs under the
+        // old in-box conhost and must not count as "installed in the distro".
+        assert!(native_resolution("/usr/local/bin/claude\n"));
+        assert!(native_resolution("/home/u/.local/bin/claude\n"));
+        assert!(!native_resolution(
+            "/mnt/c/Users/u/AppData/Roaming/npm/claude\n"
+        ));
+        assert!(!native_resolution(""));
+        assert!(!native_resolution("  \n"));
+    }
+
+    #[test]
+    fn presence_probe_avoids_login_shell_pitfalls_and_covers_user_bins() {
+        // Login shells (`sh -l`) can abort while sourcing profiles that choke
+        // on Windows PATH entries with spaces; the probe must be a plain -c
+        // command line that adds the common user bin dirs itself.
+        let p = presence_probe("claude");
+        assert!(p.contains("command -v claude"));
+        assert!(p.contains("$HOME/.local/bin"));
+        assert!(p.contains("$HOME/bin"));
     }
 
     #[test]

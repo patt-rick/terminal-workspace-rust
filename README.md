@@ -167,6 +167,12 @@ On Windows, terminals can run inside WSL distros, and the Claude Code integratio
   the distro's own `~/.claude/.credentials.json`.
 - WSL terminals get no OSC 133 shell integration yet; busy detection still works for TUIs that
   set window titles (e.g. Claude Code).
+- A CLI that resolves through Windows interop (`/mnt/c/…` on the appended Windows PATH — e.g.
+  typing `claude` in a distro where only the Windows build is installed) runs inside a *second*,
+  in-box Windows 10 console host that predates years of renderer fixes, so cursor-heavy TUIs
+  show the old stale-typing artifacts there. Install the CLI natively inside the distro instead
+  (`curl -fsSL https://claude.ai/install.sh | bash` for Claude Code); the app's install prompts
+  deliberately treat interop-only resolutions as "not installed" for this reason.
 
 ## Remote access
 
