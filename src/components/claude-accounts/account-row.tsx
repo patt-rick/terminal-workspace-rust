@@ -5,8 +5,9 @@ import { MiniUsageBar } from './mini-usage-bar'
 
 /**
  * One login account: email + plan, Switch/delete actions, 5h/7d usage bars.
- * The active row gets an accent left border and no Switch button. Delete is
- * two-click (first click arms, second confirms).
+ * The active row gets an accent left border and no Switch button. A dead
+ * refresh token adds "Log in again" alongside Switch — switching to a stale
+ * account is still allowed. Delete is two-click (first arms, second confirms).
  */
 export function AccountRow({
   account,
@@ -43,27 +44,26 @@ export function AccountRow({
             {account.displayName ? ` · ${account.displayName}` : ''}
           </div>
         </div>
-        {account.refreshDead ? (
+        {account.refreshDead && (
           <button
             type="button"
             onClick={onRelogin}
             disabled={busy}
-            className="rounded border border-warning/50 px-2 py-1 text-xs text-warning hover:bg-warning/10 disabled:opacity-50"
+            className="shrink-0 rounded border border-warning/50 px-2 py-1 text-xs text-warning hover:bg-warning/10 disabled:opacity-50"
           >
             Log in again
           </button>
-        ) : (
-          !isActive && (
-            <button
-              type="button"
-              onClick={onSwitch}
-              disabled={busy}
-              title="Make this the account claude uses (writes ~/.claude credentials)"
-              className="rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5 disabled:opacity-50"
-            >
-              ⇄ Switch
-            </button>
-          )
+        )}
+        {!isActive && (
+          <button
+            type="button"
+            onClick={onSwitch}
+            disabled={busy}
+            title="Make this the account claude uses (writes ~/.claude credentials)"
+            className="shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5 disabled:opacity-50"
+          >
+            ⇄ Switch
+          </button>
         )}
         <button
           type="button"
@@ -74,7 +74,7 @@ export function AccountRow({
           onBlur={() => setArmedRemove(false)}
           disabled={busy}
           title={armedRemove ? 'Click again to confirm' : 'Remove account from the app'}
-          className={`rounded border px-2 py-1 text-xs disabled:opacity-50 ${
+          className={`shrink-0 rounded border px-2 py-1 text-xs disabled:opacity-50 ${
             armedRemove
               ? 'border-danger/60 bg-danger/10 text-danger'
               : 'border-border text-danger hover:bg-foreground/5'
