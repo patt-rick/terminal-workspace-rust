@@ -120,10 +120,11 @@ pub struct CreateTerminalArgs {
 }
 
 #[tauri::command]
-pub fn terminal_create(
+pub async fn terminal_create(
     app: AppHandle,
-    pty: State<PtyManager>,
-    store: State<StateStore>,
+    pty: State<'_, PtyManager>,
+    store: State<'_, StateStore>,
+    accounts: State<'_, ClaudeAccountStore>,
     args: CreateTerminalArgs,
 ) -> AppResult<Option<TerminalRecord>> {
     let Some(project_path) = store.project_path(&args.project_id) else {
@@ -146,6 +147,53 @@ pub fn terminal_create(
     let mut env = app.state::<ApiKeyStore>().resolved_env();
     if let Some(kid) = &args.apikey_entry_id {
         env.extend(app.state::<ApiKeyStore>().launch_env(kid)?);
+    }
+
+    // Re-assert the active login account so a freshly spawned `claude` can't
+    // authenticate as an account a still-running process clobbered into the
+    // file. Cheap when there's no drift; skipped if no client can be built.
+    if accounts.has_active_login_account() {
+        if let Ok(client) = http_client() {
+            capture_credentials_drift(&app, &accounts, &client).await;
+            // A new WSL session reads that distro's own credentials file, which
+            // the Windows-side check doesn't touch. Push the active account's
+            // creds into the target distro directly (starting it is fine — we're
+            // about to spawn into it anyway).
+            #[cfg(windows)]
+            if let Some(distro) = crate::wsl::parse_shell_token(&shell) {
+                if let Some(active_id) = accounts.active_account_id() {
+                    if let Ok(creds) = ensure_fresh_creds(&app, &accounts, &client, &active_id).await {
+                        // Must complete BEFORE the shell spawns, or the new
+                        // claude reads a stale distro file — so await it, but
+                        // run the wsl.exe shell-out off the async worker.
+                        let distro = distro.to_string();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            // A bare `wsl:` token means the default distro; an
+                            // empty name yields a malformed \\wsl$\ UNC, so
+                            // resolve it to the real default distro name first.
+                            let name = if distro.is_empty() {
+                                crate::wsl::list_distros()
+                                    .into_iter()
+                                    .find(|d| d.is_default)
+                                    .map(|d| d.name)
+                            } else {
+                                Some(distro)
+                            };
+                            if let Some(name) = name {
+                                if let Some(home) = crate::wsl::distro_home(&name) {
+                                    let p = crate::wsl::unc_path(
+                                        &name,
+                                        &format!("{home}/.claude/.credentials.json"),
+                                    );
+                                    let _ = crate::claude::creds::write_credentials_file(&p, &creds);
+                                }
+                            }
+                        })
+                        .await;
+                    }
+                }
+            }
+        }
     }
 
     pty.create(
@@ -1124,6 +1172,36 @@ fn http_client() -> AppResult<reqwest::Client> {
         .map_err(|e| AppError::Msg(e.to_string()))
 }
 
+/// Serializes the short "re-read active id + write credentials file/baseline"
+/// sections so a running-process token refresh can't interleave with an
+/// account switch. Held only across synchronous work — never a network call.
+pub struct CredsFileLock(pub tokio::sync::Mutex<()>);
+
+/// Mirror the active account's credentials into every RUNNING distro so their
+/// `claude` sessions see the same login. Only running distros — a switch must
+/// never boot a stopped distro. No-op off Windows.
+#[cfg(windows)]
+fn propagate_creds_to_running_distros(creds: &serde_json::Value) {
+    for d in crate::wsl::list_distros().into_iter().filter(|d| d.running) {
+        if let Some(home) = crate::wsl::distro_home(&d.name) {
+            let path = crate::wsl::unc_path(&d.name, &format!("{home}/.claude/.credentials.json"));
+            let _ = crate::claude::creds::write_credentials_file(&path, creds);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn propagate_creds_to_running_distros(_creds: &serde_json::Value) {}
+
+/// Fast synchronous write of the active account's creds to the primary Windows
+/// file. Safe to call under `CredsFileLock`; distro propagation (which shells
+/// out to wsl.exe) must run separately, off the guard and off the async worker.
+fn write_windows_credentials(app: &AppHandle, creds: &serde_json::Value) -> AppResult<()> {
+    let home = home_dir(app)?;
+    let path = crate::claude::creds::credentials_path(&home);
+    crate::claude::creds::write_credentials_file(&path, creds)
+}
+
 /// Strip ambient Claude credential env vars from new terminals while a
 /// managed login account is active, so the credentials file decides auth.
 pub fn claude_ambient_env_remove(app: &AppHandle) -> Vec<String> {
@@ -1157,13 +1235,75 @@ async fn capture_credentials_drift(
     if store.last_synced_token_hash().as_deref() == Some(file_hash.as_str()) {
         return; // no drift
     }
-    let Ok(profile) = crate::claude::oauth::fetch_profile(client, &file_token).await else {
-        return; // can't attribute — leave for next time
+
+    // Attribute the file token to a known account, absorbing its rotated creds
+    // so the other account keeps its fresh pair. A transient lookup failure
+    // must NOT drive a restore — bail and retry next time, or we'd overwrite
+    // the file without having captured the other account's newest tokens.
+    let owner_id = match crate::claude::oauth::lookup_profile(client, &file_token).await {
+        crate::claude::oauth::ProfileLookup::Transient(_) => return,
+        crate::claude::oauth::ProfileLookup::Unauthorized => None,
+        crate::claude::oauth::ProfileLookup::Found(profile) => {
+            match store.account_by_email(&profile.email) {
+                Some(account) => {
+                    if store.set_creds(&account.id, &file_creds).is_err() {
+                        return;
+                    }
+                    store.set_refresh_dead(&account.id, false);
+                    Some(account.id)
+                }
+                None => None,
+            }
+        }
     };
-    if let Some(account) = store.account_by_email(&profile.email) {
-        if store.set_creds(&account.id, &file_creds).is_ok() {
-            store.set_last_synced_token_hash(Some(file_hash));
-            store.set_refresh_dead(&account.id, false);
+
+    let active = store.active_account_id();
+    match crate::claude::accounts::drift_action(owner_id.as_deref(), active.as_deref()) {
+        crate::claude::accounts::DriftAction::AcceptBaseline => {
+            let accepted = {
+                let lock = app.state::<CredsFileLock>();
+                let _g = lock.0.lock().await;
+                // Only accept if the file still holds the token we attributed;
+                // a switch landing during the network lookup would have written
+                // a fresh baseline we must not stomp with this stale hash.
+                let current = crate::claude::creds::read_credentials_file(&path)
+                    .and_then(|c| crate::claude::creds::creds_str(&c, "accessToken"))
+                    .map(|t| crate::claude::accounts::token_hash(&t));
+                if current.as_deref() == Some(file_hash.as_str()) {
+                    store.set_last_synced_token_hash(Some(file_hash));
+                    true
+                } else {
+                    false
+                }
+            };
+            // The Windows file already holds these creds; push them into
+            // running distros (off the guard and off the async worker) so their
+            // sessions track the same account.
+            if accepted && store.has_active_login_account() {
+                let c = file_creds.clone();
+                tauri::async_runtime::spawn_blocking(move || propagate_creds_to_running_distros(&c));
+            }
+        }
+        crate::claude::accounts::DriftAction::RestoreActive => {
+            let Some(active_id) = active else { return };
+            // A dead refresh token can't be restored — skip so we don't fire a
+            // doomed refresh on every poll.
+            if store.is_refresh_dead(&active_id) {
+                return;
+            }
+            // Clear the baseline first so ensure_fresh_creds is GUARANTEED to
+            // rewrite the file even when the active token isn't near expiry
+            // (otherwise its hash==baseline no-op leaves the clobber in place).
+            // None is safe: a failed restore re-detects drift next poll, and
+            // new_hash != None always fires the retry.
+            {
+                let lock = app.state::<CredsFileLock>();
+                let _g = lock.0.lock().await;
+                store.set_last_synced_token_hash(None);
+            }
+            // ensure_fresh_creds writes the file + distros itself for the
+            // active account, so there's nothing more to do here.
+            let _ = ensure_fresh_creds(app, store, client, &active_id).await;
         }
     }
 }
@@ -1216,6 +1356,7 @@ async fn refresh_creds(
 /// endpoint when inside the expiry buffer. Rotated tokens persist to the
 /// keychain before anything else happens.
 async fn ensure_fresh_creds(
+    app: &AppHandle,
     store: &ClaudeAccountStore,
     client: &reqwest::Client,
     id: &str,
@@ -1225,46 +1366,75 @@ async fn ensure_fresh_creds(
         .ok_or_else(|| AppError::Msg("no token stored — log in again".to_string()))?;
     let expires_at = crate::claude::creds::creds_i64(&creds, "expiresAt");
     let now = crate::claude::creds::now_ms();
-    if !crate::claude::creds::needs_refresh(expires_at, now) {
-        return Ok(creds);
-    }
-    match refresh_creds(store, client, id, &mut creds).await? {
-        RefreshResult::Fresh => Ok(creds),
-        RefreshResult::Dead => Err(AppError::Msg("session expired — log in again".to_string())),
-        RefreshResult::Transient(msg) => {
-            // Token may still be usable if not FULLY expired (buffer only).
-            if expires_at.is_some_and(|exp| now < exp) {
-                Ok(creds)
-            } else {
-                Err(AppError::Msg(format!("token refresh failed: {msg}")))
+    if crate::claude::creds::needs_refresh(expires_at, now) {
+        match refresh_creds(store, client, id, &mut creds).await? {
+            RefreshResult::Fresh => {}
+            RefreshResult::Dead => {
+                return Err(AppError::Msg("session expired — log in again".to_string()))
+            }
+            RefreshResult::Transient(msg) => {
+                // Token may still be usable if not FULLY expired (buffer only).
+                if !expires_at.is_some_and(|exp| now < exp) {
+                    return Err(AppError::Msg(format!("token refresh failed: {msg}")));
+                }
             }
         }
     }
+
+    // If these are the active account's creds, keep the file (and distros) in
+    // step. Re-reading the active id INSIDE the guard is what closes the race
+    // with a concurrent switch; the guard spans only the fast Windows-file
+    // write, never wsl.exe. Skip entirely when the token already matches the
+    // baseline (the file already reflects it).
+    let mut wrote = false;
+    {
+        let lock = app.state::<CredsFileLock>();
+        let _g = lock.0.lock().await;
+        if store.active_account_id().as_deref() == Some(id) {
+            let new_hash = crate::claude::creds::creds_str(&creds, "accessToken")
+                .map(|t| crate::claude::accounts::token_hash(&t));
+            if new_hash != store.last_synced_token_hash()
+                && write_windows_credentials(app, &creds).is_ok()
+            {
+                store.set_last_synced_token_hash(new_hash);
+                wrote = true;
+            }
+        }
+    }
+    if wrote {
+        let c = creds.clone();
+        tauri::async_runtime::spawn_blocking(move || propagate_creds_to_running_distros(&c));
+    }
+    Ok(creds)
 }
 
 /// Write an account's credentials to ~/.claude/.credentials.json and record
 /// it as active. Also disables enabled Anthropic provider keys so
 /// ANTHROPIC_API_KEY doesn't override the login in new claude sessions.
-fn activate_login_account(
+async fn activate_login_account(
     app: &AppHandle,
     store: &ClaudeAccountStore,
     creds: &serde_json::Value,
     id: &str,
 ) -> AppResult<()> {
-    let home = home_dir(app)?;
-    let path = crate::claude::creds::credentials_path(&home);
-    crate::claude::creds::write_credentials_file(&path, creds)?;
-    store.set_active(Some(id.to_string()));
-    store.set_last_synced_token_hash(
-        crate::claude::creds::creds_str(creds, "accessToken")
-            .map(|t| crate::claude::accounts::token_hash(&t)),
-    );
-    let apikeys = app.state::<ApiKeyStore>();
-    for k in apikeys.keys_snapshot() {
-        if k.provider == "anthropic" && k.enabled {
-            apikeys.set_enabled(&k.id, false);
+    {
+        let lock = app.state::<CredsFileLock>();
+        let _g = lock.0.lock().await;
+        write_windows_credentials(app, creds)?;
+        store.set_active(Some(id.to_string()));
+        store.set_last_synced_token_hash(
+            crate::claude::creds::creds_str(creds, "accessToken")
+                .map(|t| crate::claude::accounts::token_hash(&t)),
+        );
+        let apikeys = app.state::<ApiKeyStore>();
+        for k in apikeys.keys_snapshot() {
+            if k.provider == "anthropic" && k.enabled {
+                apikeys.set_enabled(&k.id, false);
+            }
         }
     }
+    let c = creds.clone();
+    tauri::async_runtime::spawn_blocking(move || propagate_creds_to_running_distros(&c));
     Ok(())
 }
 
@@ -1342,7 +1512,7 @@ pub async fn claude_accounts_add_via_oauth(
         },
         &creds,
     )?;
-    activate_login_account(&app, &store, &creds, &account.id)?;
+    activate_login_account(&app, &store, &creds, &account.id).await?;
     Ok(store.list())
 }
 
@@ -1397,8 +1567,8 @@ pub async fn claude_accounts_switch(
 ) -> AppResult<ClaudeAccountsList> {
     let client = http_client()?;
     capture_credentials_drift(&app, &store, &client).await;
-    let creds = ensure_fresh_creds(&store, &client, &id).await?;
-    activate_login_account(&app, &store, &creds, &id)?;
+    let creds = ensure_fresh_creds(&app, &store, &client, &id).await?;
+    activate_login_account(&app, &store, &creds, &id).await?;
     Ok(store.list())
 }
 
@@ -1441,7 +1611,7 @@ pub async fn claude_accounts_usage(
                 continue;
             }
         }
-        let entry = fetch_account_usage(&store, &client, &account.id).await;
+        let entry = fetch_account_usage(&app, &store, &client, &account.id).await;
         store.put_usage(
             &account.id,
             CachedUsage {
@@ -1458,6 +1628,7 @@ pub async fn claude_accounts_usage(
 /// One account's usage: fresh token -> fetch -> map, with a single
 /// refresh+retry on 401 and stale-while-error fallback.
 async fn fetch_account_usage(
+    app: &AppHandle,
     store: &ClaudeAccountStore,
     client: &reqwest::Client,
     id: &str,
@@ -1468,7 +1639,7 @@ async fn fetch_account_usage(
         usage: store.stale_usage(id).and_then(|c| c.usage),
         error: Some(error),
     };
-    let creds = match ensure_fresh_creds(store, client, id).await {
+    let creds = match ensure_fresh_creds(app, store, client, id).await {
         Ok(c) => c,
         Err(e) => return stale(e.to_string()),
     };

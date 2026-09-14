@@ -280,30 +280,55 @@ pub struct Profile {
     pub plan: Option<String>,
 }
 
-/// Fetch the account profile for a token. Email is required; a response
-/// without one is an error (we key accounts by email).
-pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> AppResult<Profile> {
-    let resp = client
-        .get(PROFILE_URL)
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .map_err(|e| AppError::Msg(format!("profile fetch failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(AppError::Msg(format!("profile fetch failed: HTTP {status}")));
+/// Three-valued profile lookup so callers can tell a definitively rejected
+/// token (401/403) apart from a transient failure (network/timeout/5xx/
+/// unparseable) that should be retried rather than acted on.
+pub enum ProfileLookup {
+    Found(Profile),
+    Unauthorized,
+    Transient(String),
+}
+
+enum StatusClass {
+    Ok,
+    Unauthorized,
+    Transient,
+}
+
+fn classify_profile_status(status: reqwest::StatusCode) -> StatusClass {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        StatusClass::Unauthorized
+    } else if status.is_success() {
+        StatusClass::Ok
+    } else {
+        StatusClass::Transient
     }
-    let v: Value = resp
-        .json()
-        .await
-        .map_err(|e| AppError::Msg(format!("profile returned invalid JSON: {e}")))?;
+}
+
+pub async fn lookup_profile(client: &reqwest::Client, access_token: &str) -> ProfileLookup {
+    let resp = match client.get(PROFILE_URL).bearer_auth(access_token).send().await {
+        Ok(r) => r,
+        Err(e) => return ProfileLookup::Transient(e.to_string()),
+    };
+    let status = resp.status();
+    match classify_profile_status(status) {
+        StatusClass::Unauthorized => return ProfileLookup::Unauthorized,
+        StatusClass::Transient => return ProfileLookup::Transient(format!("HTTP {status}")),
+        StatusClass::Ok => {}
+    }
+    let v: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return ProfileLookup::Transient(format!("invalid JSON: {e}")),
+    };
     let account = v.get("account");
-    let email = account
+    let email = match account
         .and_then(|a| a.get("email"))
         .and_then(|e| e.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Msg("profile response had no email".to_string()))?
-        .to_string();
+    {
+        Some(e) => e.to_string(),
+        None => return ProfileLookup::Transient("profile response had no email".to_string()),
+    };
     let display_name = account
         .and_then(|a| a.get("display_name").or_else(|| a.get("full_name")))
         .and_then(|d| d.as_str())
@@ -315,12 +340,50 @@ pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> AppR
         .and_then(|p| p.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    Ok(Profile { email, display_name, plan })
+    ProfileLookup::Found(Profile { email, display_name, plan })
+}
+
+/// Fetch the account profile for a token. Email is required; a response
+/// without one is an error (we key accounts by email).
+pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> AppResult<Profile> {
+    match lookup_profile(client, access_token).await {
+        ProfileLookup::Found(p) => Ok(p),
+        ProfileLookup::Unauthorized => {
+            Err(AppError::Msg("profile fetch failed: unauthorized (HTTP 401/403)".to_string()))
+        }
+        ProfileLookup::Transient(m) => Err(AppError::Msg(format!("profile fetch failed: {m}"))),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classify_profile_status_buckets() {
+        use reqwest::StatusCode;
+        assert!(matches!(classify_profile_status(StatusCode::OK), StatusClass::Ok));
+        assert!(matches!(
+            classify_profile_status(StatusCode::UNAUTHORIZED),
+            StatusClass::Unauthorized
+        ));
+        assert!(matches!(
+            classify_profile_status(StatusCode::FORBIDDEN),
+            StatusClass::Unauthorized
+        ));
+        assert!(matches!(
+            classify_profile_status(StatusCode::INTERNAL_SERVER_ERROR),
+            StatusClass::Transient
+        ));
+        assert!(matches!(
+            classify_profile_status(StatusCode::SERVICE_UNAVAILABLE),
+            StatusClass::Transient
+        ));
+        assert!(matches!(
+            classify_profile_status(StatusCode::TOO_MANY_REQUESTS),
+            StatusClass::Transient
+        ));
+    }
 
     #[test]
     fn pkce_pair_is_base64url_and_s256() {

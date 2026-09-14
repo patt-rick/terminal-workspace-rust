@@ -135,6 +135,10 @@ impl ClaudeAccountStore {
         self.inner.lock().active_account_id.is_some()
     }
 
+    pub fn active_account_id(&self) -> Option<String> {
+        self.inner.lock().active_account_id.clone()
+    }
+
     /// Upsert by email: re-adding an account refreshes the existing record
     /// (same id, refresh_dead cleared). Keychain is written FIRST — a keychain
     /// failure aborts so metadata never claims a token it doesn't have.
@@ -176,6 +180,16 @@ impl ClaudeAccountStore {
         let mut d = self.inner.lock();
         d.active_account_id = id;
         self.persist(&d);
+    }
+
+    pub fn is_refresh_dead(&self, id: &str) -> bool {
+        self.inner
+            .lock()
+            .accounts
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.refresh_dead)
+            .unwrap_or(false)
     }
 
     pub fn set_refresh_dead(&self, id: &str, dead: bool) {
@@ -230,6 +244,22 @@ impl ClaudeAccountStore {
 pub fn token_hash(token: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+pub enum DriftAction {
+    AcceptBaseline,
+    RestoreActive,
+}
+
+/// Decide what to do when the credentials file token changed under us.
+/// `file_owner` = account id the file's token belongs to (None if
+/// unattributable/foreign). `active` = currently active login account id.
+pub fn drift_action(file_owner: Option<&str>, active: Option<&str>) -> DriftAction {
+    match (file_owner, active) {
+        (_, None) => DriftAction::AcceptBaseline,
+        (Some(o), Some(a)) if o == a => DriftAction::AcceptBaseline,
+        (_, Some(_)) => DriftAction::RestoreActive,
+    }
 }
 
 // ---- keychain ----
@@ -362,6 +392,42 @@ mod tests {
         assert!(store.cached_usage("id1", 1000 + USAGE_TTL_MS - 1).is_some());
         assert!(store.cached_usage("id1", 1000 + USAGE_TTL_MS + 1).is_none());
         assert!(store.stale_usage("id1").is_some()); // stale still readable
+    }
+
+    #[test]
+    fn active_account_id_tracks_set_active() {
+        let dir = tempdir().unwrap();
+        let store = ClaudeAccountStore::new(dir.path().join("a.json"));
+        assert_eq!(store.active_account_id(), None);
+        store.set_active(Some("acct-1".to_string()));
+        assert_eq!(store.active_account_id().as_deref(), Some("acct-1"));
+        store.set_active(None);
+        assert_eq!(store.active_account_id(), None);
+    }
+
+    #[test]
+    fn drift_action_covers_all_branches() {
+        // No active account to protect -> accept whatever the file holds.
+        assert!(matches!(
+            drift_action(Some("a"), None),
+            DriftAction::AcceptBaseline
+        ));
+        assert!(matches!(drift_action(None, None), DriftAction::AcceptBaseline));
+        // File owner IS the active account (its own in-place refresh).
+        assert!(matches!(
+            drift_action(Some("a"), Some("a")),
+            DriftAction::AcceptBaseline
+        ));
+        // A different account clobbered the file -> restore the active one.
+        assert!(matches!(
+            drift_action(Some("b"), Some("a")),
+            DriftAction::RestoreActive
+        ));
+        // Foreign/unattributable token while an account is active -> restore.
+        assert!(matches!(
+            drift_action(None, Some("a")),
+            DriftAction::RestoreActive
+        ));
     }
 
     #[test]

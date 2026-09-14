@@ -71,6 +71,7 @@ pub fn run() {
                 data_dir.join("claude-accounts.json"),
             ));
             app.manage(commands::ClaudeOauthFlow::default());
+            app.manage(commands::CredsFileLock(Default::default()));
             app.manage(PtyManager::new());
             app.manage(search::SearchStore::default());
             // Claude hook events (Notification/Stop) land in the spool dir; the
