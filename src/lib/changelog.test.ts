@@ -55,3 +55,22 @@ describe('entriesNewerThan', () => {
     expect(entriesNewerThan(entries, '0.4.10')).toEqual([])
   })
 })
+
+import { sectionFor } from '../../scripts/changelog-section.mjs'
+
+describe('sectionFor (CI extractor)', () => {
+  it('extracts the body for a version, stripping a leading v', () => {
+    const body = sectionFor(SAMPLE, 'v0.4.10')
+    expect(body).toContain('Ten beats nine.')
+    expect(body).not.toContain('0.4.9')
+    expect(body).not.toContain('## [') // heading line dropped
+  })
+
+  it('works without a v prefix too', () => {
+    expect(sectionFor(SAMPLE, '0.4.9')).toContain('Nine.')
+  })
+
+  it('returns empty string for an unknown tag', () => {
+    expect(sectionFor(SAMPLE, 'v9.9.9')).toBe('')
+  })
+})
