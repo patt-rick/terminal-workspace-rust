@@ -86,6 +86,10 @@ Seeded starting at the current version (`0.4.2`); no retroactive backfill.
   Keep-a-Changelog heading format is stable enough that the tiny regex duplication is cheaper
   than an `allowJs`/build step to share it. Both are covered by tests keyed to the same fixture
   so they can't silently diverge.
+  - **Tag → heading normalization:** git tags are `v0.4.2` (`release.yml` trigger `tags:
+    ['v*']`) but CHANGELOG headings are `## [0.4.2]` (no `v`). The extractor **strips a leading
+    `v`** from its argument before matching; otherwise it matches nothing and the exit-0
+    fallback would silently ship empty notes.
 
 ### 3. Running app version
 
@@ -117,8 +121,11 @@ declaration types the global.
 **Mutual exclusion with the updater dialog.** Both are `z-50` root overlays. After a
 relaunch-into-new-version, the recap is due *and* `UpdateManager`'s silent launch check runs —
 if a still-newer release is already published, both would stack. The recap therefore only
-opens when the updater status is `idle`/`upToDate` (i.e. no update dialog is showing);
-otherwise it waits until the updater dialog is dismissed. Reuses the modal styling from
+opens when the updater is **not** in `{checking, available, downloading, error}` (i.e. no
+update dialog is showing or pending). It **subscribes** to updater status rather than reading
+it once — `idle` is also the initial pre-check state, so a one-shot read could open the recap
+in the brief window before the launch check flips to `checking`/`available`; subscribing
+re-evaluates and closes/defers if an update surfaces. Reuses the modal styling from
 `update-manager.tsx`.
 
 **(b) Anytime viewer.** A "What's New / Release history" section in the existing
@@ -195,8 +202,9 @@ Vitest (already configured) unit tests, no Tauri runtime needed:
 - **Semver comparator**: `0.4.10 > 0.4.9`, equality, missing/extra fields.
 - **"newer than last-seen" selection**: absent last-seen → none shown (silent stamp), older →
   combined entries, equal → none, downgrade → none.
-- **`scripts/changelog-section.mjs`**: extracts the exact section for a tag; unknown tag →
-  empty output, exit 0 (per §4c). Same fixture as the parser test so the two can't diverge.
+- **`scripts/changelog-section.mjs`**: extracts the exact section for a tag; leading `v`
+  stripped (`v0.4.2` → `[0.4.2]`); unknown tag → empty output, exit 0 (per §4c). Same fixture
+  as the parser test so the two can't diverge.
 
 Manual: run `pnpm release <next>`, confirm the four files + changelog change and the commit;
 launch with a stale `tw:last-seen-version` to see the recap; open Settings → Updates to see
