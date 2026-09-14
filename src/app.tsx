@@ -12,6 +12,7 @@ import { ModelPicker } from './components/apikeys/model-picker'
 import { InstallPrompt } from './components/apikeys/install-prompt'
 import { WslInstallPrompt } from './components/wsl-install-prompt'
 import { UpdateManager } from './components/update-manager'
+import { WhatsNewDialog } from './components/whats-new-dialog'
 import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
@@ -405,6 +406,7 @@ export default function App() {
       <InstallPrompt />
       <WslInstallPrompt />
       <UpdateManager />
+      <WhatsNewDialog />
     </div>
   )
 }
