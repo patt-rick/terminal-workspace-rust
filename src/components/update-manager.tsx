@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 import { useUpdater } from '../state/updater'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // Module scope survives component remounts and StrictMode's double-invoke, so
 // the silent launch check fires exactly once per app open.
@@ -53,8 +55,8 @@ export function UpdateManager() {
         </div>
 
         {info.notes && (
-          <div className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-field-background p-2.5 text-xs text-foreground/80">
-            {info.notes}
+          <div className="md-body mt-3 max-h-40 overflow-auto rounded-md border border-border bg-field-background p-2.5 text-xs text-foreground/80">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{info.notes}</ReactMarkdown>
           </div>
         )}
 
