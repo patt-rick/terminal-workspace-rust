@@ -45,7 +45,7 @@ export function bumpCargoToml(text, version) {
 /** Replace the version of the `terminal-workspace` package in Cargo.lock. */
 export function bumpCargoLock(text, version) {
   return text.replace(
-    /(name = "terminal-workspace"\nversion = ")[^"]+(")/,
+    /(name = "terminal-workspace"\r?\nversion = ")[^"]+(")/,
     `$1${version}$2`,
   )
 }

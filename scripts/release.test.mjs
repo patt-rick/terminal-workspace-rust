@@ -62,4 +62,11 @@ describe('version bumpers', () => {
     expect(out).toContain('name = "terminal-workspace"\nversion = "0.5.0"')
     expect(out).toContain('name = "other"\nversion = "0.4.2"') // sibling untouched
   })
+
+  it('bumps the terminal-workspace entry in a CRLF Cargo.lock', () => {
+    const lock = ['[[package]]', 'name = "other"', 'version = "0.4.2"', '', '[[package]]', 'name = "terminal-workspace"', 'version = "0.4.2"', 'dependencies = []', ''].join('\r\n')
+    const out = bumpCargoLock(lock, '0.5.0')
+    expect(out).toContain('name = "terminal-workspace"\r\nversion = "0.5.0"')
+    expect(out).toContain('name = "other"\r\nversion = "0.4.2"')
+  })
 })
