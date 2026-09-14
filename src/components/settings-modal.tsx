@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { save } from '@tauri-apps/plugin-dialog'
 import { useSettings } from '../state/settings'
 import { useUpdater } from '../state/updater'
@@ -14,6 +14,9 @@ import { useUi } from '../state/ui'
 import { useWsl } from '../state/wsl'
 import { isWindows } from '../lib/platform'
 import themeGuideMarkdown from '../../docs/theme-authoring.md?raw'
+import changelogRaw from '../../CHANGELOG.md?raw'
+import { parseChangelog } from '../lib/changelog'
+import { ChangelogList } from './changelog-list'
 
 // Save text to a file, picking the right mechanism per platform. In the Tauri
 // webview the <a download> trick is a no-op, so we go through a native save
@@ -781,6 +784,7 @@ function UpdatesSection() {
   const status = useUpdater((s) => s.status)
   const error = useUpdater((s) => s.error)
   const runCheck = useUpdater((s) => s.check)
+  const releases = useMemo(() => parseChangelog(changelogRaw), [])
 
   useEffect(() => {
     if (isTauri) ipc.app.version().then(setVersion).catch(() => {})
@@ -812,6 +816,16 @@ function UpdatesSection() {
           <span className="text-xs text-danger">{error}</span>
         )}
       </div>
+      {releases.length > 0 && (
+        <div className="mt-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+            Release history
+          </div>
+          <div className="max-h-64 overflow-auto rounded-md border border-border bg-field-background p-3">
+            <ChangelogList entries={releases} />
+          </div>
+        </div>
+      )}
     </Section>
   )
 }
