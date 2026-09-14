@@ -27,6 +27,12 @@ export interface TerminalSettings {
    * kept for stored-settings compatibility.
    */
   claudeSkipPermissions: boolean
+  /**
+   * When true, a `claude` session that hits its usage limit auto-switches to the
+   * healthiest other account and relaunches the session (history restored; the
+   * last message must be re-sent). Off by default — it drives the live session.
+   */
+  autoSwitchOnLimit: boolean
 }
 
 export const EDITOR_DEFAULTS: EditorSettings = {
@@ -42,6 +48,7 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   startupCommand: '',
   defaultShell: '',
   claudeSkipPermissions: false,
+  autoSwitchOnLimit: false,
 }
 
 export interface IdentitySettings {

@@ -50,6 +50,12 @@ export interface RemoteSizePayload {
   rows: number | null
 }
 
+/** A terminal's output looks like it hit a Claude usage limit (a hint only —
+ * the frontend orchestrator confirms against the usage API before acting). */
+export interface LimitSuspectedPayload {
+  terminalId: string
+}
+
 export interface FsEntry {
   name: string
   /** path relative to the project root, forward slashes; "" = root */
@@ -447,6 +453,11 @@ export const ipc = {
       return invoke<string>('terminal_attach', { id, channel })
     },
     write: (id: string, data: string) => invoke<void>('terminal_write', { id, data }),
+    /** Recent output ring tail (UTF-8); empty string if the id is unknown. */
+    tail: (id: string, bytes: number) => invoke<string>('terminal_tail', { id, bytes }),
+    /** Reset the Rust limit detector's rolling state for a terminal, so a
+     * resumed transcript repaint of the old limit message can't re-fire. */
+    resetLimitDetector: (id: string) => invoke<void>('reset_limit_detector', { id }),
     resize: (id: string, cols: number, rows: number) =>
       invoke<void>('terminal_resize', { id, cols, rows }),
     kill: (id: string) => invoke<void>('terminal_kill', { id }),
@@ -460,6 +471,12 @@ export const ipc = {
       invoke<[number, number] | null>('terminal_remote_size', { id }),
     onRemoteSize: (cb: (p: RemoteSizePayload) => void): Promise<UnlistenFn> =>
       listen<RemoteSizePayload>('terminals:remote-size', (e) => cb(e.payload)),
+    /** Awaited write of the active account's creds into the terminal's WSL
+     * distro; no-op for non-WSL terminals (see auto-switch WSL note). */
+    ensureWslDistroCreds: (id: string) =>
+      invoke<void>('ensure_wsl_distro_creds', { terminalId: id }),
+    onLimitSuspected: (cb: (p: LimitSuspectedPayload) => void): Promise<UnlistenFn> =>
+      listen<LimitSuspectedPayload>('terminals:limit-suspected', (e) => cb(e.payload)),
   },
 
   fs: {

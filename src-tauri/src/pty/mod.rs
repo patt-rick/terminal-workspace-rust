@@ -2,6 +2,7 @@
 pub mod detect;
 #[cfg(windows)]
 mod job;
+pub mod limit;
 pub mod shell;
 
 use crate::error::{AppError, AppResult};
@@ -36,6 +37,10 @@ struct OutputState {
     ring: Vec<u8>,
     carry: Vec<u8>,
     channel: Option<Channel<String>>,
+    // Usage-limit suspicion detection. Ungated: auto-switch is a core feature,
+    // independent of the remote-access detector stack below.
+    limit_detector: limit::LimitDetector,
+    limit_pending: Vec<limit::LimitKind>,
     // Raw-byte fan-out to remote subscribers, installed lazily on first remote
     // attach. Independent of `channel`, so the desktop stream is never disturbed.
     #[cfg(feature = "remote-access")]
@@ -66,6 +71,8 @@ impl OutputState {
             let excess = self.ring.len() - RING_CAP;
             self.ring.drain(..excess);
         }
+        let limits = self.limit_detector.feed(bytes);
+        self.limit_pending.extend(limits);
         #[cfg(feature = "remote-access")]
         {
             self.last_output = Some(std::time::Instant::now());
@@ -102,6 +109,10 @@ impl OutputState {
             }
             self.carry.drain(..valid);
         }
+    }
+
+    fn drain_limit_events(&mut self) -> Vec<limit::LimitKind> {
+        std::mem::take(&mut self.limit_pending)
     }
 
     #[cfg(feature = "remote-access")]
@@ -340,6 +351,28 @@ impl PtyManager {
         out.carry.clear();
         out.channel = Some(channel);
         snapshot
+    }
+
+    /// Last `bytes` of a terminal's replay ring as lossy UTF-8 (empty if the
+    /// terminal is unknown). Read-only — lets the frontend poll recent output
+    /// (e.g. to see the shell prompt return) without stealing the pane channel.
+    pub fn tail(&self, id: &str, bytes: usize) -> String {
+        let entries = self.entries.lock();
+        let Some(handle) = entries.get(id) else {
+            return String::new();
+        };
+        let out = handle.out.lock();
+        let start = out.ring.len().saturating_sub(bytes);
+        String::from_utf8_lossy(&out.ring[start..]).into_owned()
+    }
+
+    /// Clear a terminal's usage-limit detector (dedup arming + tail) at an
+    /// in-place relaunch, so the resumed transcript repaint doesn't keep the
+    /// detector armed on the old limit phrase. No-op if the terminal is gone.
+    pub fn reset_limit_detector(&self, id: &str) {
+        if let Some(handle) = self.entries.lock().get(id) {
+            handle.out.lock().limit_detector.reset();
+        }
     }
 
     pub fn write(&self, id: &str, data: &str) {
@@ -618,6 +651,24 @@ fn emit_detect_event(app: &AppHandle, id: &str, ev: detect::DetectEvent) {
     }
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitPayload {
+    terminal_id: String,
+}
+
+/// A terminal's output looks like it hit a Claude usage limit. A hint only:
+/// the frontend orchestrator confirms against the usage API before acting.
+/// Ungated so auto-switch works in the default build (see OutputState).
+fn emit_limit_suspected(app: &AppHandle, id: &str) {
+    let _ = app.emit(
+        "terminals:limit-suspected",
+        LimitPayload {
+            terminal_id: id.to_string(),
+        },
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reader_loop(
     mut reader: Box<dyn Read + Send>,
@@ -639,13 +690,16 @@ fn reader_loop(
                 {
                     let mut guard = out.lock();
                     guard.on_data(&buf[..n]);
+                    let limits = guard.drain_limit_events();
                     #[cfg(feature = "remote-access")]
-                    {
-                        let events = guard.drain_events();
-                        drop(guard);
-                        for ev in events {
-                            emit_detect_event(&app, &id, ev);
-                        }
+                    let events = guard.drain_events();
+                    drop(guard);
+                    for _ in limits {
+                        emit_limit_suspected(&app, &id);
+                    }
+                    #[cfg(feature = "remote-access")]
+                    for ev in events {
+                        emit_detect_event(&app, &id, ev);
                     }
                 }
                 // Inject the startup command once the shell is alive (its first

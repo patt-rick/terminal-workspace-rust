@@ -240,6 +240,18 @@ impl StateStore {
             .unwrap_or(0)
     }
 
+    /// A terminal's shell token by id, scanning every project (terminal ids are
+    /// unique across projects). None if the id is unknown.
+    pub fn terminal_shell(&self, id: &str) -> Option<String> {
+        self.inner
+            .lock()
+            .projects
+            .iter()
+            .flat_map(|p| p.terminals.iter())
+            .find(|t| t.id == id)
+            .map(|t| t.shell.clone())
+    }
+
     pub fn upsert_terminal(&self, project_id: &str, rec: TerminalRecord) {
         let mut state = self.inner.lock();
         if let Some(p) = state.projects.iter_mut().find(|p| p.id == project_id) {

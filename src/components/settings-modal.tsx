@@ -345,6 +345,16 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
             <code className="font-mono">--yes-always</code>. The CLI will not ask for permission
             before running tools. Only enable this if you understand the risk.
           </div>
+          <Row label="Auto-switch accounts when a session hits its limit">
+            <Toggle
+              checked={terminal.autoSwitchOnLimit}
+              onChange={(v) => updateTerminal({ autoSwitchOnLimit: v })}
+            />
+          </Row>
+          <div className="text-xs text-muted">
+            When a Claude session runs out of usage quota, switch to your healthiest other account
+            and restart the session with its history restored. You re-send your last message.
+          </div>
                 <ClaudeHooksToggle />
               </Section>
 

@@ -19,6 +19,7 @@ import { useDiffView } from './state/diff'
 import { useRepos } from './state/repos'
 import { useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
+import { registerAutoSwitch } from './state/auto-switch'
 import { useUi } from './state/ui'
 import { useApiKeys } from './state/apikeys'
 import { useWsl } from './state/wsl'
@@ -142,6 +143,14 @@ export default function App() {
 
   useEffect(() => {
     void useWsl.getState().load()
+  }, [])
+
+  // Auto-switch Claude accounts on a usage limit: the orchestrator owns the
+  // limit-suspected listener and all episode/quiet-period state (gated at
+  // runtime by the settings toggle).
+  useEffect(() => {
+    if (!isTauri) return
+    return registerAutoSwitch()
   }, [])
 
   // Build + watch the search index for the selected project (and drop others).

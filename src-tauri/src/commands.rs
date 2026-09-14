@@ -225,6 +225,22 @@ pub fn terminal_write(pty: State<PtyManager>, id: String, data: String) {
     pty.write(&id, &data)
 }
 
+/// Read-only tail of a terminal's recent output (last `bytes`, lossy UTF-8).
+/// Lets the orchestrator poll for the shell prompt returning after `claude`
+/// exits, instead of a blind sleep. Empty string for an unknown terminal.
+#[tauri::command]
+pub fn terminal_tail(pty: State<PtyManager>, id: String, bytes: usize) -> String {
+    pty.tail(&id, bytes)
+}
+
+/// Reset a terminal's usage-limit detector at an in-place relaunch, so the
+/// resumed transcript repaint (which reprints the old limit message) can't keep
+/// the detector armed and swallow the next genuine limit. No-op if unknown.
+#[tauri::command]
+pub fn reset_limit_detector(pty: State<PtyManager>, id: String) {
+    pty.reset_limit_detector(&id)
+}
+
 #[tauri::command]
 pub fn terminal_resize(pty: State<PtyManager>, id: String, cols: u16, rows: u16) {
     pty.resize(&id, cols, rows)
@@ -258,6 +274,65 @@ pub fn terminal_rename(store: State<StateStore>, project_id: String, id: String,
 #[tauri::command]
 pub fn terminal_remove_record(store: State<StateStore>, project_id: String, id: String) {
     store.remove_terminal(&project_id, &id)
+}
+
+/// Awaited write of the active login account's fresh credentials into a WSL
+/// terminal's distro before the caller resumes `claude` in it. `terminal_create`
+/// does this pre-spawn; the auto-switch in-place relaunch bypasses that path, so
+/// the orchestrator calls this (awaited) first to avoid resuming under the old
+/// account (see the WSL note in the design). No-op for non-WSL terminals or when
+/// no login account is active. Best-effort: write failures are swallowed.
+#[tauri::command]
+pub async fn ensure_wsl_distro_creds(
+    app: AppHandle,
+    accounts: State<'_, ClaudeAccountStore>,
+    store: State<'_, StateStore>,
+    terminal_id: String,
+) -> AppResult<()> {
+    let Some(shell) = store.terminal_shell(&terminal_id) else {
+        return Ok(());
+    };
+    let Some(distro) = crate::wsl::parse_shell_token(&shell).map(str::to_string) else {
+        return Ok(());
+    };
+    let Some(active_id) = accounts.active_account_id() else {
+        return Ok(());
+    };
+    #[cfg(windows)]
+    {
+        let Ok(client) = http_client() else {
+            return Ok(());
+        };
+        let Ok(creds) = ensure_fresh_creds(&app, &accounts, &client, &active_id).await else {
+            return Ok(());
+        };
+        // Must land BEFORE the resume command is written, so await it; the
+        // wsl.exe shell-out runs off the async worker (mirrors terminal_create).
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            // A bare `wsl:` token means the default distro; resolve its real
+            // name so the \\wsl$\ UNC is well-formed.
+            let name = if distro.is_empty() {
+                crate::wsl::list_distros()
+                    .into_iter()
+                    .find(|d| d.is_default)
+                    .map(|d| d.name)
+            } else {
+                Some(distro)
+            };
+            if let Some(name) = name {
+                if let Some(home) = crate::wsl::distro_home(&name) {
+                    let p = crate::wsl::unc_path(&name, &format!("{home}/.claude/.credentials.json"));
+                    let _ = crate::claude::creds::write_credentials_file(&p, &creds);
+                }
+            }
+        })
+        .await;
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (&app, &accounts, &distro, &active_id);
+    }
+    Ok(())
 }
 
 // ---------- filesystem ----------
