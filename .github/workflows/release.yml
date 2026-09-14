@@ -49,6 +49,20 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Curated release notes for the pushed tag, from CHANGELOG.md. Skipped on
+      # workflow_dispatch (no tag) — tauri-action's default body is used then.
+      - name: Extract release notes
+        id: notes
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          {
+            echo 'body<<CHANGELOG_EOF'
+            node scripts/changelog-section.mjs "$GITHUB_REF_NAME"
+            echo
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,6 +91,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Terminal Workspace ${{ github.ref_name }}'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
