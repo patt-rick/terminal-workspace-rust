@@ -6,6 +6,7 @@ import { hoverLines, projectBadge, stateDotClass } from '../../lib/project-statu
 import { ContextMenu } from '../context-menu'
 import { ProjectTile } from './project-tile'
 import { useProjectMenu } from './project-menu'
+import { NavActions } from './nav-actions'
 
 const HOVER_DELAY_MS = 150
 
@@ -14,24 +15,27 @@ export function ProjectRail() {
   const { projects, addProject } = useProjects()
 
   return (
-    <aside className="panel flex w-[52px] flex-shrink-0 flex-col items-center bg-surface">
-      <div className="no-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2.5 overflow-y-auto overflow-x-hidden py-2.5">
+    <aside className="flex w-[52px] flex-shrink-0 flex-col items-center">
+      <div className="no-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
         {projects.map((p) => (
           <RailTile key={p.id} project={p} />
         ))}
+        <button
+          type="button"
+          onClick={() => void addProject()}
+          title="Add project"
+          aria-label="Add project"
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] border border-dashed border-foreground/30 text-foreground/50 hover:border-accent hover:text-foreground"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={() => void addProject()}
-        title="Add project"
-        aria-label="Add project"
-        className="my-2 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] border border-dashed border-border text-foreground/50 hover:border-accent hover:text-foreground"
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      </button>
+      <div className="py-1.5">
+        <NavActions vertical />
+      </div>
     </aside>
   )
 }
@@ -99,7 +103,7 @@ function RailTile({ project }: { project: Project }) {
         onBlur={hide}
         className={`block rounded-[10px] outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-focus ${
           selected
-            ? 'ring-2 ring-foreground/80 ring-offset-2 ring-offset-surface'
+            ? 'ring-2 ring-foreground/80 ring-offset-2 ring-offset-[var(--shell-backdrop)]'
             : 'opacity-60 hover:opacity-100 focus-visible:opacity-100'
         }`}
       >
@@ -107,7 +111,7 @@ function RailTile({ project }: { project: Project }) {
       </button>
       {badge && (
         <span
-          className={`pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-surface ${
+          className={`pointer-events-none absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-[var(--shell-backdrop)] ${
             badge === 'busy' ? 'animate-pulse bg-warning motion-reduce:animate-none' : 'bg-link'
           }`}
         />

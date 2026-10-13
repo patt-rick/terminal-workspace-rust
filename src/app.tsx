@@ -72,6 +72,8 @@ export default function App() {
   const paletteOpen = useUi((s) => s.paletteOpen)
 
   const usageOpen = useUsage((s) => s.open)
+  // Usage and Settings are pages over the centre; the terminal is out of reach under them.
+  const pageOpen = usageOpen || settingsOpen
   // A narrow window shows the rail whatever the stored choice, which is kept.
   const narrow = useNarrowWindow()
   const newTerminalKey = useShortcutLabel('terminal.new')
@@ -230,7 +232,7 @@ export default function App() {
   return (
     <div className="shell-root flex h-screen w-screen flex-col text-foreground">
       <TopBar />
-      <div className="flex min-h-0 flex-1 px-2">
+      <div className="flex min-h-0 flex-1 px-2.5">
         {sidebarCollapsed || narrow ? (
           <>
             <ProjectRail />
@@ -243,7 +245,7 @@ export default function App() {
           </>
         )}
         <main className="relative flex min-w-0 flex-1">
-          <div className="panel flex min-w-0 flex-1 flex-col bg-background" inert={usageOpen}>
+          <div className="panel flex min-w-0 flex-1 flex-col bg-background" inert={pageOpen}>
             {selectedProject && selectedProject.terminals.length > 0 && (
               <TerminalTabs project={selectedProject} />
             )}
@@ -252,7 +254,7 @@ export default function App() {
                 <TerminalPane
                   key={t.id}
                   terminalId={t.id}
-                  active={!usageOpen && t.project.id === selectedProject?.id && t.id === activeTerminalId}
+                  active={!pageOpen && t.project.id === selectedProject?.id && t.id === activeTerminalId}
                   onBell={() => handleBell(t.project, t)}
                 />
               ))}
@@ -295,7 +297,7 @@ export default function App() {
               <div
                 style={{ width: filePaneWidth }}
                 className="panel h-full min-w-0 flex-shrink-0"
-                inert={usageOpen}
+                inert={pageOpen}
               >
                 {activeDiff ? (
                   <DiffViewer file={activeDiff.file} onClose={closeDiff} onOpen={openDiffFile} />
@@ -306,6 +308,7 @@ export default function App() {
             </>
           )}
           {usageOpen && <UsagePage />}
+          <SettingsModal open={settingsOpen} onClose={closeSettings} />
         </main>
         {selectedProject && !rightSidebarCollapsed && (
           <>
@@ -345,7 +348,6 @@ export default function App() {
         onCancel={clearPendingTerminalClose}
       />
 
-      <SettingsModal open={settingsOpen} onClose={closeSettings} />
       <ProjectIconDialog />
       {quickOpen && selectedProject && (
         <QuickOpen projectId={selectedProject.id} onClose={closeQuickOpen} />

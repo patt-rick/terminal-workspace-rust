@@ -7,15 +7,10 @@ import { withShortcut } from '../../lib/keybindings'
 import { useNarrowWindow } from '../../lib/use-narrow-window'
 import { useShortcutLabel } from '../../state/keybindings'
 import { useWorkspace } from '../../state/store'
-import { useUi } from '../../state/ui'
-import { useUsage } from '../../state/usage'
-import appIcon from '../../../src-tauri/icons/32x32.png'
 
 const BUTTON =
   'flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-[var(--title-bar-fg)] disabled:opacity-30'
-const ON = 'text-[var(--title-bar-fg)]'
-const OFF = 'text-[var(--title-bar-fg-faint)]'
-// The two pane toggles: never dimmed like OFF, which reads as disabled. The
+// The two pane toggles are never dimmed, which would read as disabled. The
 // icon's filled half says whether the pane is open.
 const TOGGLE = 'text-[var(--title-bar-fg-dim)]'
 
@@ -30,13 +25,8 @@ export function TopBar() {
   const toggleSidebar = useWorkspace((s) => s.toggleSidebar)
   const rightSidebarCollapsed = useWorkspace((s) => s.rightSidebarCollapsed)
   const toggleRightSidebar = useWorkspace((s) => s.toggleRightSidebar)
-  const openSettings = useUi((s) => s.openSettings)
-  const usageOpen = useUsage((s) => s.open)
-  const toggleUsage = useUsage((s) => s.togglePage)
   const sidebarKey = useShortcutLabel('view.toggleSidebar')
   const rightSidebarKey = useShortcutLabel('view.toggleRightSidebar')
-  const usageKey = useShortcutLabel('view.usage')
-  const settingsKey = useShortcutLabel('view.settings')
   const paletteKey = useShortcutLabel('palette.toggle')
   const narrow = useNarrowWindow()
   const listOpen = !sidebarCollapsed && !narrow
@@ -66,7 +56,6 @@ export function TopBar() {
             <line x1="9" y1="3" x2="9" y2="21" />
           </svg>
         </button>
-        <img src={appIcon} alt="" className="h-4 w-4 flex-shrink-0" />
         <span className="truncate text-xs font-medium text-[var(--title-bar-fg-faint)]">
           Terminal Workspace
         </span>
@@ -100,29 +89,6 @@ export function TopBar() {
 
       <div className="flex h-full flex-shrink-0 items-stretch justify-end gap-2 pr-1">
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={toggleUsage}
-            title={withShortcut('Usage', usageKey)}
-            className={`${BUTTON} ${usageOpen ? ON : OFF}`}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <line x1="6" y1="20" x2="6" y2="12" />
-              <line x1="12" y1="20" x2="12" y2="4" />
-              <line x1="18" y1="20" x2="18" y2="9" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={() => openSettings()}
-            title={withShortcut('Settings', settingsKey)}
-            className={`${BUTTON} ${OFF}`}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
           <button
             type="button"
             onClick={toggleRightSidebar}

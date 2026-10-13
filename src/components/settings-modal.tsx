@@ -70,6 +70,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   }, [])
 
   const fileRef = useRef<HTMLInputElement>(null)
+  const root = useRef<HTMLDivElement>(null)
+
+  // Take the keyboard while open, so typing cannot reach the terminal underneath.
+  useEffect(() => {
+    if (open) root.current?.focus()
+  }, [open])
   const [themeError, setThemeError] = useState<string | null>(null)
 
   const settingsTab = useUi((s) => s.settingsTab)
@@ -147,8 +153,12 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex bg-background">
-      <nav className="flex w-48 flex-shrink-0 flex-col gap-0.5 border-r border-border bg-surface p-3">
+    <div
+      ref={root}
+      tabIndex={-1}
+      className="panel absolute inset-0 z-30 flex bg-background outline-none"
+    >
+      <nav className="flex w-48 flex-shrink-0 flex-col gap-0.5 overflow-y-auto bg-surface p-3">
         <button
           type="button"
           onClick={onClose}

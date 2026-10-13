@@ -47,7 +47,7 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="w-[360px] rounded-xl border border-border bg-overlay p-5 shadow-xl outline-none"
+        className="w-[400px] rounded-xl border border-border bg-overlay p-5 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key !== 'Escape') return
@@ -55,21 +55,48 @@ export function ConfirmDialog({
           onCancel()
         }}
       >
-        <div className="text-sm font-semibold text-foreground">{title}</div>
-        <div className="mt-2 break-words text-sm text-muted">{message}</div>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="flex gap-3.5">
+          <span
+            className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ${
+              danger ? 'bg-danger/15 text-danger' : 'bg-accent/15 text-accent'
+            }`}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              {danger ? (
+                <>
+                  <path d="M12 3.5 2.5 20h19z" />
+                  <line x1="12" y1="10" x2="12" y2="14.5" />
+                  <line x1="12" y1="17.3" x2="12" y2="17.4" />
+                </>
+              ) : (
+                <>
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7" />
+                  <line x1="12" y1="16.8" x2="12" y2="16.9" />
+                </>
+              )}
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <div className="text-sm font-semibold text-foreground">{title}</div>
+            <div className="mt-1.5 break-words text-[13px] leading-relaxed text-foreground/65">
+              {message}
+            </div>
+          </div>
+        </div>
+        <div className="-mx-5 -mb-5 mt-5 flex justify-end gap-2 rounded-b-xl border-t border-border bg-foreground/5 px-5 py-3">
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md px-3 py-1.5 text-sm text-foreground/80 hover:bg-foreground/10"
+            className="flex h-8 items-center rounded-lg border border-border px-3.5 text-[13px] text-foreground/85 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              danger ? 'bg-danger text-accent-foreground' : 'bg-accent text-accent-foreground'
+            className={`flex h-8 items-center rounded-lg px-3.5 text-[13px] font-semibold text-accent-foreground shadow-sm outline-none ring-offset-2 ring-offset-overlay hover:brightness-110 focus-visible:ring-2 focus-visible:ring-focus ${
+              danger ? 'bg-danger' : 'bg-accent'
             }`}
           >
             {confirmLabel}

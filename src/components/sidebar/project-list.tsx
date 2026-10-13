@@ -8,6 +8,7 @@ import { ContextMenu } from '../context-menu'
 import { ProjectTile } from './project-tile'
 import { focusTerminal } from '../workspace/terminal-tabs'
 import { useProjectMenu } from './project-menu'
+import { NavActions } from './nav-actions'
 
 export function ProjectList() {
   const { projects, addProject } = useProjects()
@@ -50,6 +51,9 @@ export function ProjectList() {
         ) : (
           projects.map((p) => <ProjectRow key={p.id} project={p} />)
         )}
+      </div>
+      <div className="flex flex-shrink-0 px-2.5 pb-2">
+        <NavActions vertical={false} />
       </div>
     </aside>
   )

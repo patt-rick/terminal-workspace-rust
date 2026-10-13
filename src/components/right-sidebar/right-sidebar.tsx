@@ -6,6 +6,17 @@ import { SessionsPanel } from './sessions-panel'
 import { useWorkspace, type RightTab } from '../../state/store'
 import { projectHasDirtyRepo, useRepos } from '../../state/repos'
 
+const TABS: { id: RightTab; label: string; icon: string }[] = [
+  { id: 'files', label: 'Files', icon: 'M4 4h6l2 3h8v13H4z' },
+  {
+    id: 'git',
+    label: 'Git',
+    icon: 'M6 3v12M6 15a3 3 0 1 0 0 6a3 3 0 0 0 0-6M18 3a3 3 0 1 0 0 6a3 3 0 0 0 0-6M18 9c0 5-12 2-12 6',
+  },
+  { id: 'github', label: 'GitHub', icon: 'M6 8v8M4 4h4v4H4zM4 16h4v4H4zM16 16h4v4h-4zM18 16V9l-4-3' },
+  { id: 'sessions', label: 'Sessions', icon: 'M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18M12 7v5l3 2' },
+]
+
 export function RightSidebar({ projectId }: { projectId: string }) {
   // The tab lives in the store so the status bar can open the Git tab.
   const tab = useWorkspace((s) => s.rightTab)
@@ -23,24 +34,17 @@ export function RightSidebar({ projectId }: { projectId: string }) {
 
   return (
     <aside style={{ width }} className="panel flex flex-shrink-0 flex-col bg-surface">
-      <div
-        role="tablist"
-        aria-label="Panel"
-        className="mx-2 my-1.5 flex flex-shrink-0 rounded-lg p-0.5"
-        style={{ background: 'var(--shell-backdrop)' }}
-      >
-        <TabButton active={tab === 'files'} onClick={() => select('files')}>
-          Files
-        </TabButton>
-        <TabButton active={tab === 'git'} onClick={() => select('git')} badge={gitDirty}>
-          Git
-        </TabButton>
-        <TabButton active={tab === 'github'} onClick={() => select('github')}>
-          GitHub
-        </TabButton>
-        <TabButton active={tab === 'sessions'} onClick={() => select('sessions')}>
-          Sessions
-        </TabButton>
+      <div role="tablist" aria-label="Panel" className="flex h-10 flex-shrink-0 border-b border-border">
+        {TABS.map((t) => (
+          <TabButton
+            key={t.id}
+            label={t.label}
+            icon={t.icon}
+            active={tab === t.id}
+            onClick={() => select(t.id)}
+            badge={t.id === 'git' && gitDirty}
+          />
+        ))}
       </div>
       <div className="min-h-0 flex-1">
         {(visited.has('files') || tab === 'files') && (
@@ -73,14 +77,17 @@ function Panel({ active, children }: { active: boolean; children: React.ReactNod
 }
 
 function TabButton({
+  label,
+  icon,
   active,
   onClick,
-  children,
   badge,
 }: {
+  label: string
+  /** SVG path data, drawn as a 24px stroked icon */
+  icon: string
   active: boolean
   onClick: () => void
-  children: React.ReactNode
   badge?: boolean
 }) {
   return (
@@ -89,19 +96,19 @@ function TabButton({
       onClick={onClick}
       role="tab"
       aria-selected={active}
-      className={`relative flex h-6 flex-1 items-center justify-center gap-1 rounded-md border text-xs font-medium ${
+      aria-label={badge ? `${label}, uncommitted changes` : label}
+      title={badge ? `${label} \u2014 uncommitted changes in one or more repos` : label}
+      className={`relative flex flex-1 items-center justify-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
         active
-          ? 'border-[var(--panel-outline)] bg-surface text-foreground shadow-sm'
-          : 'border-transparent text-foreground/70 hover:text-foreground'
+          ? 'text-foreground'
+          : 'text-foreground/60 hover:text-foreground'
       }`}
     >
-      {children}
-      {badge && (
-        <span
-          title="Uncommitted changes in one or more repos"
-          className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-warning"
-        />
-      )}
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d={icon} />
+      </svg>
+      {badge && <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-warning" />}
+      {active && <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent" />}
     </button>
   )
 }

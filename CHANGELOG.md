@@ -37,7 +37,12 @@ All notable changes to this project are documented here. Format follows
   palette.
 - The project sidebar no longer hides completely: its small state is a rail of project
   tiles. Hovering a tile shows the project's name and what each of its terminals is doing.
-- The right panel's tabs are a segmented switch.
+- Usage and Settings moved from the header to the foot of the project sidebar.
+- Settings opens in the centre panel, like Usage, with the sidebars still visible. Opening
+  one closes the other, and choosing a project or terminal closes both.
+- The right panel's tabs are icons (Files, Git, GitHub, Sessions) with their names on hover.
+- The Usage page's controls are in a bar across the top of the panel, and it closes from a
+  button in its top-left corner.
 - `Ctrl/Cmd+Shift+P` opens the command palette (it used to open file search, which stays on
   `Ctrl/Cmd+P`). `Ctrl/Cmd+Shift+W` no longer closes a terminal; use `Ctrl/Cmd+W`.
   Shortcuts no longer fire while Alt is held, and on macOS they need Cmd, not Ctrl.

@@ -38,25 +38,23 @@ function Segmented<T extends string>({
   label: string
 }) {
   return (
-    <div
-      role="group"
-      aria-label={label}
-      className="flex rounded-lg p-0.5 text-xs"
-      style={{ background: 'var(--shell-backdrop)' }}
-    >
+    <div role="group" aria-label={label} className="flex h-full text-xs">
       {options.map((o) => (
         <button
           key={o.id}
           type="button"
           aria-pressed={value === o.id}
           onClick={() => onChange(o.id)}
-          className={`flex h-6 items-center rounded-md border px-2.5 font-medium ${
+          className={`relative flex h-full items-center px-3 font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
             value === o.id
-              ? 'border-[var(--panel-outline)] bg-surface text-foreground shadow-sm'
-              : 'border-transparent text-foreground/70 hover:text-foreground'
+              ? 'bg-background text-foreground'
+              : 'text-foreground/60 hover:text-foreground'
           }`}
         >
           {o.label}
+          {value === o.id && (
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
+          )}
         </button>
       ))}
     </div>
@@ -218,40 +216,55 @@ export function UsagePage() {
       }}
       className="panel absolute inset-0 z-20 overflow-y-auto bg-background outline-none"
     >
-      <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-5">
-        <header className="flex flex-wrap items-center gap-3">
-          <h1 className="text-base font-medium text-foreground">Usage</h1>
-          <Segmented options={VIEWS} value={view} onChange={setView} label="Usage view" />
-          {view !== 'limits' && (
-            <Segmented
-              options={PERIODS.map((p) => ({ id: p, label: p }))}
-              value={period}
-              onChange={setPeriod}
-              label="Usage period"
-            />
-          )}
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() =>
-              void (view === 'limits'
-                ? useClaudeAccounts.getState().refreshUsage(true)
-                : refresh())
-            }
-            disabled={loading}
-            className="rounded-md border border-border px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-          >
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
+      {/* A bar across the top of the panel, the height and style of the tab strips, that
+          stays put when the page scrolls. The close button matches Settings. */}
+      <header className="sticky top-0 z-10 grid h-10 grid-cols-[1fr_auto_1fr] items-stretch border-b border-border bg-surface px-2">
+        <div className="flex items-center">
           <button
             type="button"
             onClick={closePage}
-            title="Close (Esc)"
-            className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
+            title="Close usage (Esc)"
+            aria-label="Close usage"
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full border border-border text-foreground/60 hover:bg-foreground/10 hover:text-foreground"
           >
-            ✕
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
-        </header>
+        </div>
+        <div className="flex items-stretch justify-center">
+          <Segmented options={VIEWS} value={view} onChange={setView} label="Usage view" />
+          {view !== 'limits' && (
+            <>
+              <span className="mx-2 my-2.5 w-px bg-border" />
+              <Segmented
+                options={PERIODS.map((p) => ({ id: p, label: p }))}
+                value={period}
+                onChange={setPeriod}
+                label="Usage period"
+              />
+            </>
+          )}
+          <span className="mx-2 my-2.5 w-px bg-border" />
+          <button
+            type="button"
+            onClick={() =>
+              void (view === 'limits' ? useClaudeAccounts.getState().refreshUsage(true) : refresh())
+            }
+            disabled={loading}
+            title={loading ? 'Refreshing…' : 'Refresh'}
+            aria-label="Refresh"
+            className="flex w-8 items-center justify-center text-foreground/60 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus disabled:opacity-60"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={loading ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden>
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-5">
         {view === 'limits' ? <UsageLimits /> : <History />}
       </div>
     </div>

@@ -59,13 +59,12 @@
   --chart-5: #d55181;
 }
 
-/* The shell: rounded panels on a backdrop. Derived from the theme's own tokens
-   so no theme has to define them. A panel's outline, not the colour difference,
-   is what separates it: on a near-black theme the backdrop cannot get darker
-   than the panels, and over a gradient it may be lighter. */
+/* The shell: rounded panels on a backdrop, with no outline around them (owner
+   decision). Derived from the theme's own tokens so no theme has to define
+   them. --panel-outline is for the few controls that keep a hairline. */
 :root {
-  --radius-panel: 12px;
-  --gap-panel: 8px;
+  --radius-panel: 14px;
+  --gap-panel: 10px;
   --shell-backdrop: color-mix(in srgb, var(--surface) 78%, black);
   --panel-outline: color-mix(in srgb, var(--foreground) 14%, var(--border));
 }
@@ -80,7 +79,6 @@
   }
   .panel {
     border-radius: var(--radius-panel);
-    border: 1px solid var(--panel-outline);
     overflow: hidden;
   }
 }

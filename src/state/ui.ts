@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useWorkspace } from './store'
+import { useUsage } from './usage'
 
 /** Cross-component UI flags that don't belong to a feature store. */
 interface UiState {
@@ -26,17 +27,24 @@ interface UiState {
   closeIconDialog: () => void
 }
 
-export const useUi = create<UiState>((set) => ({
+export const useUi = create<UiState>((set, get) => ({
   settingsOpen: false,
   settingsTab: null,
   paletteOpen: false,
   quickOpenOpen: false,
   renamingProjectId: null,
   iconDialogProjectId: null,
-  openSettings: (tab?: string) => set({ settingsOpen: true, settingsTab: tab ?? null }),
+  // The Usage page shares the centre with Settings, so opening one closes the other.
+  openSettings: (tab?: string) => {
+    useUsage.getState().closePage()
+    set({ settingsOpen: true, settingsTab: tab ?? null })
+  },
   clearSettingsTab: () => set({ settingsTab: null }),
   closeSettings: () => set({ settingsOpen: false }),
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
+  toggleSettings: () => {
+    if (!get().settingsOpen) useUsage.getState().closePage()
+    set((s) => ({ settingsOpen: !s.settingsOpen }))
+  },
   togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen, quickOpenOpen: false })),
   closePalette: () => set({ paletteOpen: false }),
   toggleQuickOpen: () => set((s) => ({ quickOpenOpen: !s.quickOpenOpen, paletteOpen: false })),

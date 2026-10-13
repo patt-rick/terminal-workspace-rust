@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ipc, type UsageScanResult, type UsageSummary } from '../lib/ipc'
 import { useSettings } from './settings'
+import { useUi } from './ui'
 import {
   buildBoundaries,
   type UsageDimension,
@@ -56,6 +57,8 @@ export const useUsage = create<UsageState>((set, get) => ({
   error: null,
 
   openPage: () => {
+    // Settings shares the centre with this page.
+    useUi.getState().closeSettings()
     if (get().open) return
     set({ open: true })
     void get().load(true)
