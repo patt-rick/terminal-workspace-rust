@@ -28,8 +28,9 @@ import { useUsage } from './state/usage'
 import { UsagePage } from './components/usage/usage-page'
 import { CommandPalette } from './components/command-palette/command-palette'
 import { runCommand } from './commands/app-commands'
-import { commandForEvent } from './lib/keybindings'
-import { isMac, kbd } from './lib/platform'
+import { bindingForEvent, withShortcut } from './lib/keybindings'
+import { currentKeybindings, useShortcutLabel } from './state/keybindings'
+import { isMac } from './lib/platform'
 import { notify } from './lib/notify'
 import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
@@ -69,6 +70,11 @@ export default function App() {
 
   const usageOpen = useUsage((s) => s.open)
   const toggleUsage = useUsage((s) => s.togglePage)
+  const sidebarKey = useShortcutLabel('view.toggleSidebar')
+  const rightSidebarKey = useShortcutLabel('view.toggleRightSidebar')
+  const usageKey = useShortcutLabel('view.usage')
+  const settingsKey = useShortcutLabel('view.settings')
+  const newTerminalKey = useShortcutLabel('terminal.new')
 
   const activeTerminalId = selectedProject
     ? activeTerminalByProject[selectedProject.id] ?? null
@@ -102,17 +108,23 @@ export default function App() {
     [selectedProject, activeTerminalId, bumpUnread]
   )
 
-  // Every shortcut is a row in the key table (lib/keybindings.ts) that names a
-  // registry command. The default is always prevented for a bound key, so e.g.
-  // Ctrl+P never reaches the webview's print dialog.
+  // Every shortcut is a binding (lib/keybindings.ts) that names a registry
+  // command. A binding with the terminal switch off does nothing while a
+  // terminal has focus; xterm has already had the key by then. The default is
+  // still prevented, so e.g. Ctrl+Shift+P never opens the webview print dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const command = commandForEvent(e, isMac)
-      if (command === null) return
+      // The editor prevents the default for keys it handles itself.
+      if (e.defaultPrevented) return
+      const binding = bindingForEvent(e, isMac, currentKeybindings())
+      if (binding === null) return
       e.preventDefault()
       if (e.repeat) return
+      const inTerminal = document.activeElement?.closest('.xterm') != null
+      if (inTerminal && !binding.inTerminal) return
       // The palette's list was built when it opened; other shortcuts acting
       // behind it would make that list stale.
+      const command = binding.command
       const behindPalette = command !== 'palette.toggle' && command !== 'file.quickOpen'
       if (useUi.getState().paletteOpen && behindPalette) return
       runCommand(command)
@@ -235,7 +247,7 @@ export default function App() {
             <button
               type="button"
               onClick={toggleSidebar}
-              title={`Show sidebar (${kbd('B')})`}
+              title={withShortcut('Show sidebar', sidebarKey)}
               className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -263,7 +275,7 @@ export default function App() {
           <button
             type="button"
             onClick={toggleUsage}
-            title={`Usage (${kbd('⇧U')})`}
+            title={withShortcut('Usage', usageKey)}
             className={`flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-foreground ${
               usageOpen ? 'text-foreground/80' : 'text-foreground/50'
             }`}
@@ -277,7 +289,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => openSettings()}
-            title={`Settings (${kbd(',')})`}
+            title={withShortcut('Settings', settingsKey)}
             className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -289,7 +301,7 @@ export default function App() {
             type="button"
             onClick={toggleRightSidebar}
             disabled={!selectedProject}
-            title={`Toggle panel (${kbd('⇧B')})`}
+            title={withShortcut('Toggle panel', rightSidebarKey)}
             className={`flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-foreground disabled:opacity-30 ${
               selectedProject && !rightSidebarCollapsed ? 'text-foreground/80' : 'text-foreground/50'
             }`}
@@ -321,7 +333,7 @@ export default function App() {
             {showEmptyNoTerminals && (
               <EmptyState
                 title="No terminals yet"
-                actionLabel={`New terminal (${kbd('T')})`}
+                actionLabel={withShortcut('New terminal', newTerminalKey)}
                 onAction={() => selectedProject && void createProjectTerminal(selectedProject.id)}
                 secondaryLabel="✳ Claude Code"
                 onSecondary={() =>

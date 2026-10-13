@@ -234,8 +234,10 @@ You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone an
 | ⌘/Ctrl , | Open settings |
 | ⌘/Ctrl S | Save the active file (in the editor) |
 
-Every command is also in the command palette, which works from anywhere, including a
-focused terminal.
+These are the defaults; all but Save can be changed in **Settings → Keyboard**. On Windows and Linux a
+focused terminal keeps `Ctrl+T`, `Ctrl+W`, `Ctrl+P` and `Ctrl+B` for the shell unless you
+turn on "in terminal" for them there. Every command is also in the command palette, which
+works from anywhere.
 
 ## Docs
 

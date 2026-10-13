@@ -25,5 +25,3 @@ export async function initPlatform(): Promise<void> {
   }
 }
 
-/** ⌘ on macOS, Ctrl elsewhere — for shortcut labels. */
-export const kbd = (key: string): string => (isMac ? `⌘${key}` : `Ctrl+${key}`)

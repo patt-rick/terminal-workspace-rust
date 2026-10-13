@@ -12,6 +12,8 @@ All notable changes to this project are documented here. Format follows
   accounts. History is kept for 100 days, beyond Claude Code's own transcript cleanup.
 - Command palette (`Ctrl/Cmd+K` or `Ctrl/Cmd+Shift+P`): find and run any command, switch
   theme, and jump to any terminal or project.
+- Keyboard settings: rebind any command by pressing the new shortcut, and choose per
+  shortcut whether the app or the terminal gets the key while a terminal is focused.
 
 ### Changed
 - `Ctrl/Cmd+Shift+P` opens the command palette (it used to open file search, which stays on

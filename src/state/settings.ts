@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { DEFAULT_THEME_ID, THEMES } from '../themes'
 import type { Theme } from '../themes'
+import { sanitizeOverrides, type KeybindingOverrides } from '../lib/keybindings'
 
 export interface EditorSettings {
   fontSize: number
@@ -71,6 +72,8 @@ export interface Settings {
   identity: IdentitySettings
   /** User-imported themes; merged with the built-in presets at runtime. */
   customThemes: Theme[]
+  /** User changes to keyboard shortcuts, on top of the platform defaults. */
+  keybindingOverrides: KeybindingOverrides
 }
 
 export const SETTINGS_DEFAULTS: Settings = {
@@ -81,6 +84,7 @@ export const SETTINGS_DEFAULTS: Settings = {
   terminal: TERMINAL_DEFAULTS,
   identity: IDENTITY_DEFAULTS,
   customThemes: [],
+  keybindingOverrides: {},
 }
 
 // localStorage is the first-paint mirror; the Rust settings.json is the durable
@@ -100,6 +104,7 @@ export function readStoredSettings(): Settings {
       terminal: { ...TERMINAL_DEFAULTS, ...parsed.terminal },
       identity: { ...IDENTITY_DEFAULTS, ...parsed.identity },
       customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes : [],
+      keybindingOverrides: sanitizeOverrides(parsed.keybindingOverrides),
     }
   } catch {
     return SETTINGS_DEFAULTS
@@ -134,6 +139,7 @@ interface SettingsState extends Settings {
   addCustomTheme: (theme: Theme) => Theme
   /** Remove a custom theme by id; if it was selected, fall back to default. */
   removeCustomTheme: (id: string) => void
+  setKeybindingOverrides: (overrides: KeybindingOverrides) => void
   /** Replace the whole settings object (used when hydrating from the backend). */
   replaceAll: (s: Settings) => void
 }
@@ -175,8 +181,26 @@ export function setSettingsBackendSync(fn: (s: Settings) => void): void {
 
 export const useSettings = create<SettingsState>((set, get) => {
   const snapshot = (): Settings => {
-    const { themeId, themeShuffle, lastShuffleDate, editor, terminal, identity, customThemes } = get()
-    return { themeId, themeShuffle, lastShuffleDate, editor, terminal, identity, customThemes }
+    const {
+      themeId,
+      themeShuffle,
+      lastShuffleDate,
+      editor,
+      terminal,
+      identity,
+      customThemes,
+      keybindingOverrides,
+    } = get()
+    return {
+      themeId,
+      themeShuffle,
+      lastShuffleDate,
+      editor,
+      terminal,
+      identity,
+      customThemes,
+      keybindingOverrides,
+    }
   }
   const commit = (): void => {
     const s = snapshot()
@@ -235,10 +259,20 @@ export const useSettings = create<SettingsState>((set, get) => {
       return stored
     },
     removeCustomTheme: (id) => {
-      set((state) => ({
-        customThemes: state.customThemes.filter((t) => t.meta.id !== id),
-        themeId: state.themeId === id ? DEFAULT_THEME_ID : state.themeId,
-      }))
+      // The theme's shortcut goes with it: it would have no row left to edit.
+      set((state) => {
+        const keybindingOverrides = { ...state.keybindingOverrides }
+        delete keybindingOverrides[`theme.${id}`]
+        return {
+          customThemes: state.customThemes.filter((t) => t.meta.id !== id),
+          themeId: state.themeId === id ? DEFAULT_THEME_ID : state.themeId,
+          keybindingOverrides,
+        }
+      })
+      commit()
+    },
+    setKeybindingOverrides: (overrides) => {
+      set({ keybindingOverrides: overrides })
       commit()
     },
     replaceAll: (s) => {
@@ -250,6 +284,7 @@ export const useSettings = create<SettingsState>((set, get) => {
         terminal: s.terminal,
         identity: s.identity ?? IDENTITY_DEFAULTS,
         customThemes: s.customThemes,
+        keybindingOverrides: sanitizeOverrides(s.keybindingOverrides),
       })
       persistLocal(s)
     },

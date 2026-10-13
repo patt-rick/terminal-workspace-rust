@@ -10,7 +10,8 @@ import { useActiveTheme } from '../../themes/theme-provider'
 import type { Theme } from '../../themes'
 import { ipc } from '../../lib/ipc'
 import { getWindowsBuild, isMac } from '../../lib/platform'
-import { commandForEvent } from '../../lib/keybindings'
+import { bindingForEvent } from '../../lib/keybindings'
+import { currentKeybindings } from '../../state/keybindings'
 
 interface Props {
   terminalId: string
@@ -128,9 +129,10 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
     }
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true
-      // xterm would send Ctrl+K to the shell and stop the event; returning
-      // false leaves the key for the app's shortcut handler.
-      if (commandForEvent(e, isMac) === 'palette.toggle') return false
+      // xterm would send a Ctrl+letter shortcut to the shell and stop the
+      // event. Returning false leaves it for the app, for the bindings the
+      // user has given to the app while a terminal is focused.
+      if (bindingForEvent(e, isMac, currentKeybindings())?.inTerminal) return false
       const key = e.key.toLowerCase()
       const copyCombo = isMac ? e.metaKey && !e.shiftKey : e.ctrlKey && e.shiftKey
       if (key === 'c' && copyCombo && term.hasSelection()) {

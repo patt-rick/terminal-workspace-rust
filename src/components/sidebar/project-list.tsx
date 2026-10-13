@@ -6,7 +6,8 @@ import { useWsl } from '../../state/wsl'
 import { ipc, type Project } from '../../lib/ipc'
 import { ContextMenu, type MenuItem } from '../context-menu'
 import { ConfirmDialog } from '../confirm-dialog'
-import { isMac, kbd } from '../../lib/platform'
+import { isMac } from '../../lib/platform'
+import { useShortcutLabel } from '../../state/keybindings'
 
 export function ProjectList() {
   const { projects, addProject } = useProjects()
@@ -66,6 +67,8 @@ function ProjectRow({ project }: { project: Project }) {
   const renameProject = useWorkspace((s) => s.renameProject)
   const removeProject = useWorkspace((s) => s.removeProject)
   const wslDistros = useWsl((s) => s.distros)
+  const newTerminalKey = useShortcutLabel('terminal.new')
+  const newClaudeKey = useShortcutLabel('terminal.newClaude')
 
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [editing, setEditing] = useState(false)
@@ -103,7 +106,7 @@ function ProjectRow({ project }: { project: Project }) {
   const menuItems: MenuItem[] = [
     {
       label: 'New terminal',
-      trailing: <Hint>{kbd('T')}</Hint>,
+      trailing: newTerminalKey ? <Hint>{newTerminalKey}</Hint> : undefined,
       onClick: () => expandAnd(() => void createProjectTerminal(project.id)),
     },
     ...wslDistros.map((d) => ({
@@ -117,7 +120,7 @@ function ProjectRow({ project }: { project: Project }) {
             })
         ),
     })),
-    { label: 'Claude Code', trailing: <Hint>{kbd('⇧T')}</Hint>, onClick: () => newClaude() },
+    { label: 'Claude Code', trailing: newClaudeKey ? <Hint>{newClaudeKey}</Hint> : undefined, onClick: () => newClaude() },
     {
       label: 'Use other models…',
       onClick: () => expandAnd(() => useApiKeys.getState().openLauncher(project.id)),

@@ -68,7 +68,8 @@ export function CodeEditor({
           { key: 'Mod-s', preventDefault: true, run: () => (onSaveRef.current(), true) },
           ...closeBracketsKeymap,
           ...defaultKeymap,
-          ...historyKeymap,
+          // On macOS this one is Cmd+Shift+U, the app's Usage shortcut.
+          ...historyKeymap.filter((b) => b.mac !== 'Mod-Shift-u'),
           ...searchKeymap,
           indentWithTab,
         ]),

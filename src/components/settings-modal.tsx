@@ -11,6 +11,7 @@ import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
 import { ClaudeAccountsSection } from './claude-accounts/claude-accounts-section'
 import { SETTINGS_TABS, type SettingsTabId } from '../lib/settings-tabs'
+import { KeyboardSection } from './settings/keyboard-section'
 import { useUi } from '../state/ui'
 import { useWsl } from '../state/wsl'
 import { isWindows } from '../lib/platform'
@@ -357,6 +358,8 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
               <ProvidersSection />
             </>
           )}
+
+          {tab === 'keyboard' && <KeyboardSection />}
 
           {tab === 'github' && <AccountsSection />}
 

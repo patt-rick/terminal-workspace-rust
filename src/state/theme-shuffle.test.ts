@@ -15,6 +15,7 @@ describe('daily theme shuffle', () => {
       terminal,
       identity,
       customThemes: [],
+      keybindingOverrides: {},
     })
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-09T10:00:00'))

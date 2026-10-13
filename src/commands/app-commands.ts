@@ -17,6 +17,7 @@ import { useSettings } from '../state/settings'
 import { useUi } from '../state/ui'
 import { useUsage } from '../state/usage'
 import { useApiKeys } from '../state/apikeys'
+import { currentKeybindings } from '../state/keybindings'
 
 export interface Command {
   id: string
@@ -172,7 +173,7 @@ export function paletteItems(): PaletteItem[] {
       key: `command:${command.id}`,
       kind: 'command',
       title: command.title,
-      hint: shortcutLabel(command.id, isMac) ?? '',
+      hint: shortcutLabel(command.id, isMac, currentKeybindings()) ?? '',
       run: command.paletteRun ?? command.run,
     })
   }
