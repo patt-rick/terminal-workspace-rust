@@ -81,6 +81,7 @@ src-tauri/src/
 src/
   themes/      token type, presets, ThemeProvider
   lib/         ipc bridge, codemirror + platform helpers, provider presets
+  commands/    the command registry behind the palette and the shortcuts
   state/       zustand stores (workspace, files, diff, settings, identity)
   components/  sidebar, workspace (terminal/editor/markdown), right-sidebar
                (files/git/github/sessions), diff, quick-open, identity,
@@ -221,6 +222,7 @@ You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone an
 
 | Shortcut | Action |
 |---|---|
+| ⌘/Ctrl K, ⌘/Ctrl ⇧ P | Command palette |
 | ⌘/Ctrl T | New terminal in the selected project |
 | ⌘/Ctrl ⇧ T | New terminal running `claude` |
 | ⌘/Ctrl ⇧ D | New terminal running `claude --dangerously-skip-permissions` |
@@ -231,6 +233,9 @@ You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone an
 | ⌘/Ctrl ⇧ B | Toggle the right sidebar |
 | ⌘/Ctrl , | Open settings |
 | ⌘/Ctrl S | Save the active file (in the editor) |
+
+Every command is also in the command palette, which works from anywhere, including a
+focused terminal.
 
 ## Docs
 

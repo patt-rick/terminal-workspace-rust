@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { ProjectList } from './components/sidebar/project-list'
 import { TerminalPane } from './components/workspace/terminal-pane'
 import { FileViewer } from './components/workspace/file-viewer'
@@ -26,7 +26,10 @@ import { useApiKeys } from './state/apikeys'
 import { useWsl } from './state/wsl'
 import { useUsage } from './state/usage'
 import { UsagePage } from './components/usage/usage-page'
-import { kbd } from './lib/platform'
+import { CommandPalette } from './components/command-palette/command-palette'
+import { runCommand } from './commands/app-commands'
+import { commandForEvent } from './lib/keybindings'
+import { isMac, kbd } from './lib/platform'
 import { notify } from './lib/notify'
 import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
@@ -54,19 +57,18 @@ export default function App() {
   const setRightSidebarWidth = useWorkspace((s) => s.setRightSidebarWidth)
   const bumpUnread = useWorkspace((s) => s.bumpUnread)
   const clearUnread = useWorkspace((s) => s.clearUnread)
-  const requestTerminalClose = useWorkspace((s) => s.requestTerminalClose)
   const pendingTerminalClose = useWorkspace((s) => s.pendingTerminalClose)
   const clearPendingTerminalClose = useWorkspace((s) => s.clearPendingTerminalClose)
 
   const settingsOpen = useUi((s) => s.settingsOpen)
   const openSettings = useUi((s) => s.openSettings)
   const closeSettings = useUi((s) => s.closeSettings)
-  const toggleSettings = useUi((s) => s.toggleSettings)
+  const quickOpen = useUi((s) => s.quickOpenOpen)
+  const closeQuickOpen = useUi((s) => s.closeQuickOpen)
+  const paletteOpen = useUi((s) => s.paletteOpen)
 
   const usageOpen = useUsage((s) => s.open)
   const toggleUsage = useUsage((s) => s.togglePage)
-
-  const [quickOpen, setQuickOpen] = useState(false)
 
   const activeTerminalId = selectedProject
     ? activeTerminalByProject[selectedProject.id] ?? null
@@ -100,53 +102,24 @@ export default function App() {
     [selectedProject, activeTerminalId, bumpUnread]
   )
 
+  // Every shortcut is a row in the key table (lib/keybindings.ts) that names a
+  // registry command. The default is always prevented for a bound key, so e.g.
+  // Ctrl+P never reaches the webview's print dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === ',') {
-        e.preventDefault()
-        toggleSettings()
-        return
-      }
-      if (e.key === 'b' || e.key === 'B') {
-        e.preventDefault()
-        if (e.shiftKey) toggleRightSidebar()
-        else toggleSidebar()
-        return
-      }
-      if (e.key === 'p' || e.key === 'P') {
-        e.preventDefault()
-        if (selectedProject) setQuickOpen((v) => !v)
-        return
-      }
-      if (e.shiftKey && (e.key === 'u' || e.key === 'U')) {
-        e.preventDefault()
-        toggleUsage()
-        return
-      }
-      if (!selectedProject) return
-      const key = e.key.toLowerCase()
-      const newClaude = (startupCommand: string): void => {
-        useWorkspace.getState().setProjectExpanded(selectedProject.id, true)
-        void createProjectTerminal(selectedProject.id, { name: 'Claude Code', startupCommand })
-      }
-      if (key === 't' && e.shiftKey) {
-        e.preventDefault()
-        newClaude('claude')
-      } else if (key === 'd' && e.shiftKey) {
-        e.preventDefault()
-        newClaude('claude --dangerously-skip-permissions')
-      } else if (key === 't') {
-        e.preventDefault()
-        void createProjectTerminal(selectedProject.id)
-      } else if (key === 'w' && activeTerminalId && !usageOpen) {
-        e.preventDefault()
-        requestTerminalClose(selectedProject.id, activeTerminalId)
-      }
+      const command = commandForEvent(e, isMac)
+      if (command === null) return
+      e.preventDefault()
+      if (e.repeat) return
+      // The palette's list was built when it opened; other shortcuts acting
+      // behind it would make that list stale.
+      const behindPalette = command !== 'palette.toggle' && command !== 'file.quickOpen'
+      if (useUi.getState().paletteOpen && behindPalette) return
+      runCommand(command)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedProject, activeTerminalId, toggleSidebar, toggleRightSidebar, requestTerminalClose, toggleUsage, usageOpen])
+  }, [])
 
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
@@ -424,8 +397,9 @@ export default function App() {
 
       <SettingsModal open={settingsOpen} onClose={closeSettings} />
       {quickOpen && selectedProject && (
-        <QuickOpen projectId={selectedProject.id} onClose={() => setQuickOpen(false)} />
+        <QuickOpen projectId={selectedProject.id} onClose={closeQuickOpen} />
       )}
+      {paletteOpen && <CommandPalette />}
       <IdentityAutoApply />
       <ModelPicker />
       <InstallPrompt />

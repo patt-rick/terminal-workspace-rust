@@ -10,6 +10,7 @@ import { ipc, isTauri, type RemoteMode } from '../lib/ipc'
 import { AccountsSection } from './identity/accounts-section'
 import { ProvidersSection } from './apikeys/providers-section'
 import { ClaudeAccountsSection } from './claude-accounts/claude-accounts-section'
+import { SETTINGS_TABS, type SettingsTabId } from '../lib/settings-tabs'
 import { useUi } from '../state/ui'
 import { useWsl } from '../state/wsl'
 import { isWindows } from '../lib/platform'
@@ -47,16 +48,6 @@ async function saveTextFile(
     setTimeout(() => URL.revokeObjectURL(url), 0)
   }
 }
-
-type SettingsTabId = 'general' | 'ai' | 'github' | 'remote' | 'updates'
-
-const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
-  { id: 'general', label: 'General' },
-  { id: 'ai', label: 'AI' },
-  { id: 'github', label: 'GitHub' },
-  { id: 'remote', label: 'Remote access' },
-  { id: 'updates', label: 'Updates' },
-]
 
 export function SettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const themes = useThemeList()
