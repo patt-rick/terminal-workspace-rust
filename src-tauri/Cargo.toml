@@ -33,8 +33,9 @@ tokio = { version = "1", features = ["rt", "macros", "sync"] }
 # GitHub REST + device flow
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# GitHub token at rest in the OS keychain
-keyring = { version = "3", features = ["windows-native", "apple-native"] }
+# GitHub token at rest in the OS keychain. With no Linux backend keyring falls
+# back to a mock store that keeps nothing, hence sync-secret-service (libdbus).
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
 # PTY (cross-platform, ConPTY on Windows)
 portable-pty = "0.8"

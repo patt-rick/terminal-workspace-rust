@@ -1,8 +1,8 @@
 name: release
 
-# Build installers for macOS (universal .dmg/.app) and Windows (.exe/.msi/NSIS)
-# and attach them to a GitHub Release. Tauri cannot cross-compile between these
-# OSes, so each is built on its own runner.
+# Build installers for macOS (universal .dmg/.app), Windows (.exe/.msi/NSIS) and
+# Linux (.deb) and attach them to a GitHub Release. Tauri cannot cross-compile
+# between these OSes, so each is built on its own runner.
 #
 # Trigger: push a version tag, e.g. `git tag v0.1.0 && git push --tags`.
 # `workflow_dispatch` is included so you can also run it manually from the
@@ -23,11 +23,21 @@ jobs:
             args: '--target universal-apple-darwin'
           - platform: windows-latest
             args: ''
+          # 22.04 rather than latest: the .deb links against an older glibc, so
+          # it installs on more Ubuntu/Debian releases.
+          - platform: ubuntu-22.04
+            args: '--bundles deb'
     runs-on: ${{ matrix.platform }}
     permissions:
       contents: write # tauri-action needs this to create/update the release
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
 
       - uses: pnpm/action-setup@v4
         with:
