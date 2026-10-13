@@ -34,8 +34,9 @@ fine as a general terminal multiplexer with a built-in editor and git tooling.
 - **Files.** gitignore-aware file tree, CodeMirror 6 editor (12 languages, syntax-themed to the
   active palette), markdown preview, 5 MB text cap with binary detection, and fuzzy quick-open
   (⌘/Ctrl P) backed by an incremental, watcher-refreshed index.
-- **Git + working-tree diff viewer.** Branch / ahead-behind / dirty status, push/publish, and a
-  unified, color-coded diff of uncommitted changes with jump-to-file (powered by libgit2).
+- **Git + working-tree diff viewer.** Branch / ahead-behind / dirty status, staging and
+  committing (through git itself, so hooks and signing apply), push/publish, and a unified,
+  color-coded diff of staged or unstaged changes with jump-to-file (powered by libgit2).
 - **Git identities.** Import GitHub accounts from the `gh` CLI and route pushes per repo: local
   `user.name`/`user.email`, an `origin` rewrite, and a credential helper that resolves the token
   at push time via `gh auth token` (never persisted). The git panel shows the push identity and
@@ -69,7 +70,7 @@ src-tauri/src/
   state/       projects/selection persistence (state.json)
   settings/    theme + editor + terminal prefs (settings.json)
   fs/          gitignore-aware listing, read/write, CRUD
-  git/         info, push, working-tree diff (structured hunks)
+  git/         info, staging + commit, push, staged/unstaged diffs (structured hunks)
   github/      device flow, REST client, keychain token, models
   identity/    gh-account import, per-repo push routing, credential helper
   apikeys/     LLM provider keys: keychain secrets + env injection

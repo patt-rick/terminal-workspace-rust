@@ -550,11 +550,60 @@ pub async fn git_push(
 }
 
 #[tauri::command]
-pub async fn git_diff(store: State<'_, StateStore>, repo_id: String) -> AppResult<Vec<FileDiff>> {
+pub async fn git_diff(
+    store: State<'_, StateStore>,
+    repo_id: String,
+    scope: Option<String>,
+) -> AppResult<Vec<FileDiff>> {
     let root = repo_root(&store, &repo_id)?;
-    tauri::async_runtime::spawn_blocking(move || crate::git::diff(Path::new(&root)).map_err(AppError::Msg))
+    let scope = crate::git::DiffScope::parse(scope.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::git::diff(Path::new(&root), scope).map_err(AppError::Msg)
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
+}
+
+async fn git_write(
+    root: String,
+    op: impl FnOnce(&Path) -> (bool, String) + Send + 'static,
+) -> AppResult<PushResult> {
+    let (ok, output) = tauri::async_runtime::spawn_blocking(move || op(Path::new(&root)))
         .await
-        .map_err(|e| AppError::Msg(e.to_string()))?
+        .map_err(|e| AppError::Msg(e.to_string()))?;
+    Ok(PushResult { ok, output })
+}
+
+/// Stage `paths` (relative to the repo root); an empty list stages everything.
+#[tauri::command]
+pub async fn git_stage(
+    store: State<'_, StateStore>,
+    repo_id: String,
+    paths: Vec<String>,
+) -> AppResult<PushResult> {
+    let root = repo_root(&store, &repo_id)?;
+    git_write(root, move |r| crate::git::stage(r, &paths)).await
+}
+
+/// Unstage `paths`; an empty list unstages everything.
+#[tauri::command]
+pub async fn git_unstage(
+    store: State<'_, StateStore>,
+    repo_id: String,
+    paths: Vec<String>,
+) -> AppResult<PushResult> {
+    let root = repo_root(&store, &repo_id)?;
+    git_write(root, move |r| crate::git::unstage(r, &paths)).await
+}
+
+#[tauri::command]
+pub async fn git_commit(
+    store: State<'_, StateStore>,
+    repo_id: String,
+    message: String,
+) -> AppResult<PushResult> {
+    let root = repo_root(&store, &repo_id)?;
+    git_write(root, move |r| crate::git::commit(r, &message)).await
 }
 
 // ---------- github ----------

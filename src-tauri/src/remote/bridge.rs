@@ -227,7 +227,7 @@ pub fn git_diff(app: &AppHandle, repo_id: &str) -> Result<Vec<FileDiff>, String>
         .state::<StateStore>()
         .repo_path(repo_id)
         .ok_or_else(|| "repo not found".to_string())?;
-    crate::git::diff(Path::new(&path))
+    crate::git::diff(Path::new(&path), crate::git::DiffScope::All)
 }
 
 /// Push the repo's current branch (upstream set on first push, matching desktop).

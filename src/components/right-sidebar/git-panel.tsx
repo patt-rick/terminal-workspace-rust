@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ipc, type CurrentIdentity, type FileDiff, type GitInfo, type PreflightResult, type RepoInfo } from '../../lib/ipc'
+import { ipc, type CurrentIdentity, type GitInfo, type PreflightResult, type RepoInfo } from '../../lib/ipc'
 import { useDiffView } from '../../state/diff'
 import { useIdentity } from '../../state/identity'
 import { useRepos } from '../../state/repos'
 import { useSettings } from '../../state/settings'
-
-const basename = (p: string): string => p.slice(p.lastIndexOf('/') + 1)
+import { GitChanges } from './git-changes'
 
 /** Picker label: the relative path, or the repo name for a root-level repo. */
 const repoLabel = (r: RepoInfo): string => r.relativePath || r.name
@@ -19,35 +18,6 @@ const accountLabel = (
   if (matched) return matched.label
   if (identity?.remoteLogin) return identity.remoteLogin
   return 'Set account'
-}
-
-const statusDot = (status: string): string => {
-  switch (status) {
-    case 'added':
-      return 'text-success'
-    case 'deleted':
-      return 'text-danger'
-    case 'renamed':
-    case 'copied':
-      return 'text-link'
-    default:
-      return 'text-warning'
-  }
-}
-
-const statusGlyph = (status: string): string => {
-  switch (status) {
-    case 'added':
-      return 'A'
-    case 'deleted':
-      return 'D'
-    case 'renamed':
-      return 'R'
-    case 'copied':
-      return 'C'
-    default:
-      return 'M'
-  }
 }
 
 function RepoPicker({
@@ -137,8 +107,8 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const refreshDirty = useRepos((s) => s.refreshDirty)
 
   const [info, setInfo] = useState<GitInfo | null>(null)
-  const [diffs, setDiffs] = useState<FileDiff[]>([])
   const [loading, setLoading] = useState(true)
+  const [reloadTick, setReloadTick] = useState(0)
   const [pushing, setPushing] = useState(false)
   const [pushMsg, setPushMsg] = useState<string | null>(null)
   const [identity, setIdentity] = useState<CurrentIdentity | null>(null)
@@ -147,7 +117,6 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const accounts = useIdentity((s) => s.accounts)
   const appliedTick = useIdentity((s) => s.appliedTick)
   const openPicker = useIdentity((s) => s.openPicker)
-  const show = useDiffView((s) => s.show)
   const active = useDiffView((s) => s.active)
   const closeDiff = useDiffView((s) => s.close)
 
@@ -168,29 +137,29 @@ export function GitPanel({ projectId }: { projectId: string }) {
     void loadRepos(projectId)
   }, [projectId, loadRepos])
 
-  const refresh = useCallback(() => {
+  const loadInfo = useCallback(() => {
     if (!selectedId) {
       setInfo(null)
-      setDiffs([])
       setLoading(false)
       return
     }
     setLoading(true)
-    Promise.all([
-      ipc.git.info(selectedId).catch(() => null),
-      ipc.git.diff(selectedId).catch(() => [] as FileDiff[]),
-    ])
-      .then(([i, d]) => {
-        setInfo(i)
-        setDiffs(d)
-      })
+    ipc.git
+      .info(selectedId)
+      .catch(() => null)
+      .then(setInfo)
       .finally(() => setLoading(false))
     ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
     ipc.identity.pushPreflight(selectedId).then(setPreflight).catch(() => setPreflight(null))
     void refreshDirty(projectId)
   }, [selectedId, projectId, refreshDirty])
 
-  useEffect(refresh, [refresh])
+  useEffect(loadInfo, [loadInfo])
+
+  const refresh = useCallback(() => {
+    loadInfo()
+    setReloadTick((t) => t + 1)
+  }, [loadInfo])
 
   // Refresh the badge when an account is applied elsewhere (picker / auto-apply).
   useEffect(() => {
@@ -321,63 +290,44 @@ export function GitPanel({ projectId }: { projectId: string }) {
         </div>
       </div>
 
-      {pushLogin && (
-        <div
-          className={`px-3 pb-1 text-[11px] ${
-            preflightBad || routingSkipped ? 'text-warning' : 'text-muted'
-          }`}
-        >
-          {preflightBad
-            ? preflight?.reason
-            : routingSkipped
-            ? `Author only — ${pushLogin} not routed (non-HTTPS remote)`
-            : `Pushing as ${pushLogin}`}
-        </div>
-      )}
-
-      {(info.dirty || info.ahead > 0 || !info.hasUpstream) && info.branch && (
-        <div className="px-3 pb-2">
-          <button
-            type="button"
-            onClick={() => void onPush()}
-            disabled={pushing}
-            className="w-full rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            {pushing ? 'Pushing…' : info.hasUpstream ? `Push ${info.ahead || ''}`.trim() : 'Publish branch'}
-          </button>
-          {pushMsg && <div className="mt-1 max-h-16 overflow-auto text-[11px] text-muted">{pushMsg}</div>}
-        </div>
-      )}
-
-      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-        Changes {diffs.length > 0 && `(${diffs.length})`}
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto px-1 pb-2 text-sm">
-        {diffs.length === 0 ? (
-          <div className="px-2 py-1 text-xs text-muted">Working tree clean</div>
-        ) : (
-          diffs.map((f) => {
-            const isActive = active?.repoId === selectedId && active?.file.path === f.path
-            return (
+      {selectedId && (
+        <GitChanges
+          key={selectedId}
+          projectId={projectId}
+          repoId={selectedId}
+          reloadTick={reloadTick}
+          onChanged={loadInfo}
+          push={
+            info.branch
+              ? {
+                  label: info.hasUpstream ? `Push ${info.ahead || ''}`.trim() : 'Publish branch',
+                  verb: info.hasUpstream ? 'Push' : 'Publish branch',
+                  busy: pushing,
+                  pending: info.ahead > 0 || !info.hasUpstream,
+                  hold: preflightBad,
+                  run: onPush,
+                  clearMessage: () => setPushMsg(null),
+                }
+              : null
+          }
+          pushNote={
+            pushLogin && (
               <div
-                key={f.path}
-                onClick={() => selectedId && show(projectId, selectedId, f)}
-                className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 ${
-                  isActive ? 'bg-accent/15' : 'hover:bg-foreground/5'
+                className={`text-[11px] ${
+                  preflightBad || routingSkipped ? 'text-warning' : 'text-muted'
                 }`}
               >
-                <span className={`w-3 flex-shrink-0 text-center font-mono text-xs font-bold ${statusDot(f.status)}`}>
-                  {statusGlyph(f.status)}
-                </span>
-                <span className="truncate text-foreground/85">{basename(f.path)}</span>
-                <span className="min-w-0 flex-1 truncate text-xs text-muted">
-                  {f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : ''}
-                </span>
+                {preflightBad
+                  ? preflight?.reason
+                  : routingSkipped
+                    ? `Author only — ${pushLogin} not routed (non-HTTPS remote)`
+                    : `Pushing as ${pushLogin}`}
               </div>
             )
-          })
-        )}
-      </div>
+          }
+          pushMessage={pushMsg}
+        />
+      )}
     </div>
   )
 }

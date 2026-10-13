@@ -14,6 +14,10 @@ All notable changes to this project are documented here. Format follows
   theme, and jump to any terminal or project.
 - Keyboard settings: rebind any command by pressing the new shortcut, and choose per
   shortcut whether the app or the terminal gets the key while a terminal is focused.
+- Git tab: separate Staged and Changes lists, stage and unstage files, and commit with a
+  message. Commits run through git itself, so hooks and signing apply. When every change
+  is staged, one button commits and pushes; Commit and Push are separate only while some
+  changes are left unstaged.
 
 ### Changed
 - `Ctrl/Cmd+Shift+P` opens the command palette (it used to open file search, which stays on

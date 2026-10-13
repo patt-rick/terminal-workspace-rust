@@ -71,7 +71,7 @@ export function DiffViewer({
         {file.binary ? (
           <Centered>Binary file — diff not shown</Centered>
         ) : file.hunks.length === 0 ? (
-          <Centered>No textual changes</Centered>
+          <Centered>{file.truncated ? 'Too large to show here — open the file' : 'No textual changes'}</Centered>
         ) : (
           file.hunks.map((hunk, hi) => (
             <div key={hi}>
@@ -92,6 +92,9 @@ export function DiffViewer({
               ))}
             </div>
           ))
+        )}
+        {file.truncated && file.hunks.length > 0 && (
+          <div className="px-3 py-2 text-muted">Diff cut off here — open the file to see the rest.</div>
         )}
       </div>
     </div>

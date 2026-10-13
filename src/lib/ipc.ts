@@ -132,6 +132,8 @@ export interface FileDiff {
   oldPath: string | null
   status: string
   binary: boolean
+  /** the diff was cut short, or left out, to keep it small */
+  truncated: boolean
   hunks: DiffHunk[]
 }
 
@@ -571,7 +573,14 @@ export const ipc = {
     info: (repoId: string) => invoke<GitInfo>('git_info', { repoId }),
     push: (repoId: string, branch: string) =>
       invoke<{ ok: boolean; output: string }>('git_push', { repoId, branch }),
-    diff: (repoId: string) => invoke<FileDiff[]>('git_diff', { repoId }),
+    diff: (repoId: string, scope?: 'staged' | 'unstaged') =>
+      invoke<FileDiff[]>('git_diff', { repoId, scope }),
+    stage: (repoId: string, paths: string[]) =>
+      invoke<{ ok: boolean; output: string }>('git_stage', { repoId, paths }),
+    unstage: (repoId: string, paths: string[]) =>
+      invoke<{ ok: boolean; output: string }>('git_unstage', { repoId, paths }),
+    commit: (repoId: string, message: string) =>
+      invoke<{ ok: boolean; output: string }>('git_commit', { repoId, message }),
   },
 
   github: {
