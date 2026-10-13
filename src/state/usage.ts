@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { ipc, type UsageScanResult, type UsageSummary } from '../lib/ipc'
+import { useSettings } from './settings'
 import {
   buildBoundaries,
   type UsageDimension,
@@ -97,7 +98,8 @@ export const useUsage = create<UsageState>((set, get) => ({
       }
       const period = get().period
       const boundaries = buildBoundaries(period, new Date())
-      const summary = await ipc.usage.summary(boundaries)
+      // Read here, not at the top: prices saved during a scan must count.
+      const summary = await ipc.usage.summary(boundaries, useSettings.getState().usagePriceOverrides)
       if (seq !== requestSeq) return
       set({ boundaries, summary, loadedPeriod: period })
     } catch (e) {

@@ -12,6 +12,7 @@ use ledger::{Ledger, ProjectEntry};
 use parking_lot::Mutex;
 use scan::SourceReport;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -146,16 +147,23 @@ impl UsageStore {
         &self,
         boundaries: &[i64],
         apps: &[AppProject],
+        overrides: &HashMap<String, pricing::Override>,
         now_ms: i64,
     ) -> Result<Summary, String> {
         aggregate::validate(boundaries)?;
         let prices = pricing::load(&self.prices_path, now_ms);
+        let table = pricing::apply_overrides(&prices.table, overrides);
         self.with_ledger(now_ms, |ledger| Summary {
-            buckets: aggregate::fold(ledger, &prices.table, boundaries),
+            buckets: aggregate::fold(ledger, &table, boundaries),
             projects: ledger.projects.iter().map(|p| resolve_project(p, apps)).collect(),
             pricing: PricingInfo { tier: prices.tier, fetched_at: prices.fetched_at },
             history_start_ms: ledger.history_start(),
         })
+    }
+
+    /// The loaded rate table, without the user's prices, for the price editor.
+    pub fn price_table(&self, now_ms: i64) -> Vec<pricing::PriceRow> {
+        pricing::price_rows(&pricing::load(&self.prices_path, now_ms).table)
     }
 
     /// Whether a price fetch may start now; records the attempt when it may.
@@ -242,7 +250,7 @@ mod tests {
 
         let apps = vec![AppProject { id: "p1".into(), name: "My App".into(), path: r"C:\repos\app".into() }];
         let summary = store
-            .summary(&[DAY_START, DAY_START + 86_400_000], &apps, NOW)
+            .summary(&[DAY_START, DAY_START + 86_400_000], &apps, &HashMap::new(), NOW)
             .unwrap();
         assert_eq!(summary.buckets.len(), 1);
         assert_eq!(summary.buckets[0].output, 394);
@@ -254,7 +262,7 @@ mod tests {
 
         let reopened = UsageStore::new(data.path());
         let again = reopened
-            .summary(&[DAY_START, DAY_START + 86_400_000], &apps, NOW)
+            .summary(&[DAY_START, DAY_START + 86_400_000], &apps, &HashMap::new(), NOW)
             .unwrap();
         assert_eq!(again.buckets, summary.buckets);
     }
@@ -267,7 +275,7 @@ mod tests {
         let transcripts = tempfile::tempdir().unwrap();
         let store = UsageStore::new(data.path());
         assert!(store.scan(&roots(transcripts.path()), NOW, &mut |_, _| {}).is_err());
-        assert!(store.summary(&[DAY_START, DAY_START + 1], &[], NOW).is_err());
+        assert!(store.summary(&[DAY_START, DAY_START + 1], &[], &HashMap::new(), NOW).is_err());
         assert!(ledger_path.is_dir());
     }
 
@@ -275,7 +283,7 @@ mod tests {
     fn summary_rejects_bad_boundaries() {
         let data = tempfile::tempdir().unwrap();
         let store = UsageStore::new(data.path());
-        assert!(store.summary(&[5], &[], NOW).is_err());
+        assert!(store.summary(&[5], &[], &HashMap::new(), NOW).is_err());
     }
 
     #[test]

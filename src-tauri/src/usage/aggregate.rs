@@ -185,6 +185,19 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_price_turns_an_unpriced_model_into_a_priced_one() {
+        use crate::usage::pricing::{apply_overrides, Override};
+        let mut ledger = Ledger::default();
+        add(&mut ledger, 1, 1500, "Mystery[1m]", 0);
+        let custom = Override::Rates { input: 1.0, output: 2.0, cache_read: Some(0.5), cache_write: None };
+        let overrides = HashMap::from([("mystery".to_string(), custom)]);
+        let b = &fold(&ledger, &apply_overrides(&table(), &overrides), &[1000, 2000])[0];
+        assert!(b.priced);
+        // 1 input and 2 cache-write tokens at $1, 10 cache reads at $0.50, 2 output at $2, per million.
+        assert!((b.cost_usd - (1.0 + 2.0 + 5.0 + 4.0) * 1e-6).abs() < 1e-15);
+    }
+
+    #[test]
     fn output_is_sorted_by_slot_then_model_then_project() {
         let mut ledger = Ledger::default();
         add(&mut ledger, 1, 2500, "b", 0);

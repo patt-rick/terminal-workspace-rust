@@ -1,5 +1,6 @@
 import { invoke, Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { PriceOverrides, PriceTableRow } from './usage-prices'
 
 // ---- Types mirroring the Rust serde models (camelCase) ----
 
@@ -649,7 +650,9 @@ export const ipc = {
 
   usage: {
     scan: () => invoke<UsageScanResult>('usage_scan'),
-    summary: (boundaries: number[]) => invoke<UsageSummary>('usage_summary', { boundaries }),
+    summary: (boundaries: number[], overrides: PriceOverrides) =>
+      invoke<UsageSummary>('usage_summary', { boundaries, overrides }),
+    priceTable: () => invoke<PriceTableRow[]>('usage_price_table'),
     refreshPrices: (force = false) => invoke<boolean>('usage_refresh_prices', { force }),
     onScanProgress: (cb: (p: { done: number; total: number }) => void): Promise<UnlistenFn> =>
       listen<{ done: number; total: number }>('usage:scan-progress', (e) => cb(e.payload)),

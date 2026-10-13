@@ -5,6 +5,7 @@ import {
   type BreakdownRow,
   type UsageDimension,
 } from '../../lib/usage'
+import { priceKey } from '../../lib/usage-prices'
 
 export function UsageBreakdown({
   rows,
@@ -12,7 +13,13 @@ export function UsageBreakdown({
   filterKey,
   onDimension,
   onToggle,
+  custom,
+  onSetPrice,
 }: {
+  /** price keys of the models that have a custom price */
+  custom: Set<string>
+  /** open the custom price for a model row */
+  onSetPrice: (model: string) => void
   rows: BreakdownRow[]
   dimension: UsageDimension
   filterKey: string | null
@@ -50,7 +57,7 @@ export function UsageBreakdown({
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-border text-muted">
-            <th className="py-2 text-left font-normal capitalize">{dimension}</th>
+            <th className="w-2/5 py-2 text-left font-normal capitalize">{dimension}</th>
             <th className="py-2 pl-4 text-right font-normal">Cost</th>
             <th className="py-2 pl-4 text-right font-normal">Share</th>
             <th className="py-2 pl-4 text-right font-normal">Tokens</th>
@@ -67,11 +74,42 @@ export function UsageBreakdown({
                 filterKey === r.key ? 'bg-accent/10' : ''
               }`}
             >
-              <td className="max-w-0 truncate py-2 text-foreground" title={r.label}>
-                {r.label}
+              <td className="max-w-0 py-2 text-foreground" title={r.label}>
+                <div className="flex items-center">
+                <span className="truncate">{r.label}</span>
+                {dimension === 'model' && custom.has(priceKey(r.key)) && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSetPrice(r.key)
+                    }}
+                    title="Priced by a custom price. Click to edit."
+                    className="ml-2 flex-shrink-0 rounded border border-border px-1 text-[10px] text-muted hover:text-foreground"
+                  >
+                    custom
+                  </button>
+                )}
+                </div>
               </td>
               <td className="py-2 pl-4 text-right text-foreground">
-                {r.priced ? formatUsd(r.costUsd) : <span className="text-muted">Unpriced</span>}
+                {r.priced ? (
+                  formatUsd(r.costUsd)
+                ) : dimension === 'model' ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSetPrice(r.key)
+                    }}
+                    title="The price table does not know this model"
+                    className="text-link hover:underline"
+                  >
+                    Set price
+                  </button>
+                ) : (
+                  <span className="text-muted">Unpriced</span>
+                )}
               </td>
               <td className="py-2 pl-4 text-right text-muted">{formatPercent(r.share)}</td>
               <td className="py-2 pl-4 text-right text-foreground">{formatTokens(r.tokens)}</td>

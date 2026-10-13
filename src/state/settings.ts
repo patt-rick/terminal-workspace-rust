@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { DEFAULT_THEME_ID, THEMES } from '../themes'
 import type { Theme } from '../themes'
 import { sanitizeOverrides, type KeybindingOverrides } from '../lib/keybindings'
+import { sanitizePriceOverrides, type PriceOverrides } from '../lib/usage-prices'
 
 export interface EditorSettings {
   fontSize: number
@@ -74,6 +75,8 @@ export interface Settings {
   customThemes: Theme[]
   /** User changes to keyboard shortcuts, on top of the platform defaults. */
   keybindingOverrides: KeybindingOverrides
+  /** The user's own model prices for the Usage page, keyed by model. */
+  usagePriceOverrides: PriceOverrides
 }
 
 export const SETTINGS_DEFAULTS: Settings = {
@@ -85,6 +88,7 @@ export const SETTINGS_DEFAULTS: Settings = {
   identity: IDENTITY_DEFAULTS,
   customThemes: [],
   keybindingOverrides: {},
+  usagePriceOverrides: {},
 }
 
 // localStorage is the first-paint mirror; the Rust settings.json is the durable
@@ -105,6 +109,7 @@ export function readStoredSettings(): Settings {
       identity: { ...IDENTITY_DEFAULTS, ...parsed.identity },
       customThemes: Array.isArray(parsed.customThemes) ? parsed.customThemes : [],
       keybindingOverrides: sanitizeOverrides(parsed.keybindingOverrides),
+      usagePriceOverrides: sanitizePriceOverrides(parsed.usagePriceOverrides),
     }
   } catch {
     return SETTINGS_DEFAULTS
@@ -140,6 +145,7 @@ interface SettingsState extends Settings {
   /** Remove a custom theme by id; if it was selected, fall back to default. */
   removeCustomTheme: (id: string) => void
   setKeybindingOverrides: (overrides: KeybindingOverrides) => void
+  setUsagePriceOverrides: (overrides: PriceOverrides) => void
   /** Replace the whole settings object (used when hydrating from the backend). */
   replaceAll: (s: Settings) => void
 }
@@ -190,6 +196,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       identity,
       customThemes,
       keybindingOverrides,
+      usagePriceOverrides,
     } = get()
     return {
       themeId,
@@ -200,6 +207,7 @@ export const useSettings = create<SettingsState>((set, get) => {
       identity,
       customThemes,
       keybindingOverrides,
+      usagePriceOverrides,
     }
   }
   const commit = (): void => {
@@ -275,6 +283,10 @@ export const useSettings = create<SettingsState>((set, get) => {
       set({ keybindingOverrides: overrides })
       commit()
     },
+    setUsagePriceOverrides: (overrides) => {
+      set({ usagePriceOverrides: overrides })
+      commit()
+    },
     replaceAll: (s) => {
       set({
         themeId: s.themeId,
@@ -285,6 +297,7 @@ export const useSettings = create<SettingsState>((set, get) => {
         identity: s.identity ?? IDENTITY_DEFAULTS,
         customThemes: s.customThemes,
         keybindingOverrides: sanitizeOverrides(s.keybindingOverrides),
+        usagePriceOverrides: sanitizePriceOverrides(s.usagePriceOverrides),
       })
       persistLocal(s)
     },

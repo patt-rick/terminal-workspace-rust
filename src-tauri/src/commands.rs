@@ -1952,7 +1952,9 @@ pub async fn usage_summary(
     app: AppHandle,
     store: State<'_, StateStore>,
     boundaries: Vec<i64>,
+    overrides: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> AppResult<crate::usage::Summary> {
+    let overrides = crate::usage::pricing::overrides_from_json(overrides.unwrap_or_default());
     let apps: Vec<crate::usage::AppProject> = store
         .snapshot()
         .projects
@@ -1961,11 +1963,23 @@ pub async fn usage_summary(
         .collect();
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<crate::usage::UsageStore>()
-            .summary(&boundaries, &apps, crate::claude::creds::now_ms())
+            .summary(&boundaries, &apps, &overrides, crate::claude::creds::now_ms())
     })
     .await
     .map_err(|e| AppError::Msg(e.to_string()))?
     .map_err(AppError::Msg)
+}
+
+/// The rate table the Usage page prices with, for choosing a model to count
+/// another one as.
+#[tauri::command]
+pub async fn usage_price_table(app: AppHandle) -> AppResult<Vec<crate::usage::pricing::PriceRow>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<crate::usage::UsageStore>()
+            .price_table(crate::claude::creds::now_ms())
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))
 }
 
 /// Refresh the price table from the network. Never an error: a failed fetch

@@ -187,6 +187,7 @@ pub fn run() {
             commands::usage_scan,
             commands::usage_summary,
             commands::usage_refresh_prices,
+            commands::usage_price_table,
             commands::identity_list_accounts,
             commands::identity_get_config,
             commands::identity_save_account,

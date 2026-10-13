@@ -16,6 +16,7 @@ describe('daily theme shuffle', () => {
       identity,
       customThemes: [],
       keybindingOverrides: {},
+      usagePriceOverrides: {},
     })
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-09T10:00:00'))

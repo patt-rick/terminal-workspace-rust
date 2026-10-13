@@ -18,6 +18,8 @@ All notable changes to this project are documented here. Format follows
   message. Commits run through git itself, so hooks and signing apply. When every change
   is staged, one button commits and pushes; Commit and Push are separate only while some
   changes are left unstaged.
+- Usage page: **custom prices**. Set a model's rates per million tokens, or count it as
+  another model, for models the price table does not know or where your rate differs.
 - Git tab: **Write message** asks Claude for a commit message from the staged changes and
   puts it in the message field to edit. It uses the Claude Code login and saves nothing to
   the session history.

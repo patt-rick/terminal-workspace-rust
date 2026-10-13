@@ -23,7 +23,8 @@ fine as a general terminal multiplexer with a built-in editor and git tooling.
   the active one app-wide, with a usage meter per account.
 - **Usage.** A full-pane page (⌘/Ctrl ⇧ U) with token and API-equivalent cost history by
   day, model and project, read from Claude's transcripts and kept for 100 days, plus pooled
-  subscription limits across your accounts.
+  subscription limits across your accounts. Models the price table does not know can be
+  given a custom price or counted as another model.
 - **Bring-your-own-LLM keys.** Store provider API keys (Anthropic, OpenAI, Gemini, DeepSeek,
   xAI, Mistral, Groq, OpenRouter, Qwen, or any custom OpenAI-compatible endpoint) in the OS
   keychain; they're injected as env vars into every new terminal, and a model picker launches the

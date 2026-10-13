@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ipc, isTauri } from '../../lib/ipc'
 import { useUsage, type UsageView } from '../../state/usage'
 import { useClaudeAccounts } from '../../state/claude-accounts'
+import { useSettings } from '../../state/settings'
 import {
   breakdown,
   filterBuckets,
@@ -16,6 +17,7 @@ import { UsageChart, seriesColors } from './usage-chart'
 import { UsageTotals } from './usage-totals'
 import { UsageBreakdown } from './usage-breakdown'
 import { UsageLimits } from './usage-limits'
+import { UsagePrices } from './usage-prices'
 
 const VIEWS: { id: UsageView; label: string }[] = [
   { id: 'cost', label: 'Cost' },
@@ -58,6 +60,10 @@ function History() {
   const metric = s.view === 'tokens' ? 'tokens' : 'cost'
   const format = metric === 'cost' ? formatUsd : formatTokens
   const summary = s.summary
+  const overrides = useSettings((x) => x.usagePriceOverrides)
+  const [editingPrice, setEditingPrice] = useState<string | null>(null)
+  const customKeys = useMemo(() => new Set(Object.keys(overrides)), [overrides])
+  const models = useMemo(() => [...new Set((summary?.buckets ?? []).map((b) => b.model))], [summary])
 
   const groups = useMemo(
     () => makeGroups(s.dimension, summary?.projects ?? []),
@@ -117,6 +123,8 @@ function History() {
       : `rates fetched ${new Date(summary.pricing.fetchedAt ?? 0).toLocaleDateString()}${
           summary.pricing.tier === 'stale' ? ' (could not refresh)' : ''
         }`
+  const customCount = customKeys.size
+  const customNote = customCount === 0 ? '' : `, ${customCount} custom price${customCount === 1 ? '' : 's'}`
 
   return (
     <div className={`flex flex-col gap-6 ${s.loading ? 'opacity-60' : ''}`}>
@@ -128,10 +136,19 @@ function History() {
         filterKey={s.filterKey}
         onDimension={s.setDimension}
         onToggle={s.toggleFilter}
+        custom={customKeys}
+        onSetPrice={setEditingPrice}
+      />
+      <UsagePrices
+        models={models}
+        editing={editingPrice}
+        onEdit={setEditingPrice}
+        tableStamp={summary.pricing.fetchedAt}
       />
       <footer className="flex flex-col gap-1 border-t border-border pt-3 text-[11px] text-muted">
         <span>
-          Costs are estimates at list API rates, not your subscription bill ({priceNote}).
+          Costs are estimates at list API rates, not your subscription bill ({priceNote}
+          {customNote}).
         </span>
         {startsLate && (
           <span>
@@ -140,7 +157,9 @@ function History() {
           </span>
         )}
         {sums.unpricedTokens > 0 && (
-          <span>{formatTokens(sums.unpricedTokens)} tokens are from models with no known rate.</span>
+          <span>{formatTokens(sums.unpricedTokens)} tokens are from models with no known rate. Set a price for them
+            under Custom prices.
+          </span>
         )}
         {troubled.map((x) => (
           <span key={x.label}>
