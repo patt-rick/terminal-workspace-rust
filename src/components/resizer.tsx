@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react'
 
 /**
- * A draggable vertical divider that resizes an adjacent panel.
+ * The gap between two panels, draggable to resize the adjacent one.
  * `side` is where the panel sits relative to this handle: 'left' grows the
  * panel as you drag right, 'right' grows it as you drag left.
  */
@@ -54,7 +54,10 @@ export function Resizer({
       role="separator"
       aria-orientation="vertical"
       aria-label={label}
-      className="w-1 flex-shrink-0 cursor-col-resize bg-accent/10 transition-colors hover:bg-accent/30"
-    />
+      style={{ width: 'var(--gap-panel)' }}
+      className="group flex flex-shrink-0 cursor-col-resize justify-center"
+    >
+      <div className="h-full w-0.5 rounded-full transition-colors group-hover:bg-accent/40 group-active:bg-accent/60" />
+    </div>
   )
 }

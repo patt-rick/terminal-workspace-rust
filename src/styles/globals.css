@@ -59,6 +59,32 @@
   --chart-5: #d55181;
 }
 
+/* The shell: rounded panels on a backdrop. Derived from the theme's own tokens
+   so no theme has to define them. A panel's outline, not the colour difference,
+   is what separates it: on a near-black theme the backdrop cannot get darker
+   than the panels, and over a gradient it may be lighter. */
+:root {
+  --radius-panel: 12px;
+  --gap-panel: 8px;
+  --shell-backdrop: color-mix(in srgb, var(--surface) 78%, black);
+  --panel-outline: color-mix(in srgb, var(--foreground) 14%, var(--border));
+}
+:root.light {
+  --shell-backdrop: color-mix(in srgb, var(--surface) 93%, var(--foreground));
+}
+
+/* In the components layer so utilities (e.g. overflow-y-auto) still win. */
+@layer components {
+  .shell-root {
+    background: var(--gradient-app, var(--shell-backdrop));
+  }
+  .panel {
+    border-radius: var(--radius-panel);
+    border: 1px solid var(--panel-outline);
+    overflow: hidden;
+  }
+}
+
 :root.light {
   --chart-1: #2a78d6;
   --chart-2: #eb6834;
@@ -103,6 +129,13 @@ body {
 *::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--scrollbar) 55%, transparent);
   background-clip: content-box;
+}
+/* Unlayered and after the rules above, which a Tailwind utility cannot beat. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 /* The custom title bar drag region (set on the header element). The title bar

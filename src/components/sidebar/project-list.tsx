@@ -1,24 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useProjects } from '../../hooks/use-projects'
 import { useWorkspace, createProjectTerminal } from '../../state/store'
-import { useApiKeys } from '../../state/apikeys'
-import { useWsl } from '../../state/wsl'
+import { useUi } from '../../state/ui'
 import { ipc, type Project } from '../../lib/ipc'
-import { ContextMenu, type MenuItem } from '../context-menu'
-import { ConfirmDialog } from '../confirm-dialog'
-import { isMac } from '../../lib/platform'
-import { useShortcutLabel } from '../../state/keybindings'
+import { stateDotClass, terminalState } from '../../lib/project-status'
+import { ContextMenu } from '../context-menu'
+import { ProjectTile } from './project-tile'
+import { focusTerminal } from '../workspace/terminal-tabs'
+import { useProjectMenu } from './project-menu'
 
 export function ProjectList() {
   const { projects, addProject } = useProjects()
   const sidebarWidth = useWorkspace((s) => s.sidebarWidth)
 
+  // A rename in progress ends when the list goes away (the nav became a rail).
+  useEffect(() => () => useUi.getState().clearRename(), [])
+
   return (
     <aside
-      className="flex h-full flex-col border-r border-border bg-surface"
+      className="panel flex h-full flex-shrink-0 flex-col bg-surface"
       style={{ width: sidebarWidth }}
     >
-      <div className="app-titlebar flex h-11 flex-shrink-0 items-center justify-between px-3">
+      <div className="flex h-10 flex-shrink-0 items-center justify-between px-3">
         <span className="pl-1 text-xs font-semibold uppercase tracking-wide text-muted">
           Projects
         </span>
@@ -65,82 +68,44 @@ function ProjectRow({ project }: { project: Project }) {
   const requestClose = useWorkspace((s) => s.requestTerminalClose)
   const clearUnread = useWorkspace((s) => s.clearUnread)
   const renameProject = useWorkspace((s) => s.renameProject)
-  const removeProject = useWorkspace((s) => s.removeProject)
-  const wslDistros = useWsl((s) => s.distros)
-  const newTerminalKey = useShortcutLabel('terminal.new')
-  const newClaudeKey = useShortcutLabel('terminal.newClaude')
+  const editing = useUi((s) => s.renamingProjectId === project.id)
+  const requestRename = useUi((s) => s.requestRename)
+  const clearRename = useUi((s) => s.clearRename)
+  const { items: menuItems, dialogs } = useProjectMenu(project)
 
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const [editing, setEditing] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
 
   const isSelected = selectedProjectId === project.id
   const collapsedUnread =
     !expanded && project.terminals.some((t) => (unreadByTerminal[t.id] ?? 0) > 0)
 
-  const expandAnd = (fn: () => void): void => {
-    useWorkspace.getState().setProjectExpanded(project.id, true)
-    fn()
-  }
-  const newClaude = (): void =>
-    expandAnd(() =>
-      void createProjectTerminal(project.id, {
-        name: 'Claude Code',
-        startupCommand: 'claude',
-      })
-    )
   const commitRename = (value: string): void => {
     const next = value.trim()
     if (next && next !== project.name) {
       renameProject(project.id, next)
       void ipc.projects.rename(project.id, next)
     }
-    setEditing(false)
+    clearRename()
   }
-  const doRemove = (): void => {
-    void ipc.projects.remove(project.id)
-    removeProject(project.id)
-    setConfirmRemove(false)
-  }
-
-  const menuItems: MenuItem[] = [
-    {
-      label: 'New terminal',
-      trailing: newTerminalKey ? <Hint>{newTerminalKey}</Hint> : undefined,
-      onClick: () => expandAnd(() => void createProjectTerminal(project.id)),
-    },
-    ...wslDistros.map((d) => ({
-      label: `New terminal — WSL ${d.name}`,
-      onClick: () =>
-        expandAnd(
-          () =>
-            void createProjectTerminal(project.id, {
-              shell: `wsl:${d.name}`,
-              name: d.name,
-            })
-        ),
-    })),
-    { label: 'Claude Code', trailing: newClaudeKey ? <Hint>{newClaudeKey}</Hint> : undefined, onClick: () => newClaude() },
-    {
-      label: 'Use other models…',
-      onClick: () => expandAnd(() => useApiKeys.getState().openLauncher(project.id)),
-    },
-    { label: 'Rename', separatorBefore: true, onClick: () => setEditing(true) },
-    {
-      label: isMac ? 'Open in Finder' : 'Open in Explorer',
-      onClick: () => void ipc.projects.openInFileManager(project.id),
-    },
-    { label: 'Open in Terminal', onClick: () => void ipc.projects.openInTerminal(project.id) },
-    { label: 'Remove', danger: true, separatorBefore: true, onClick: () => setConfirmRemove(true) },
-  ]
 
   return (
     <div className="mt-0.5">
       <div
-        className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-current={isSelected || undefined}
+        className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
           isSelected ? 'bg-foreground/10' : 'hover:bg-foreground/5'
         }`}
         onClick={() => {
+          selectProject(project.id)
+          toggleExpanded(project.id)
+        }}
+        onKeyDown={(e) => {
+          // Only the row itself: keys typed in the rename field or on a row button are theirs.
+          if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+          e.preventDefault()
           selectProject(project.id)
           toggleExpanded(project.id)
         }}
@@ -150,7 +115,7 @@ function ProjectRow({ project }: { project: Project }) {
           setMenu({ x: e.clientX, y: e.clientY })
         }}
       >
-        <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: project.color }} />
+        <ProjectTile project={project} size={22} />
         {editing ? (
           <input
             autoFocus
@@ -158,7 +123,7 @@ function ProjectRow({ project }: { project: Project }) {
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitRename((e.target as HTMLInputElement).value)
-              else if (e.key === 'Escape') setEditing(false)
+              else if (e.key === 'Escape') clearRename()
             }}
             onBlur={(e) => commitRename(e.target.value)}
             className="min-w-0 flex-1 rounded bg-field-background px-1 text-foreground outline-none ring-1 ring-accent"
@@ -168,7 +133,7 @@ function ProjectRow({ project }: { project: Project }) {
             className="min-w-0 flex-1 truncate text-foreground/90"
             onDoubleClick={(e) => {
               e.stopPropagation()
-              setEditing(true)
+              requestRename(project.id)
             }}
           >
             {project.name}
@@ -183,7 +148,7 @@ function ProjectRow({ project }: { project: Project }) {
             const r = e.currentTarget.getBoundingClientRect()
             setMenu({ x: r.left, y: r.bottom + 2 })
           }}
-          className={`flex h-5 w-5 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground ${
+          className={`flex h-5 w-5 items-center justify-center rounded text-foreground/50 hover:bg-foreground/10 hover:text-foreground focus-visible:opacity-100 ${
             menu ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
         >
@@ -201,7 +166,7 @@ function ProjectRow({ project }: { project: Project }) {
             useWorkspace.getState().setProjectExpanded(project.id, true)
             void createProjectTerminal(project.id)
           }}
-          className="flex h-5 w-5 items-center justify-center rounded text-foreground/50 opacity-0 hover:bg-foreground/10 hover:text-foreground group-hover:opacity-100"
+          className="flex h-5 w-5 items-center justify-center rounded text-foreground/50 opacity-0 hover:bg-foreground/10 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -217,13 +182,14 @@ function ProjectRow({ project }: { project: Project }) {
           ) : (
             project.terminals.map((t) => {
               const isActive = isSelected && activeTerminalId === t.id
-              const unread = unreadByTerminal[t.id] ?? 0
-              const busy = busyByTerminal[t.id] ?? false
               const label = titleByTerminal[t.id] || t.name
               return (
                 <div
                   key={t.id}
-                  className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm ${
+                  role="button"
+                  tabIndex={0}
+                  aria-current={isActive || undefined}
+                  className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus ${
                     isActive ? 'bg-accent/15 text-foreground' : 'text-foreground/70 hover:bg-foreground/5'
                   }`}
                   onClick={() => {
@@ -231,14 +197,20 @@ function ProjectRow({ project }: { project: Project }) {
                     setActiveTerminal(project.id, t.id)
                     clearUnread(t.id)
                   }}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+                    e.preventDefault()
+                    selectProject(project.id)
+                    setActiveTerminal(project.id, t.id)
+                    clearUnread(t.id)
+                    focusTerminal(t.id)
+                  }}
                 >
-                  {busy ? (
-                    <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-warning" />
-                  ) : unread > 0 ? (
-                    <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-link" />
-                  ) : (
-                    <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-foreground/20" />
-                  )}
+                  <span
+                    className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${stateDotClass(
+                      terminalState(t.id, busyByTerminal, unreadByTerminal)
+                    )}`}
+                  />
                   <span className="min-w-0 flex-1 truncate">{label}</span>
                   <button
                     type="button"
@@ -247,7 +219,7 @@ function ProjectRow({ project }: { project: Project }) {
                       e.stopPropagation()
                       requestClose(project.id, t.id)
                     }}
-                    className="flex h-5 w-5 items-center justify-center rounded text-foreground/40 opacity-0 hover:bg-foreground/10 hover:text-danger group-hover:opacity-100"
+                    className="flex h-5 w-5 items-center justify-center rounded text-foreground/40 opacity-0 hover:bg-foreground/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                       <line x1="18" y1="6" x2="6" y2="18" />
@@ -263,24 +235,7 @@ function ProjectRow({ project }: { project: Project }) {
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
-      <ConfirmDialog
-        open={confirmRemove}
-        title="Remove project?"
-        message={
-          <>
-            Remove <span className="font-medium text-foreground/90">{project.name}</span> from the
-            workspace? This doesn’t delete any files on disk.
-          </>
-        }
-        confirmLabel="Remove"
-        danger
-        onConfirm={doRemove}
-        onCancel={() => setConfirmRemove(false)}
-      />
+      {dialogs}
     </div>
   )
-}
-
-function Hint({ children }: { children: React.ReactNode }) {
-  return <span className="text-xs text-muted">{children}</span>
 }

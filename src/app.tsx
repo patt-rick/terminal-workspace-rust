@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { ProjectList } from './components/sidebar/project-list'
+import { ProjectRail } from './components/sidebar/project-rail'
+import { ProjectIconDialog } from './components/sidebar/project-icon-dialog'
+import { TerminalTabs } from './components/workspace/terminal-tabs'
+import { TopBar } from './components/shell/top-bar'
+import { StatusBar } from './components/shell/status-bar'
 import { TerminalPane } from './components/workspace/terminal-pane'
 import { FileViewer } from './components/workspace/file-viewer'
 import { RightSidebar } from './components/right-sidebar/right-sidebar'
@@ -13,7 +18,6 @@ import { InstallPrompt } from './components/apikeys/install-prompt'
 import { WslInstallPrompt } from './components/wsl-install-prompt'
 import { UpdateManager } from './components/update-manager'
 import { WhatsNewDialog } from './components/whats-new-dialog'
-import { TitleBar } from './components/title-bar'
 import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
@@ -25,12 +29,14 @@ import { useUi } from './state/ui'
 import { useApiKeys } from './state/apikeys'
 import { useWsl } from './state/wsl'
 import { useUsage } from './state/usage'
+import { useProjectIcons } from './state/project-icons'
 import { UsagePage } from './components/usage/usage-page'
 import { CommandPalette } from './components/command-palette/command-palette'
 import { runCommand } from './commands/app-commands'
 import { bindingForEvent, withShortcut } from './lib/keybindings'
 import { currentKeybindings, useShortcutLabel } from './state/keybindings'
 import { isMac } from './lib/platform'
+import { useNarrowWindow } from './lib/use-narrow-window'
 import { notify } from './lib/notify'
 import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
@@ -49,11 +55,9 @@ export default function App() {
   const activeTerminalByProject = useWorkspace((s) => s.activeTerminalByProject)
   const titleByTerminal = useWorkspace((s) => s.titleByTerminal)
   const sidebarCollapsed = useWorkspace((s) => s.sidebarCollapsed)
-  const toggleSidebar = useWorkspace((s) => s.toggleSidebar)
   const sidebarWidth = useWorkspace((s) => s.sidebarWidth)
   const setSidebarWidth = useWorkspace((s) => s.setSidebarWidth)
   const rightSidebarCollapsed = useWorkspace((s) => s.rightSidebarCollapsed)
-  const toggleRightSidebar = useWorkspace((s) => s.toggleRightSidebar)
   const rightSidebarWidth = useWorkspace((s) => s.rightSidebarWidth)
   const setRightSidebarWidth = useWorkspace((s) => s.setRightSidebarWidth)
   const bumpUnread = useWorkspace((s) => s.bumpUnread)
@@ -62,28 +66,19 @@ export default function App() {
   const clearPendingTerminalClose = useWorkspace((s) => s.clearPendingTerminalClose)
 
   const settingsOpen = useUi((s) => s.settingsOpen)
-  const openSettings = useUi((s) => s.openSettings)
   const closeSettings = useUi((s) => s.closeSettings)
   const quickOpen = useUi((s) => s.quickOpenOpen)
   const closeQuickOpen = useUi((s) => s.closeQuickOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
 
   const usageOpen = useUsage((s) => s.open)
-  const toggleUsage = useUsage((s) => s.togglePage)
-  const sidebarKey = useShortcutLabel('view.toggleSidebar')
-  const rightSidebarKey = useShortcutLabel('view.toggleRightSidebar')
-  const usageKey = useShortcutLabel('view.usage')
-  const settingsKey = useShortcutLabel('view.settings')
+  // A narrow window shows the rail whatever the stored choice, which is kept.
+  const narrow = useNarrowWindow()
   const newTerminalKey = useShortcutLabel('terminal.new')
 
   const activeTerminalId = selectedProject
     ? activeTerminalByProject[selectedProject.id] ?? null
     : null
-
-  const activeTerminal = useMemo(
-    () => selectedProject?.terminals.find((t) => t.id === activeTerminalId) ?? null,
-    [selectedProject, activeTerminalId]
-  )
 
   const allTerminals = useMemo(
     () => projects.flatMap((p) => p.terminals.map((t) => ({ ...t, project: p }))),
@@ -139,6 +134,7 @@ export default function App() {
 
   useEffect(() => {
     void useWsl.getState().load()
+    if (isTauri) void useProjectIcons.getState().load()
   }, [])
 
   // Auto-switch Claude accounts on a usage limit: the orchestrator owns the
@@ -232,123 +228,61 @@ export default function App() {
   }, [activeDiff, reposByProject, openFile, closeDiff])
 
   return (
-    <div className="flex h-screen w-screen flex-col bg-surface text-foreground">
-      <TitleBar />
-      <div className="flex min-h-0 flex-1">
-      {!sidebarCollapsed && (
-        <>
-          <ProjectList />
-          <Resizer width={sidebarWidth} setWidth={setSidebarWidth} side="left" label="Resize sidebar" />
-        </>
-      )}
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="app-titlebar flex h-11 items-center gap-2 border-b border-border px-4">
-          {sidebarCollapsed && (
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              title={withShortcut('Show sidebar', sidebarKey)}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-          )}
-          {selectedProject ? (
-            <div className="flex min-w-0 items-center gap-2 text-sm">
-              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: selectedProject.color }} />
-              <span className="truncate font-medium">{selectedProject.name}</span>
-              {activeTerminal && (
-                <>
-                  <span className="text-foreground/30">/</span>
-                  <span className="truncate text-foreground/85">
-                    {titleByTerminal[activeTerminal.id] || activeTerminal.name}
-                  </span>
-                </>
+    <div className="shell-root flex h-screen w-screen flex-col text-foreground">
+      <TopBar />
+      <div className="flex min-h-0 flex-1 px-2">
+        {sidebarCollapsed || narrow ? (
+          <>
+            <ProjectRail />
+            <div className="flex-shrink-0" style={{ width: 'var(--gap-panel)' }} />
+          </>
+        ) : (
+          <>
+            <ProjectList />
+            <Resizer width={sidebarWidth} setWidth={setSidebarWidth} side="left" label="Resize sidebar" />
+          </>
+        )}
+        <main className="relative flex min-w-0 flex-1">
+          <div className="panel flex min-w-0 flex-1 flex-col bg-background" inert={usageOpen}>
+            {selectedProject && selectedProject.terminals.length > 0 && (
+              <TerminalTabs project={selectedProject} />
+            )}
+            <div className="relative min-h-0 flex-1">
+              {allTerminals.map((t) => (
+                <TerminalPane
+                  key={t.id}
+                  terminalId={t.id}
+                  active={!usageOpen && t.project.id === selectedProject?.id && t.id === activeTerminalId}
+                  onBell={() => handleBell(t.project, t)}
+                />
+              ))}
+              {showEmptyNoProject && (
+                <EmptyState
+                  title="No project selected"
+                  actionLabel="Add a project"
+                  onAction={() => void addProject()}
+                />
+              )}
+              {showEmptyNoTerminals && (
+                <EmptyState
+                  title="No terminals yet"
+                  actionLabel={withShortcut('New terminal', newTerminalKey)}
+                  onAction={() => selectedProject && void createProjectTerminal(selectedProject.id)}
+                  secondaryLabel="✳ Claude Code"
+                  onSecondary={() =>
+                    selectedProject &&
+                    void createProjectTerminal(selectedProject.id, {
+                      name: 'Claude Code',
+                      startupCommand: 'claude',
+                    })
+                  }
+                  tertiaryLabel="Use other models"
+                  onTertiary={() =>
+                    selectedProject && useApiKeys.getState().openLauncher(selectedProject.id)
+                  }
+                />
               )}
             </div>
-          ) : (
-            <span className="text-sm text-foreground/40">Terminal Workspace</span>
-          )}
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={toggleUsage}
-            title={withShortcut('Usage', usageKey)}
-            className={`flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-foreground ${
-              usageOpen ? 'text-foreground/80' : 'text-foreground/50'
-            }`}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <line x1="6" y1="20" x2="6" y2="12" />
-              <line x1="12" y1="20" x2="12" y2="4" />
-              <line x1="18" y1="20" x2="18" y2="9" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={() => openSettings()}
-            title={withShortcut('Settings', settingsKey)}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={toggleRightSidebar}
-            disabled={!selectedProject}
-            title={withShortcut('Toggle panel', rightSidebarKey)}
-            className={`flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-foreground disabled:opacity-30 ${
-              selectedProject && !rightSidebarCollapsed ? 'text-foreground/80' : 'text-foreground/50'
-            }`}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="15" y1="3" x2="15" y2="21" />
-            </svg>
-          </button>
-        </header>
-
-        <div className="relative flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1 overflow-hidden" inert={usageOpen}>
-            {allTerminals.map((t) => (
-              <TerminalPane
-                key={t.id}
-                terminalId={t.id}
-                active={!usageOpen && t.project.id === selectedProject?.id && t.id === activeTerminalId}
-                onBell={() => handleBell(t.project, t)}
-              />
-            ))}
-            {showEmptyNoProject && (
-              <EmptyState
-                title="No project selected"
-                actionLabel="Add a project"
-                onAction={() => void addProject()}
-              />
-            )}
-            {showEmptyNoTerminals && (
-              <EmptyState
-                title="No terminals yet"
-                actionLabel={withShortcut('New terminal', newTerminalKey)}
-                onAction={() => selectedProject && void createProjectTerminal(selectedProject.id)}
-                secondaryLabel="✳ Claude Code"
-                onSecondary={() =>
-                  selectedProject &&
-                  void createProjectTerminal(selectedProject.id, {
-                    name: 'Claude Code',
-                    startupCommand: 'claude',
-                  })
-                }
-                tertiaryLabel="Use other models"
-                onTertiary={() =>
-                  selectedProject && useApiKeys.getState().openLauncher(selectedProject.id)
-                }
-              />
-            )}
           </div>
           {showFilePane && selectedProject && (
             <>
@@ -358,7 +292,11 @@ export default function App() {
                 side="right"
                 label="Resize file pane"
               />
-              <div style={{ width: filePaneWidth }} className="h-full min-w-0 flex-shrink-0" inert={usageOpen}>
+              <div
+                style={{ width: filePaneWidth }}
+                className="panel h-full min-w-0 flex-shrink-0"
+                inert={usageOpen}
+              >
                 {activeDiff ? (
                   <DiffViewer file={activeDiff.file} onClose={closeDiff} onOpen={openDiffFile} />
                 ) : (
@@ -368,20 +306,20 @@ export default function App() {
             </>
           )}
           {usageOpen && <UsagePage />}
-        </div>
-      </main>
-      {selectedProject && !rightSidebarCollapsed && (
-        <>
-          <Resizer
-            width={rightSidebarWidth}
-            setWidth={setRightSidebarWidth}
-            side="right"
-            label="Resize panel"
-          />
-          <RightSidebar projectId={selectedProject.id} />
-        </>
-      )}
+        </main>
+        {selectedProject && !rightSidebarCollapsed && (
+          <>
+            <Resizer
+              width={rightSidebarWidth}
+              setWidth={setRightSidebarWidth}
+              side="right"
+              label="Resize panel"
+            />
+            <RightSidebar projectId={selectedProject.id} />
+          </>
+        )}
       </div>
+      <StatusBar />
 
       <ConfirmDialog
         open={!!pendingTerminalClose}
@@ -408,6 +346,7 @@ export default function App() {
       />
 
       <SettingsModal open={settingsOpen} onClose={closeSettings} />
+      <ProjectIconDialog />
       {quickOpen && selectedProject && (
         <QuickOpen projectId={selectedProject.id} onClose={closeQuickOpen} />
       )}

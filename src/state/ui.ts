@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useWorkspace } from './store'
 
 /** Cross-component UI flags that don't belong to a feature store. */
 interface UiState {
@@ -6,6 +7,10 @@ interface UiState {
   settingsTab: string | null
   paletteOpen: boolean
   quickOpenOpen: boolean
+  /** the project whose row is being renamed inline */
+  renamingProjectId: string | null
+  /** the project whose icon dialog is open */
+  iconDialogProjectId: string | null
   openSettings: (tab?: string) => void
   clearSettingsTab: () => void
   closeSettings: () => void
@@ -14,6 +19,11 @@ interface UiState {
   closePalette: () => void
   toggleQuickOpen: () => void
   closeQuickOpen: () => void
+  /** Starts the inline rename, opening the left nav first: the rail has no name to edit. */
+  requestRename: (projectId: string) => void
+  clearRename: () => void
+  openIconDialog: (projectId: string) => void
+  closeIconDialog: () => void
 }
 
 export const useUi = create<UiState>((set) => ({
@@ -21,6 +31,8 @@ export const useUi = create<UiState>((set) => ({
   settingsTab: null,
   paletteOpen: false,
   quickOpenOpen: false,
+  renamingProjectId: null,
+  iconDialogProjectId: null,
   openSettings: (tab?: string) => set({ settingsOpen: true, settingsTab: tab ?? null }),
   clearSettingsTab: () => set({ settingsTab: null }),
   closeSettings: () => set({ settingsOpen: false }),
@@ -29,4 +41,12 @@ export const useUi = create<UiState>((set) => ({
   closePalette: () => set({ paletteOpen: false }),
   toggleQuickOpen: () => set((s) => ({ quickOpenOpen: !s.quickOpenOpen, paletteOpen: false })),
   closeQuickOpen: () => set({ quickOpenOpen: false }),
+  requestRename: (projectId) => {
+    const ws = useWorkspace.getState()
+    if (ws.sidebarCollapsed) ws.setSidebarCollapsed(false)
+    set({ renamingProjectId: projectId })
+  },
+  clearRename: () => set({ renamingProjectId: null }),
+  openIconDialog: (projectId) => set({ iconDialogProjectId: projectId }),
+  closeIconDialog: () => set({ iconDialogProjectId: null }),
 }))

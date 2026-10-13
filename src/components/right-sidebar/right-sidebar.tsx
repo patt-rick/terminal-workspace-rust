@@ -1,33 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FileTree } from './file-tree'
 import { GitPanel } from './git-panel'
 import { GithubPanel } from './github-panel'
 import { SessionsPanel } from './sessions-panel'
-import { useWorkspace } from '../../state/store'
+import { useWorkspace, type RightTab } from '../../state/store'
 import { projectHasDirtyRepo, useRepos } from '../../state/repos'
 
-type Tab = 'files' | 'git' | 'github' | 'sessions'
-
 export function RightSidebar({ projectId }: { projectId: string }) {
-  const [tab, setTab] = useState<Tab>('files')
+  // The tab lives in the store so the status bar can open the Git tab.
+  const tab = useWorkspace((s) => s.rightTab)
+  const select = useWorkspace((s) => s.setRightTab)
   const gitDirty = useRepos((s) => projectHasDirtyRepo(s.dirtyByProject, projectId))
   // Panels are mounted on first visit and then kept mounted (hidden when
   // inactive) so switching tabs never re-runs their data fetch — that re-fetch
   // is what froze the app for projects with many files/sessions.
-  const [visited, setVisited] = useState<Set<Tab>>(() => new Set<Tab>(['files']))
+  const [visited, setVisited] = useState<Set<RightTab>>(() => new Set<RightTab>([tab]))
   const width = useWorkspace((s) => s.rightSidebarWidth)
 
-  const select = (t: Tab): void => {
-    setTab(t)
-    setVisited((v) => (v.has(t) ? v : new Set(v).add(t)))
-  }
+  useEffect(() => {
+    setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
+  }, [tab])
 
   return (
-    <aside
-      style={{ width }}
-      className="flex flex-shrink-0 flex-col border-l border-border bg-surface"
-    >
-      <div className="flex h-11 flex-shrink-0 border-b border-border">
+    <aside style={{ width }} className="panel flex flex-shrink-0 flex-col bg-surface">
+      <div
+        role="tablist"
+        aria-label="Panel"
+        className="mx-2 my-1.5 flex flex-shrink-0 rounded-lg p-0.5"
+        style={{ background: 'var(--shell-backdrop)' }}
+      >
         <TabButton active={tab === 'files'} onClick={() => select('files')}>
           Files
         </TabButton>
@@ -42,22 +43,22 @@ export function RightSidebar({ projectId }: { projectId: string }) {
         </TabButton>
       </div>
       <div className="min-h-0 flex-1">
-        {visited.has('files') && (
+        {(visited.has('files') || tab === 'files') && (
           <Panel active={tab === 'files'}>
             <FileTree projectId={projectId} />
           </Panel>
         )}
-        {visited.has('git') && (
+        {(visited.has('git') || tab === 'git') && (
           <Panel active={tab === 'git'}>
             <GitPanel projectId={projectId} />
           </Panel>
         )}
-        {visited.has('github') && (
+        {(visited.has('github') || tab === 'github') && (
           <Panel active={tab === 'github'}>
             <GithubPanel projectId={projectId} />
           </Panel>
         )}
-        {visited.has('sessions') && (
+        {(visited.has('sessions') || tab === 'sessions') && (
           <Panel active={tab === 'sessions'}>
             <SessionsPanel projectId={projectId} />
           </Panel>
@@ -86,10 +87,12 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`relative flex flex-1 items-center justify-center gap-1 text-xs font-medium ${
+      role="tab"
+      aria-selected={active}
+      className={`relative flex h-6 flex-1 items-center justify-center gap-1 rounded-md border text-xs font-medium ${
         active
-          ? 'border-b-2 border-accent text-foreground'
-          : 'text-muted hover:text-foreground'
+          ? 'border-[var(--panel-outline)] bg-surface text-foreground shadow-sm'
+          : 'border-transparent text-foreground/70 hover:text-foreground'
       }`}
     >
       {children}

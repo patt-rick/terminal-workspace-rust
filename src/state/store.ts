@@ -23,6 +23,16 @@ const SIDEBAR_COLLAPSED_KEY = 'tw:sidebar-collapsed'
 const RIGHT_SIDEBAR_WIDTH_KEY = 'tw:right-sidebar-width'
 const RIGHT_SIDEBAR_COLLAPSED_KEY = 'tw:right-sidebar-collapsed'
 
+export type RightTab = 'files' | 'git' | 'github' | 'sessions'
+
+const storeFlag = (key: string, on: boolean): void => {
+  try {
+    localStorage.setItem(key, on ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
 const clampSidebar = (w: number): number =>
   Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(w)))
 
@@ -65,9 +75,11 @@ interface WorkspaceState {
   pendingWslClaudeInstall: PendingWslClaudeInstall | null
 
   sidebarWidth: number
+  /** the left nav is a rail of project tiles, not the full list */
   sidebarCollapsed: boolean
   rightSidebarWidth: number
   rightSidebarCollapsed: boolean
+  rightTab: RightTab
 
   setProjects: (
     projects: Project[],
@@ -101,7 +113,11 @@ interface WorkspaceState {
   setSidebarWidth: (w: number) => void
   setRightSidebarWidth: (w: number) => void
   toggleSidebar: () => void
+  setSidebarCollapsed: (collapsed: boolean) => void
   toggleRightSidebar: () => void
+  setRightTab: (tab: RightTab) => void
+  /** Shows a right-pane tab, opening the pane if it is collapsed. */
+  openRightTab: (tab: RightTab) => void
 }
 
 export const useWorkspace = create<WorkspaceState>((set) => ({
@@ -132,6 +148,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
       return false
     }
   })(),
+  rightTab: 'files',
 
   setProjects: (projects, opts) =>
     set((state) => {
@@ -340,24 +357,28 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   toggleSidebar: () =>
     set((state) => {
       const next = !state.sidebarCollapsed
-      try {
-        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
-      } catch {
-        // ignore
-      }
+      storeFlag(SIDEBAR_COLLAPSED_KEY, next)
       return { sidebarCollapsed: next }
     }),
+
+  setSidebarCollapsed: (collapsed) => {
+    storeFlag(SIDEBAR_COLLAPSED_KEY, collapsed)
+    set({ sidebarCollapsed: collapsed })
+  },
 
   toggleRightSidebar: () =>
     set((state) => {
       const next = !state.rightSidebarCollapsed
-      try {
-        localStorage.setItem(RIGHT_SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
-      } catch {
-        // ignore
-      }
+      storeFlag(RIGHT_SIDEBAR_COLLAPSED_KEY, next)
       return { rightSidebarCollapsed: next }
     }),
+
+  setRightTab: (tab) => set({ rightTab: tab }),
+
+  openRightTab: (tab) => {
+    storeFlag(RIGHT_SIDEBAR_COLLAPSED_KEY, false)
+    set({ rightTab: tab, rightSidebarCollapsed: false })
+  },
 }))
 
 /** Create a terminal for a project, applying the configured startup command. */

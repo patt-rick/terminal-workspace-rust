@@ -1,4 +1,4 @@
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::git::discover::RepoInfo;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,30 @@ pub struct TerminalRecord {
     pub shell: String,
 }
 
+/// What a project's tile shows in place of its colour and first letter.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProjectIcon {
+    /// An uploaded picture, stored as `project-icons/<project id>.png`.
+    Image,
+    /// A generated face; the webview draws it from the seed.
+    Navii { seed: String },
+}
+
+/// A malformed icon reads as "no icon". Failing here would fail the whole
+/// file, and `StateStore::load` answers that with an empty project list.
+fn lenient_icon<'de, D>(deserializer: D) -> Result<Option<ProjectIcon>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -21,6 +45,8 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub color: String,
+    #[serde(default, deserialize_with = "lenient_icon", skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProjectIcon>,
     #[serde(default)]
     pub terminals: Vec<TerminalRecord>,
     /// Discovered git repos, cached across restarts (revalidated on focus, fully
@@ -111,6 +137,7 @@ impl StateStore {
             name,
             path,
             color,
+            icon: None,
             terminals: Vec::new(),
             repos: Vec::new(),
         };
@@ -139,6 +166,42 @@ impl StateStore {
             p.name = name;
         }
         self.persist(&state);
+    }
+
+    /// Only `#rrggbb`: the value is written into styles in both web clients.
+    pub fn set_project_color(&self, id: &str, color: &str) -> AppResult<Project> {
+        if !is_hex_color(color) {
+            return Err(AppError::Msg("colour must be #rrggbb".to_string()));
+        }
+        self.update_project(id, |p| p.color = color.to_ascii_lowercase())
+    }
+
+    pub fn set_project_icon(&self, id: &str, icon: Option<ProjectIcon>) -> AppResult<Project> {
+        self.update_project(id, |p| p.icon = icon)
+    }
+
+    fn update_project(&self, id: &str, change: impl FnOnce(&mut Project)) -> AppResult<Project> {
+        let mut state = self.inner.lock();
+        let project = state
+            .projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| AppError::Msg("project not found".to_string()))?;
+        change(project);
+        let updated = project.clone();
+        self.persist(&state);
+        Ok(updated)
+    }
+
+    /// Ids of the projects whose icon is an uploaded picture.
+    pub fn image_icon_ids(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .projects
+            .iter()
+            .filter(|p| p.icon == Some(ProjectIcon::Image))
+            .map(|p| p.id.clone())
+            .collect()
     }
 
     pub fn select(&self, id: Option<String>) {
@@ -311,6 +374,83 @@ mod tests {
         let reloaded = StateStore::load(path);
         assert_eq!(reloaded.get_repos(&p.id).len(), 2);
         assert_eq!(reloaded.selected_repo(&p.id).as_deref(), Some("r0"));
+    }
+
+    fn write_state(path: &Path, projects: &str) {
+        let json = format!(r#"{{"version":1,"selectedProjectId":null,"projects":[{projects}]}}"#);
+        fs::write(path, json).unwrap();
+    }
+
+    const OLD_PROJECT: &str = r##"{"id":"p1","name":"one","path":"/one","color":"#ffcc66"}"##;
+
+    #[test]
+    fn a_state_file_from_before_icons_loads_with_no_icon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_state(&path, OLD_PROJECT);
+        let projects = StateStore::load(path).snapshot().projects;
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].icon, None);
+    }
+
+    #[test]
+    fn a_malformed_icon_reads_as_none_and_keeps_every_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let projects = [
+            r##"{"id":"a","name":"a","path":"/a","color":"#ffcc66","icon":5}"##,
+            r##"{"id":"b","name":"b","path":"/b","color":"#ffcc66","icon":{"kind":"nope"}}"##,
+            r##"{"id":"c","name":"c","path":"/c","color":"#ffcc66","icon":null}"##,
+            r##"{"id":"d","name":"d","path":"/d","color":"#ffcc66","icon":{"kind":"navii","seed":"s1"}}"##,
+        ]
+        .join(",");
+        write_state(&path, &projects);
+        let loaded = StateStore::load(path).snapshot().projects;
+        assert_eq!(loaded.len(), 4);
+        assert_eq!(loaded[0].icon, None);
+        assert_eq!(loaded[1].icon, None);
+        assert_eq!(loaded[2].icon, None);
+        assert_eq!(loaded[3].icon, Some(ProjectIcon::Navii { seed: "s1".into() }));
+    }
+
+    #[test]
+    fn icons_are_stored_tagged_by_kind() {
+        let image = serde_json::to_string(&ProjectIcon::Image).unwrap();
+        assert_eq!(image, r#"{"kind":"image"}"#);
+        let navii = serde_json::to_string(&ProjectIcon::Navii { seed: "s".into() }).unwrap();
+        assert_eq!(navii, r#"{"kind":"navii","seed":"s"}"#);
+    }
+
+    #[test]
+    fn colour_and_icon_persist_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let store = StateStore::load(path.clone());
+        let p = store.add_project("/work".to_string());
+
+        let updated = store.set_project_color(&p.id, "#AABBCC").unwrap();
+        assert_eq!(updated.color, "#aabbcc");
+        store.set_project_icon(&p.id, Some(ProjectIcon::Image)).unwrap();
+        assert_eq!(store.image_icon_ids(), vec![p.id.clone()]);
+
+        let reloaded = StateStore::load(path).snapshot().projects;
+        assert_eq!(reloaded[0].color, "#aabbcc");
+        assert_eq!(reloaded[0].icon, Some(ProjectIcon::Image));
+
+        store.set_project_icon(&p.id, None).unwrap();
+        assert!(store.image_icon_ids().is_empty());
+    }
+
+    #[test]
+    fn only_a_six_digit_hex_colour_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateStore::load(dir.path().join("state.json"));
+        let p = store.add_project("/work".to_string());
+        for bad in ["red", "#fc6", "#gggggg", "ffcc66", "#ffcc66;x", "#ffcc6677", ""] {
+            assert!(store.set_project_color(&p.id, bad).is_err(), "{bad}");
+        }
+        assert_eq!(store.snapshot().projects[0].color, p.color);
+        assert!(store.set_project_color("missing", "#ffcc66").is_err());
     }
 
     #[test]

@@ -15,7 +15,8 @@ use crate::identity::{
 use crate::pty::{shell, CreateOpts, PtyManager};
 use crate::search::{IndexStatusResult, QueryResult, SearchStore};
 use crate::settings::SettingsStore;
-use crate::state::{AppState, Project, StateStore, TerminalRecord};
+use crate::project_icons::{self, ProjectIconDir};
+use crate::state::{AppState, Project, ProjectIcon, StateStore, TerminalRecord};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -62,9 +63,73 @@ pub fn projects_add(store: State<StateStore>, path: String) -> Project {
 }
 
 #[tauri::command]
-pub fn projects_remove(store: State<StateStore>, search: State<SearchStore>, id: String) {
+pub fn projects_remove(
+    store: State<StateStore>,
+    search: State<SearchStore>,
+    icons: State<ProjectIconDir>,
+    id: String,
+) {
     search.drop_project(&id);
     store.remove_project(&id);
+    project_icons::delete(&icons.0, &id);
+}
+
+#[tauri::command]
+pub fn projects_set_color(store: State<StateStore>, id: String, color: String) -> AppResult<Project> {
+    store.set_project_color(&id, &color)
+}
+
+/// `bytes` is the 128 px PNG the webview made from the picked picture.
+#[tauri::command]
+pub fn project_icon_set_image(
+    store: State<StateStore>,
+    icons: State<ProjectIconDir>,
+    id: String,
+    bytes: Vec<u8>,
+) -> AppResult<Project> {
+    if store.project_path(&id).is_none() {
+        return Err(AppError::Msg("project not found".to_string()));
+    }
+    project_icons::write(&icons.0, &id, &bytes)?;
+    store.set_project_icon(&id, Some(ProjectIcon::Image))
+}
+
+#[tauri::command]
+pub fn project_icon_set_navii(
+    store: State<StateStore>,
+    icons: State<ProjectIconDir>,
+    id: String,
+    seed: String,
+) -> AppResult<Project> {
+    let valid = (1..=64).contains(&seed.len())
+        && seed.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !valid {
+        return Err(AppError::Msg("invalid icon seed".to_string()));
+    }
+    let project = store.set_project_icon(&id, Some(ProjectIcon::Navii { seed }))?;
+    project_icons::delete(&icons.0, &id);
+    Ok(project)
+}
+
+#[tauri::command]
+pub fn project_icon_clear(
+    store: State<StateStore>,
+    icons: State<ProjectIconDir>,
+    id: String,
+) -> AppResult<Project> {
+    let project = store.set_project_icon(&id, None)?;
+    project_icons::delete(&icons.0, &id);
+    Ok(project)
+}
+
+/// Uploaded icons as `data:` URLs by project id. No asset protocol is
+/// configured, so the webview cannot load the files itself.
+#[tauri::command]
+pub fn project_icons_load(
+    store: State<StateStore>,
+    icons: State<ProjectIconDir>,
+) -> std::collections::HashMap<String, String> {
+    project_icons::read_all(&icons.0, &store.image_icon_ids())
 }
 
 #[tauri::command]

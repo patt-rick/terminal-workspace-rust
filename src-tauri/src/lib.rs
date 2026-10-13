@@ -13,6 +13,7 @@ mod git;
 mod github;
 mod identity;
 mod proc;
+mod project_icons;
 mod pty;
 #[cfg(feature = "remote-access")]
 mod remote;
@@ -64,6 +65,7 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir).ok();
             app.manage(StateStore::load(data_dir.join("state.json")));
+            app.manage(project_icons::ProjectIconDir(data_dir.join("project-icons")));
             app.manage(SettingsStore::new(data_dir.join("settings.json")));
             app.manage(GithubStore::new(data_dir.join("github.json")));
             app.manage(IdentityStore::new(data_dir.join("identity.json")));
@@ -114,6 +116,11 @@ pub fn run() {
             commands::projects_add,
             commands::projects_remove,
             commands::projects_rename,
+            commands::projects_set_color,
+            commands::project_icon_set_image,
+            commands::project_icon_set_navii,
+            commands::project_icon_clear,
+            commands::project_icons_load,
             commands::projects_select,
             commands::projects_set_active,
             commands::project_open_in_terminal,

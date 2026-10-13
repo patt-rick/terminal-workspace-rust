@@ -10,11 +10,16 @@ export interface TerminalRecord {
   shell: string
 }
 
+/** What a project's tile shows in place of its colour and first letter. */
+export type ProjectIcon = { kind: 'image' } | { kind: 'navii'; seed: string }
+
 export interface Project {
   id: string
   name: string
   path: string
+  /** `#rrggbb` */
   color: string
+  icon?: ProjectIcon | null
   terminals: TerminalRecord[]
 }
 
@@ -112,6 +117,8 @@ export interface GitInfo {
   ahead: number
   behind: number
   dirty: boolean
+  /** paths with any change, staged or not; a path counts once */
+  changed: number
   defaultBranch: string | null
 }
 
@@ -483,6 +490,14 @@ export const ipc = {
     add: (path: string) => invoke<Project>('projects_add', { path }),
     remove: (id: string) => invoke<void>('projects_remove', { id }),
     rename: (id: string, name: string) => invoke<void>('projects_rename', { id, name }),
+    setColor: (id: string, color: string) => invoke<Project>('projects_set_color', { id, color }),
+    setIconImage: (id: string, bytes: number[]) =>
+      invoke<Project>('project_icon_set_image', { id, bytes }),
+    setIconNavii: (id: string, seed: string) =>
+      invoke<Project>('project_icon_set_navii', { id, seed }),
+    clearIcon: (id: string) => invoke<Project>('project_icon_clear', { id }),
+    /** uploaded icons as `data:` URLs by project id */
+    loadIcons: () => invoke<Record<string, string>>('project_icons_load'),
     select: (id: string | null) => invoke<void>('projects_select', { id }),
     setActive: (projectId: string, terminalId: string | null) =>
       invoke<void>('projects_set_active', { projectId, terminalId }),

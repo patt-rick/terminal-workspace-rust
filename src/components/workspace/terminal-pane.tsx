@@ -205,6 +205,12 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
 
     const onResize = (): void => fitNow()
     window.addEventListener('resize', onResize)
+    // A tab asks for focus by id: clicking the tab that is already active
+    // changes no state, so the `active` effect below would not run.
+    const onFocusRequest = (e: Event): void => {
+      if ((e as CustomEvent<string>).detail === terminalId) term.focus()
+    }
+    window.addEventListener('tw:focus-terminal', onFocusRequest)
     const ro = new ResizeObserver(() => fitNow())
     ro.observe(hostRef.current)
 
@@ -314,6 +320,7 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       unlistenRemoteSize?.()
       remoteSizeRef.current = null
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('tw:focus-terminal', onFocusRequest)
       useWorkspace.getState().setTerminalBusy(terminalId, false)
       term.dispose()
       termRef.current = null

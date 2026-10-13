@@ -32,7 +32,7 @@ export function DiffViewer({
   onOpen?: () => void
 }) {
   return (
-    <div className="flex h-full flex-col border-l border-border bg-background">
+    <div className="flex h-full flex-col bg-background">
       <div className="flex h-9 flex-shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
         <span className={`font-semibold uppercase ${statusColor(file.status)}`}>{file.status}</span>
         {file.oldPath && file.oldPath !== file.path && (

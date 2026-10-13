@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 
 interface Props {
   open: boolean
@@ -19,6 +19,21 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  // Take the keyboard: a dialog opened while a terminal has focus must not
+  // leave Escape and Enter going to the program running there. Hand it back
+  // on close unless something else has taken it since.
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    ref.current?.focus()
+    return () => {
+      const now = document.activeElement
+      if (now === null || now === document.body) previous?.focus()
+    }
+  }, [open])
+
   if (!open) return null
   return (
     <div
@@ -27,8 +42,18 @@ export function ConfirmDialog({
       onClick={onCancel}
     >
       <div
-        className="w-[360px] rounded-xl border border-border bg-overlay p-5 shadow-xl"
+        ref={ref}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="w-[360px] rounded-xl border border-border bg-overlay p-5 shadow-xl outline-none"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.stopPropagation()
+          onCancel()
+        }}
       >
         <div className="text-sm font-semibold text-foreground">{title}</div>
         <div className="mt-2 break-words text-sm text-muted">{message}</div>
@@ -44,7 +69,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-              danger ? 'bg-danger text-white' : 'bg-accent text-accent-foreground'
+              danger ? 'bg-danger text-accent-foreground' : 'bg-accent text-accent-foreground'
             }`}
           >
             {confirmLabel}

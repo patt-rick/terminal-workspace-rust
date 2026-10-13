@@ -38,14 +38,22 @@ function Segmented<T extends string>({
   label: string
 }) {
   return (
-    <div role="group" aria-label={label} className="flex rounded-md border border-border text-xs">
+    <div
+      role="group"
+      aria-label={label}
+      className="flex rounded-lg p-0.5 text-xs"
+      style={{ background: 'var(--shell-backdrop)' }}
+    >
       {options.map((o) => (
         <button
           key={o.id}
           type="button"
+          aria-pressed={value === o.id}
           onClick={() => onChange(o.id)}
-          className={`px-2.5 py-1 ${
-            value === o.id ? 'bg-foreground/10 text-foreground' : 'text-muted hover:text-foreground'
+          className={`flex h-6 items-center rounded-md border px-2.5 font-medium ${
+            value === o.id
+              ? 'border-[var(--panel-outline)] bg-surface text-foreground shadow-sm'
+              : 'border-transparent text-foreground/70 hover:text-foreground'
           }`}
         >
           {o.label}
@@ -208,7 +216,7 @@ export function UsagePage() {
           closePage()
         }
       }}
-      className="absolute inset-0 z-20 overflow-y-auto bg-background outline-none"
+      className="panel absolute inset-0 z-20 overflow-y-auto bg-background outline-none"
     >
       <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-5">
         <header className="flex flex-wrap items-center gap-3">

@@ -23,8 +23,21 @@ All notable changes to this project are documented here. Format follows
 - Git tab: **Write message** asks Claude for a commit message from the staged changes and
   puts it in the message field to edit. It uses the Claude Code login and saves nothing to
   the session history.
+- Terminal tabs above the terminal for the selected project, with a **+** menu for a new
+  terminal, a WSL terminal, Claude Code or another model.
+- Status bar: the current branch and number of changed files (click to open the Git tab),
+  what is left of the 5-hour limit (click to open Usage), and the terminal count.
+- Project colours and icons: **Colour and icon…** in a project's menu picks a colour, uploads a
+  PNG, JPEG or WebP image, or generates a random face (drawn on the device by Navii).
 
 ### Changed
+- New look: the project list, the terminal and the right panel are rounded panels on a
+  backdrop, resized by dragging the gaps between them. Themes are unchanged.
+- One top bar replaces the title bar and the header. Its search box opens the command
+  palette.
+- The project sidebar no longer hides completely: its small state is a rail of project
+  tiles. Hovering a tile shows the project's name and what each of its terminals is doing.
+- The right panel's tabs are a segmented switch.
 - `Ctrl/Cmd+Shift+P` opens the command palette (it used to open file search, which stays on
   `Ctrl/Cmd+P`). `Ctrl/Cmd+Shift+W` no longer closes a terminal; use `Ctrl/Cmd+W`.
   Shortcuts no longer fire while Alt is held, and on macOS they need Cmd, not Ctrl.

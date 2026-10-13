@@ -23,6 +23,8 @@ pub struct GitInfo {
     pub ahead: usize,
     pub behind: usize,
     pub dirty: bool,
+    /// Paths with any change, staged or not. A path counts once.
+    pub changed: usize,
     pub default_branch: Option<String>,
 }
 
@@ -92,6 +94,7 @@ pub fn get_info(root: &Path) -> GitInfo {
     status_opts.include_untracked(true).recurse_untracked_dirs(true);
     if let Ok(statuses) = repo.statuses(Some(&mut status_opts)) {
         info.dirty = !statuses.is_empty();
+        info.changed = statuses.len();
     }
 
     if let Ok(reference) = repo.find_reference("refs/remotes/origin/HEAD") {
@@ -465,6 +468,24 @@ mod tests {
         let mut out: Vec<String> = diff(root, scope).unwrap().into_iter().map(|f| f.path).collect();
         out.sort();
         out
+    }
+
+    #[test]
+    fn info_counts_each_changed_path_once() {
+        let (dir, _repo) = init_repo();
+        let root = dir.path();
+        assert_eq!(get_info(root).changed, 0);
+
+        write(root, "a.txt", "one\n");
+        write(root, "b.txt", "one\n");
+        let (ok, out) = stage(root, &["a.txt".to_string()]);
+        assert!(ok, "{out}");
+        // a.txt is now both staged and modified again; b.txt is untracked.
+        write(root, "a.txt", "two\n");
+
+        let info = get_info(root);
+        assert_eq!(info.changed, 2);
+        assert!(info.dirty);
     }
 
     #[test]

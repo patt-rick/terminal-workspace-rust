@@ -23,7 +23,7 @@ export function FileViewer({ projectId }: { projectId: string }) {
   const activeState = active ? fileStates[tabKey(active)] : undefined
 
   return (
-    <div className="flex h-full flex-col border-l border-border bg-background">
+    <div className="flex h-full flex-col bg-background">
       <div className="flex h-9 flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-1">
         {projectFiles.map((f) => {
           const st = fileStates[tabKey(f)]

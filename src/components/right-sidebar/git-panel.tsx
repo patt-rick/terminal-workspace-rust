@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ipc, type CurrentIdentity, type GitInfo, type PreflightResult, type RepoInfo } from '../../lib/ipc'
+import { ipc, type CurrentIdentity, type PreflightResult, type RepoInfo } from '../../lib/ipc'
 import { useDiffView } from '../../state/diff'
 import { useIdentity } from '../../state/identity'
 import { useRepos } from '../../state/repos'
+import { useGitStatus } from '../../state/git-status'
 import { useSettings } from '../../state/settings'
 import { GitChanges } from './git-changes'
 
@@ -106,8 +107,11 @@ export function GitPanel({ projectId }: { projectId: string }) {
   const selectRepo = useRepos((s) => s.select)
   const refreshDirty = useRepos((s) => s.refreshDirty)
 
-  const [info, setInfo] = useState<GitInfo | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Shared with the status bar. undefined = this repo has not been loaded yet.
+  const stored = useGitStatus((s) => (selectedId ? s.infoByRepo[selectedId] : null))
+  const refreshStatus = useGitStatus((s) => s.refresh)
+  const info = stored ?? null
+  const loading = stored === undefined
   const [reloadTick, setReloadTick] = useState(0)
   const [pushing, setPushing] = useState(false)
   const [pushMsg, setPushMsg] = useState<string | null>(null)
@@ -138,21 +142,12 @@ export function GitPanel({ projectId }: { projectId: string }) {
   }, [projectId, loadRepos])
 
   const loadInfo = useCallback(() => {
-    if (!selectedId) {
-      setInfo(null)
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    ipc.git
-      .info(selectedId)
-      .catch(() => null)
-      .then(setInfo)
-      .finally(() => setLoading(false))
+    if (!selectedId) return
+    void refreshStatus(selectedId)
     ipc.identity.current(selectedId).then(setIdentity).catch(() => setIdentity(null))
     ipc.identity.pushPreflight(selectedId).then(setPreflight).catch(() => setPreflight(null))
     void refreshDirty(projectId)
-  }, [selectedId, projectId, refreshDirty])
+  }, [selectedId, projectId, refreshDirty, refreshStatus])
 
   useEffect(loadInfo, [loadInfo])
 
