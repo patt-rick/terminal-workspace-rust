@@ -18,6 +18,9 @@
 
 - The user types it in the terminal.
 - It is read from a file the user wrote in the editor (scheduled tasks, webhook templates).
+  (Owner, later the same day: "if anything can be put in the tabs or right pane, you can
+  add it. but we keeping the TUI." So supporting UI, including text fields such as a commit
+  message, belongs in the right pane and its tabs; the centre stays the terminal.)
 - It arrives from outside (a prompt link, a PR event, another agent over MCP) and is either passed on the command line at launch or typed into the terminal's own input line, unsent where the user is present to review it.
 
 ## What we build on
