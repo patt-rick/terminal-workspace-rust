@@ -1850,3 +1850,81 @@ fn open_file_manager(path: &str) -> AppResult<()> {
     }
     Ok(())
 }
+
+// ---- usage history ----
+
+const MAX_PRICE_TABLE_BYTES: u64 = 32 * 1024 * 1024;
+
+#[tauri::command]
+pub async fn usage_scan(app: AppHandle) -> AppResult<crate::usage::ScanResult> {
+    use tauri::Emitter;
+    let home = home_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = app.state::<crate::usage::UsageStore>();
+        let roots = crate::usage::scan::roots(&home);
+        let mut last_emit: Option<std::time::Instant> = None;
+        store.scan(&roots, crate::claude::creds::now_ms(), &mut |done, total| {
+            let due = last_emit.map_or(true, |at| at.elapsed().as_millis() >= 100);
+            if due || done == total {
+                last_emit = Some(std::time::Instant::now());
+                let _ = app.emit("usage:scan-progress", json!({ "done": done, "total": total }));
+            }
+        })
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
+    .map_err(AppError::Msg)
+}
+
+#[tauri::command]
+pub async fn usage_summary(
+    app: AppHandle,
+    store: State<'_, StateStore>,
+    boundaries: Vec<i64>,
+) -> AppResult<crate::usage::Summary> {
+    let apps: Vec<crate::usage::AppProject> = store
+        .snapshot()
+        .projects
+        .into_iter()
+        .map(|p| crate::usage::AppProject { id: p.id, name: p.name, path: p.path })
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<crate::usage::UsageStore>()
+            .summary(&boundaries, &apps, crate::claude::creds::now_ms())
+    })
+    .await
+    .map_err(|e| AppError::Msg(e.to_string()))?
+    .map_err(AppError::Msg)
+}
+
+/// Refresh the price table from the network. Never an error: a failed fetch
+/// keeps whatever table is already on disk. Returns whether a table was
+/// stored, so the page can re-read its price tier and fetch time.
+#[tauri::command]
+pub async fn usage_refresh_prices(app: AppHandle, force: bool) -> AppResult<bool> {
+    let store = app.state::<crate::usage::UsageStore>();
+    if !store.begin_price_attempt(force) {
+        return Ok(false);
+    }
+    let path = store.prices_path().to_path_buf();
+    let client = http_client()?;
+    let request = client
+        .get(crate::usage::pricing::PRICES_URL)
+        .timeout(std::time::Duration::from_secs(30));
+    let body = match request.send().await {
+        Ok(resp)
+            if resp.status().is_success()
+                && resp.content_length().map_or(true, |len| len <= MAX_PRICE_TABLE_BYTES) =>
+        {
+            resp.text().await.ok()
+        }
+        _ => None,
+    };
+    let Some(body) = body else {
+        return Ok(false);
+    };
+    Ok(
+        crate::usage::pricing::store_fetched(&path, &body, crate::claude::creds::now_ms())
+            .is_ok(),
+    )
+}

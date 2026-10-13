@@ -24,6 +24,8 @@ import { registerAutoSwitch } from './state/auto-switch'
 import { useUi } from './state/ui'
 import { useApiKeys } from './state/apikeys'
 import { useWsl } from './state/wsl'
+import { useUsage } from './state/usage'
+import { UsagePage } from './components/usage/usage-page'
 import { kbd } from './lib/platform'
 import { notify } from './lib/notify'
 import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
@@ -60,6 +62,9 @@ export default function App() {
   const openSettings = useUi((s) => s.openSettings)
   const closeSettings = useUi((s) => s.closeSettings)
   const toggleSettings = useUi((s) => s.toggleSettings)
+
+  const usageOpen = useUsage((s) => s.open)
+  const toggleUsage = useUsage((s) => s.togglePage)
 
   const [quickOpen, setQuickOpen] = useState(false)
 
@@ -114,6 +119,11 @@ export default function App() {
         if (selectedProject) setQuickOpen((v) => !v)
         return
       }
+      if (e.shiftKey && (e.key === 'u' || e.key === 'U')) {
+        e.preventDefault()
+        toggleUsage()
+        return
+      }
       if (!selectedProject) return
       const key = e.key.toLowerCase()
       const newClaude = (startupCommand: string): void => {
@@ -129,14 +139,14 @@ export default function App() {
       } else if (key === 't') {
         e.preventDefault()
         void createProjectTerminal(selectedProject.id)
-      } else if (key === 'w' && activeTerminalId) {
+      } else if (key === 'w' && activeTerminalId && !usageOpen) {
         e.preventDefault()
         requestTerminalClose(selectedProject.id, activeTerminalId)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedProject, activeTerminalId, toggleSidebar, toggleRightSidebar, requestTerminalClose])
+  }, [selectedProject, activeTerminalId, toggleSidebar, toggleRightSidebar, requestTerminalClose, toggleUsage, usageOpen])
 
   useEffect(() => {
     if (activeTerminalId && document.hasFocus()) clearUnread(activeTerminalId)
@@ -279,6 +289,20 @@ export default function App() {
           <div className="flex-1" />
           <button
             type="button"
+            onClick={toggleUsage}
+            title={`Usage (${kbd('⇧U')})`}
+            className={`flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-foreground ${
+              usageOpen ? 'text-foreground/80' : 'text-foreground/50'
+            }`}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="6" y1="20" x2="6" y2="12" />
+              <line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="18" y1="20" x2="18" y2="9" />
+            </svg>
+          </button>
+          <button
+            type="button"
             onClick={() => openSettings()}
             title={`Settings (${kbd(',')})`}
             className="flex h-6 w-6 items-center justify-center rounded-md text-foreground/50 hover:bg-foreground/10 hover:text-foreground"
@@ -304,13 +328,13 @@ export default function App() {
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1 overflow-hidden">
+        <div className="relative flex min-h-0 flex-1">
+          <div className="relative min-w-0 flex-1 overflow-hidden" inert={usageOpen}>
             {allTerminals.map((t) => (
               <TerminalPane
                 key={t.id}
                 terminalId={t.id}
-                active={t.project.id === selectedProject?.id && t.id === activeTerminalId}
+                active={!usageOpen && t.project.id === selectedProject?.id && t.id === activeTerminalId}
                 onBell={() => handleBell(t.project, t)}
               />
             ))}
@@ -349,7 +373,7 @@ export default function App() {
                 side="right"
                 label="Resize file pane"
               />
-              <div style={{ width: filePaneWidth }} className="h-full min-w-0 flex-shrink-0">
+              <div style={{ width: filePaneWidth }} className="h-full min-w-0 flex-shrink-0" inert={usageOpen}>
                 {activeDiff ? (
                   <DiffViewer file={activeDiff.file} onClose={closeDiff} onOpen={openDiffFile} />
                 ) : (
@@ -358,6 +382,7 @@ export default function App() {
               </div>
             </>
           )}
+          {usageOpen && <UsagePage />}
         </div>
       </main>
       {selectedProject && !rightSidebarCollapsed && (

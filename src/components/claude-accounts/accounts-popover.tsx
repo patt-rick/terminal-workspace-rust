@@ -1,6 +1,7 @@
 import { useClaudeAccounts } from '../../state/claude-accounts'
 import { useApiKeys } from '../../state/apikeys'
 import { useUi } from '../../state/ui'
+import { useUsage } from '../../state/usage'
 import { formatAgo, sortAccounts } from '../../lib/claude-accounts'
 import { AccountRow } from './account-row'
 
@@ -9,7 +10,7 @@ import { AccountRow } from './account-row'
  * (synthesized from Anthropic provider entries), and footer actions.
  * Rendered inside a fixed overlay owned by AccountPill.
  */
-export function AccountsPopover() {
+export function AccountsPopover({ onClose }: { onClose: () => void }) {
   const s = useClaudeAccounts()
   const apiKeys = useApiKeys((st) => st.keys)
   const openSettings = useUi((st) => st.openSettings)
@@ -122,6 +123,16 @@ export function AccountsPopover() {
               className="text-link hover:underline"
             >
               API Key
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onClose()
+                useUsage.getState().openPage()
+              }}
+              className="text-link hover:underline"
+            >
+              Usage
             </button>
           </>
         )}

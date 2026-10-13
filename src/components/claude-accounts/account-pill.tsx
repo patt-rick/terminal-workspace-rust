@@ -51,7 +51,7 @@ export function AccountPill() {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-7 z-50">
-            <AccountsPopover />
+            <AccountsPopover onClose={() => setOpen(false)} />
           </div>
         </>
       )}

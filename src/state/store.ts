@@ -4,6 +4,7 @@ import { distroOfUncPath } from '../lib/wsl-paths'
 import { WSL_CLAUDE_INSTALL, wslClaudeCheckTarget } from '../lib/wsl-claude'
 import { useSettings } from './settings'
 import { applySkipPermissions, linkClaudeSession } from './claude-command'
+import { useUsage } from './usage'
 
 // Re-exported so existing importers keep working; the implementation lives in
 // claude-command.ts so it can be unit tested without Tauri imports.
@@ -190,7 +191,13 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   // Selection does NOT control expansion: the project row toggles expansion
   // itself, and new/loaded projects are expanded by upsertProject/setProjects.
   // (Forcing expanded=true here defeated the row's collapse toggle.)
-  selectProject: (id) => set({ selectedProjectId: id }),
+  // Choosing a project or terminal closes the Usage page, which otherwise
+  // covers what was just chosen. Only these user-driven paths do it: a shell
+  // exiting or a remote client adding a terminal must not close the page.
+  selectProject: (id) => {
+    useUsage.getState().closePage()
+    set({ selectedProjectId: id })
+  },
 
   renameProject: (id, name) =>
     set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)) })),
@@ -244,6 +251,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
     }),
 
   setActiveTerminal: (projectId, terminalId) => {
+    useUsage.getState().closePage()
     set((state) => ({
       activeTerminalByProject: { ...state.activeTerminalByProject, [projectId]: terminalId },
     }))
@@ -364,6 +372,7 @@ export async function createProjectTerminal(
     apikeyEntryId?: string
   }
 ): Promise<TerminalRecord | null> {
+  useUsage.getState().closePage()
   let startupCommand =
     opts?.startupCommand ?? (useSettings.getState().terminal.startupCommand.trim() || undefined)
   let claudeSessionId = opts?.claudeSessionId

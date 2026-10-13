@@ -19,6 +19,7 @@ mod remote;
 mod search;
 mod settings;
 mod state;
+mod usage;
 mod wsl;
 
 use apikeys::ApiKeyStore;
@@ -74,6 +75,7 @@ pub fn run() {
             app.manage(commands::CredsFileLock(Default::default()));
             app.manage(PtyManager::new());
             app.manage(search::SearchStore::default());
+            app.manage(usage::UsageStore::new(&data_dir));
             // Claude hook events (Notification/Stop) land in the spool dir; the
             // watcher routes them to terminals as attention events. Cheap no-op
             // polling when hooks aren't installed.
@@ -178,6 +180,9 @@ pub fn run() {
             commands::claude_accounts_switch_to_apikey,
             commands::claude_accounts_remove,
             commands::claude_accounts_usage,
+            commands::usage_scan,
+            commands::usage_summary,
+            commands::usage_refresh_prices,
             commands::identity_list_accounts,
             commands::identity_get_config,
             commands::identity_save_account,

@@ -21,6 +21,9 @@ fine as a general terminal multiplexer with a built-in editor and git tooling.
   focused instead of re-opened; deleting one removes its transcript from disk.
 - **Claude accounts.** Add multiple claude.ai accounts (OAuth or import from the CLI) and switch
   the active one app-wide, with a usage meter per account.
+- **Usage.** A full-pane page (⌘/Ctrl ⇧ U) with token and API-equivalent cost history by
+  day, model and project, read from Claude's transcripts and kept for 100 days, plus pooled
+  subscription limits across your accounts.
 - **Bring-your-own-LLM keys.** Store provider API keys (Anthropic, OpenAI, Gemini, DeepSeek,
   xAI, Mistral, Groq, OpenRouter, Qwen, or any custom OpenAI-compatible endpoint) in the OS
   keychain; they're injected as env vars into every new terminal, and a model picker launches the
@@ -71,6 +74,7 @@ src-tauri/src/
   identity/    gh-account import, per-repo push routing, credential helper
   apikeys/     LLM provider keys: keychain secrets + env injection
   claude/      ~/.claude session transcripts: list/summarize, resume, delete
+  usage/       transcript scan → durable usage ledger, model pricing, aggregation
   search/      quick-open index (nucleo) + fs watcher
   remote/      embedded axum server, pairing, WS protocol, bridge allowlist
   commands.rs  #[tauri::command] handlers
@@ -222,6 +226,7 @@ You get a URL + QR code and a 6-digit pairing code; scan the QR on your phone an
 | ⌘/Ctrl ⇧ D | New terminal running `claude --dangerously-skip-permissions` |
 | ⌘/Ctrl W | Close the active terminal (with confirmation) |
 | ⌘/Ctrl P | Quick-open file search |
+| ⌘/Ctrl ⇧ U | Open the Usage page |
 | ⌘/Ctrl B | Toggle the project sidebar |
 | ⌘/Ctrl ⇧ B | Toggle the right sidebar |
 | ⌘/Ctrl , | Open settings |

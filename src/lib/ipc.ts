@@ -378,6 +378,55 @@ export interface ClaudeAccountUsage {
   error: string | null
 }
 
+export interface UsageSource {
+  /** "This computer" or "WSL <distro>" */
+  label: string
+  status: 'ok' | 'missing' | 'partial'
+  files: number
+  skipped: number
+}
+
+export interface UsageScanResult {
+  sources: UsageSource[]
+  scanMs: number
+}
+
+export interface UsageSummaryBucket {
+  /** index into the boundaries sent with the request */
+  slot: number
+  model: string
+  /** index into UsageSummary.projects */
+  project: number
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** API-equivalent estimate; 0 when unpriced */
+  costUsd: number
+  inputCostUsd: number
+  cacheReadCostUsd: number
+  cacheWriteCostUsd: number
+  outputCostUsd: number
+  cacheSavingsUsd: number
+  priced: boolean
+  responses: number
+}
+
+export interface UsageProject {
+  label: string
+  path: string | null
+  projectId: string | null
+  distro: string | null
+}
+
+export interface UsageSummary {
+  buckets: UsageSummaryBucket[]
+  projects: UsageProject[]
+  pricing: { tier: 'fresh' | 'stale' | 'bundled'; fetchedAt: number | null }
+  /** epoch millis of the oldest record kept; null when there is no history */
+  historyStartMs: number | null
+}
+
 /** Connectivity mode for remote access. */
 export type RemoteMode = 'cloudflare' | 'local' | 'tailscale'
 
@@ -585,6 +634,14 @@ export const ipc = {
     remove: (id: string) => invoke<ClaudeAccountsList>('claude_accounts_remove', { id }),
     usage: (force = false) =>
       invoke<ClaudeAccountUsage[]>('claude_accounts_usage', { force }),
+  },
+
+  usage: {
+    scan: () => invoke<UsageScanResult>('usage_scan'),
+    summary: (boundaries: number[]) => invoke<UsageSummary>('usage_summary', { boundaries }),
+    refreshPrices: (force = false) => invoke<boolean>('usage_refresh_prices', { force }),
+    onScanProgress: (cb: (p: { done: number; total: number }) => void): Promise<UnlistenFn> =>
+      listen<{ done: number; total: number }>('usage:scan-progress', (e) => cb(e.payload)),
   },
 
   identity: {
