@@ -61,12 +61,11 @@
 
 /* The shell: rounded panels on a backdrop, with no outline around them (owner
    decision). Derived from the theme's own tokens so no theme has to define
-   them. --panel-outline is for the few controls that keep a hairline. */
+   them. */
 :root {
   --radius-panel: 14px;
   --gap-panel: 10px;
   --shell-backdrop: color-mix(in srgb, var(--surface) 78%, black);
-  --panel-outline: color-mix(in srgb, var(--foreground) 14%, var(--border));
 }
 :root.light {
   --shell-backdrop: color-mix(in srgb, var(--surface) 93%, var(--foreground));

@@ -66,11 +66,7 @@ export function TopBar() {
         {...keepFocus}
         onClick={() => runCommand('palette.toggle')}
         title="Search or run a command"
-        className="flex h-6 min-w-0 items-center gap-2 rounded-md border px-2.5 text-xs text-[var(--title-bar-fg-dim)] hover:text-[var(--title-bar-fg)]"
-        style={{
-          borderColor: 'var(--panel-outline)',
-          background: 'color-mix(in srgb, var(--surface) 70%, transparent)',
-        }}
+        className="flex h-6 min-w-0 items-center gap-2 rounded-lg bg-surface px-2.5 text-xs text-[var(--title-bar-fg-dim)] hover:text-[var(--title-bar-fg)]"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0" aria-hidden>
           <circle cx="11" cy="11" r="7" />
