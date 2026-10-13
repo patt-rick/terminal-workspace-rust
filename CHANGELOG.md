@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-10-13
 ### Added
 - Linux: releases now include a `.deb` installer for Ubuntu and Debian (x86-64).
 - Usage page (`Ctrl/Cmd+Shift+U`): Claude Code token and estimated-cost history by day,
@@ -30,6 +32,9 @@ All notable changes to this project are documented here. Format follows
   what is left of the 5-hour limit (click to open Usage), and the terminal count.
 - Project colours and icons: **Colour and icon…** in a project's menu picks a colour, uploads a
   PNG, JPEG or WebP image, or generates a random face (drawn on the device by Navii).
+- What's new: after an update, the first launch shows what changed in the new version.
+- Settings → Updates: **Release history** lists the notes for every past version.
+- The update dialog shows the new version's release notes with formatting.
 
 ### Changed
 - New look: the project list, the terminal and the right panel are rounded panels on a
