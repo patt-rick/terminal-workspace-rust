@@ -123,8 +123,10 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       void readText()
         .catch(() => '')
         .then((text) => {
-          if (text) term.paste(text)
-          else if (fallbackByte) term.input(fallbackByte)
+          // With no text an empty paste is still sent, as the webview's paste
+          // event used to: a TUI may take it as the cue to read the clipboard.
+          term.paste(text)
+          if (!text && fallbackByte) term.input(fallbackByte)
         })
     }
     term.attachCustomKeyEventHandler((e) => {
@@ -142,11 +144,16 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
       const pasteCombo = isMac
         ? key === 'v' && e.metaKey
         : (key === 'v' && e.ctrlKey && e.shiftKey) || (key === 'insert' && e.shiftKey)
+      // Returning false only stops xterm's key handling. Unless the key is also
+      // cancelled the webview fires its own paste event, which xterm pastes too,
+      // so the text would arrive twice.
       if (pasteCombo) {
+        e.preventDefault()
         pasteFromClipboard()
         return false
       }
       if (key === 'v' && !isMac && e.ctrlKey && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
         pasteFromClipboard('\x16')
         return false
       }

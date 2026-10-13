@@ -31,6 +31,9 @@ All notable changes to this project are documented here. Format follows
 - In a focused terminal on Windows and Linux, `Ctrl+K` now opens the palette and no longer
   reaches the shell (where it deleted to the end of the line).
 
+### Fixed
+- Pasting into a terminal with the keyboard no longer inserts the text twice.
+
 ## [0.4.2] - 2026-09-14
 ### Added
 - Auto-switch to a healthy Claude account when a session hits its usage limit.
