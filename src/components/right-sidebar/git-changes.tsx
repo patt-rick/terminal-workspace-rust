@@ -179,6 +179,10 @@ export function GitChanges({
   const [unstaged, setUnstaged] = useState<FileDiff[]>([])
   const [busy, setBusy] = useState(false)
   const [output, setOutput] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [undo, setUndo] = useState<string | null>(null)
+  const genSeq = useRef(0)
+  const lastAnswer = useRef<string | null>(null)
   const message = useCommitDrafts((s) => s.drafts[repoId] ?? '')
   const setDraft = useCommitDrafts((s) => s.setDraft)
   const show = useDiffView((s) => s.show)
@@ -239,7 +243,10 @@ export function GitChanges({
     if (!alive.current) return false
     if (!res.ok) setOutput(res.output || 'git failed')
     else if (isNotableSuccess(res.output)) setOutput(res.output)
-    if (res.ok && clearMessage) setDraft(repoId, '')
+    if (res.ok && clearMessage) {
+      setDraft(repoId, '')
+      setUndo(null)
+    }
 
     const lists = await load()
     if (!alive.current) return false
@@ -264,7 +271,7 @@ export function GitChanges({
     push?.pending ?? false,
     push?.hold ?? false
   )
-  const working = busy || (push?.busy ?? false)
+  const working = busy || generating || (push?.busy ?? false)
 
   // The index may have changed since the list was drawn (an agent running
   // `git add .` in the terminal). Commit only what the user has seen.
@@ -291,6 +298,38 @@ export function GitChanges({
     if (await commit()) await push.run()
   }
 
+  // Claude's answer replaces the draft; what the user had typed stays one
+  // click away, also after asking a second time.
+  const generate = async (): Promise<void> => {
+    if (working || staged.length === 0) return
+    const seq = ++genSeq.current
+    const before = message
+    setGenerating(true)
+    setOutput(null)
+    let res: GitResult
+    try {
+      res = await ipc.git.generateCommitMessage(repoId)
+    } catch (e) {
+      res = { ok: false, output: String(e) }
+    }
+    if (!alive.current || seq !== genSeq.current) return
+    setGenerating(false)
+    if (!res.ok) {
+      setOutput(res.output || 'Could not write a message')
+      return
+    }
+    // Only text the user wrote is worth restoring, not an earlier answer.
+    const typed = before.trim() !== '' && before !== lastAnswer.current
+    setUndo((kept) => kept ?? (typed ? before : null))
+    lastAnswer.current = res.output
+    setDraft(repoId, res.output)
+  }
+
+  const cancelGenerate = (): void => {
+    genSeq.current++
+    setGenerating(false)
+  }
+
   const commitLabel =
     staged.length > 0 ? `Commit ${staged.length} file${staged.length === 1 ? '' : 's'}` : 'Commit'
   const primary =
@@ -307,7 +346,10 @@ export function GitChanges({
       <div className="flex flex-shrink-0 flex-col gap-1.5 px-3 pb-2">
         <textarea
           value={message}
-          onChange={(e) => setDraft(repoId, e.target.value)}
+          onChange={(e) => {
+            setUndo(null)
+            setDraft(repoId, e.target.value)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               e.preventDefault()
@@ -315,11 +357,46 @@ export function GitChanges({
             }
           }}
           disabled={busy}
+          readOnly={generating}
           rows={3}
           placeholder="Commit message"
           aria-label="Commit message"
           className="w-full resize-none rounded-md border border-border bg-field-background px-2 py-1 text-xs text-foreground outline-none placeholder:text-muted focus:border-accent"
         />
+        <div className="flex h-4 items-center justify-between text-[11px]">
+          {generating ? (
+            <>
+              <span className="text-muted">Writing…</span>
+              <button type="button" onClick={cancelGenerate} className="text-link hover:underline">
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => void generate()}
+                disabled={working || staged.length === 0}
+                title="Sends the staged changes to Claude using your Claude Code login"
+                className="text-link hover:underline disabled:text-muted disabled:no-underline"
+              >
+                Write message
+              </button>
+              {undo !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(repoId, undo)
+                    setUndo(null)
+                  }}
+                  className="text-link hover:underline"
+                >
+                  Undo
+                </button>
+              )}
+            </>
+          )}
+        </div>
         {pushNote}
         {buttons === 'commit-and-push' && push && (
           <button
@@ -371,7 +448,7 @@ export function GitChanges({
           allLabel="Unstage all"
           rowLabel="Unstage"
           rowGlyph="−"
-          busy={busy}
+          busy={busy || generating}
           activePath={activePathIn('staged')}
           onOpen={open}
           onRow={(f) => void run(() => ipc.git.unstage(repoId, pathsOf(f)))}
@@ -385,7 +462,7 @@ export function GitChanges({
           allLabel="Stage all"
           rowLabel="Stage"
           rowGlyph="+"
-          busy={busy}
+          busy={busy || generating}
           activePath={activePathIn('unstaged')}
           onOpen={open}
           onRow={(f) => void run(() => ipc.git.stage(repoId, pathsOf(f)))}

@@ -152,6 +152,7 @@ pub fn run() {
             commands::git_stage,
             commands::git_unstage,
             commands::git_commit,
+            commands::git_generate_commit_message,
             commands::github_get_settings,
             commands::github_set_client_id,
             commands::github_set_token,

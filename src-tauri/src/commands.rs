@@ -606,6 +606,28 @@ pub async fn git_commit(
     git_write(root, move |r| crate::git::commit(r, &message)).await
 }
 
+/// Ask the Claude Code CLI for a commit message for what is staged. Runs with
+/// the same environment clean-up as a new terminal, so it uses the account
+/// chosen in the app.
+#[tauri::command]
+pub async fn git_generate_commit_message(
+    app: AppHandle,
+    store: State<'_, StateStore>,
+    repo_id: String,
+) -> AppResult<PushResult> {
+    let root = repo_root(&store, &repo_id)?;
+    let cli = crate::git::message::Cli {
+        env_remove: claude_ambient_env_remove(&app),
+        cwd: app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("commit-message"),
+        home: app.path().home_dir().ok(),
+    };
+    git_write(root, move |r| crate::git::message::generate(r, &cli)).await
+}
+
 // ---------- github ----------
 
 /// Resolve a Phase 2 `repo_id` to its GitHub `(owner, repo)` slug, parsed from

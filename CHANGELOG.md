@@ -18,6 +18,9 @@ All notable changes to this project are documented here. Format follows
   message. Commits run through git itself, so hooks and signing apply. When every change
   is staged, one button commits and pushes; Commit and Push are separate only while some
   changes are left unstaged.
+- Git tab: **Write message** asks Claude for a commit message from the staged changes and
+  puts it in the message field to edit. It uses the Claude Code login and saves nothing to
+  the session history.
 
 ### Changed
 - `Ctrl/Cmd+Shift+P` opens the command palette (it used to open file search, which stays on

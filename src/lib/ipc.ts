@@ -581,6 +581,8 @@ export const ipc = {
       invoke<{ ok: boolean; output: string }>('git_unstage', { repoId, paths }),
     commit: (repoId: string, message: string) =>
       invoke<{ ok: boolean; output: string }>('git_commit', { repoId, message }),
+    generateCommitMessage: (repoId: string) =>
+      invoke<{ ok: boolean; output: string }>('git_generate_commit_message', { repoId }),
   },
 
   github: {

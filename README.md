@@ -35,7 +35,8 @@ fine as a general terminal multiplexer with a built-in editor and git tooling.
   active palette), markdown preview, 5 MB text cap with binary detection, and fuzzy quick-open
   (⌘/Ctrl P) backed by an incremental, watcher-refreshed index.
 - **Git + working-tree diff viewer.** Branch / ahead-behind / dirty status, staging and
-  committing (through git itself, so hooks and signing apply), push/publish, and a unified,
+  committing (through git itself, so hooks and signing apply), a commit message written by
+  Claude on request, push/publish, and a unified,
   color-coded diff of staged or unstaged changes with jump-to-file (powered by libgit2).
 - **Git identities.** Import GitHub accounts from the `gh` CLI and route pushes per repo: local
   `user.name`/`user.email`, an `origin` rewrite, and a credential helper that resolves the token

@@ -1,4 +1,5 @@
 pub mod discover;
+pub mod message;
 
 use git2::{BranchType, DiffOptions, Patch, Repository};
 use serde::Serialize;
