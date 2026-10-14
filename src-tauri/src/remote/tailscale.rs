@@ -19,7 +19,7 @@ use std::io::Read;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::thread::JoinHandle;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// Budget for a read-only CLI query (`ip`, `status`, `serve status`, `serve off`).
@@ -64,6 +64,11 @@ enum RunError {
     },
 }
 
+/// After the child exits (or is killed), how long to wait for its pipes to close.
+/// A wrapper `tailscale` (a shim that starts the real binary) can leave a
+/// grandchild holding them open; we give up on its output rather than wait.
+const PIPE_GRACE: Duration = Duration::from_secs(1);
+
 /// Run the CLI, killing it if it is still running at `deadline`. Both pipes are
 /// drained on their own threads so a chatty child can't stall on a full pipe.
 fn run(bin: &Path, args: &[&str], deadline: Instant) -> Result<CliOutput, RunError> {
@@ -80,8 +85,8 @@ fn run(bin: &Path, args: &[&str], deadline: Instant) -> Result<CliOutput, RunErr
             Ok(Some(status)) => {
                 return Ok(CliOutput {
                     success: status.success(),
-                    stdout: collect(stdout),
-                    stderr: collect(stderr),
+                    stdout: collect(&stdout),
+                    stderr: collect(&stderr),
                 })
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
@@ -89,8 +94,8 @@ fn run(bin: &Path, args: &[&str], deadline: Instant) -> Result<CliOutput, RunErr
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(RunError::TimedOut {
-                    stdout: collect(stdout),
-                    stderr: collect(stderr),
+                    stdout: collect(&stdout),
+                    stderr: collect(&stderr),
                 });
             }
             Err(e) => {
@@ -102,18 +107,20 @@ fn run(bin: &Path, args: &[&str], deadline: Instant) -> Result<CliOutput, RunErr
     }
 }
 
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<String> {
+fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut pipe) = pipe {
             let _ = pipe.read_to_end(&mut buf);
         }
-        String::from_utf8_lossy(&buf).into_owned()
-    })
+        let _ = tx.send(String::from_utf8_lossy(&buf).into_owned());
+    });
+    rx
 }
 
-fn collect(reader: JoinHandle<String>) -> String {
-    reader.join().unwrap_or_default()
+fn collect(reader: &mpsc::Receiver<String>) -> String {
+    reader.recv_timeout(PIPE_GRACE).unwrap_or_default()
 }
 
 /// Detect this machine's tailnet address. Returns `None` if Tailscale isn't
@@ -202,7 +209,8 @@ fn serve_state(bin: &Path, deadline: Instant) -> ServeState {
 /// `{"TCP":{"443":{"HTTPS":true}},"Web":{"host.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8765"}}}}}`.
 fn parse_serve_status(json: &str) -> ServeState {
     let json = json.trim();
-    if json.is_empty() {
+    // Some CLI versions print `null` for a node with no serve config.
+    if json.is_empty() || json == "null" {
         return ServeState::Free;
     }
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
@@ -312,13 +320,37 @@ fn write_marker(data_dir: &Path, marker: &Marker) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    // Write-then-rename, so a crash mid-write never leaves a torn marker.
+    let tmp = path.with_extension("json.tmp");
     if let Ok(json) = serde_json::to_string(marker) {
-        let _ = std::fs::write(path, json);
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
     }
 }
 
 fn remove_marker(data_dir: &Path) {
     let _ = std::fs::remove_file(marker_path(data_dir));
+}
+
+/// Held for as long as this app owns the serve front. Another copy of the app
+/// sharing the data dir sees the lock and leaves the front alone, rather than
+/// treating a live session's marker as a crash leftover.
+pub struct ServeLease(#[allow(dead_code)] std::fs::File);
+
+/// The lease, or `None` if another running copy of the app holds it.
+pub fn take_lease(data_dir: &Path) -> Option<ServeLease> {
+    let dir = data_dir.join("remote");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join("tailscale-serve.lock"))
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(ServeLease(file))
 }
 
 /// The nonce of a serve config left behind by an earlier run (a crash, or an
@@ -373,19 +405,23 @@ fn new_nonce() -> String {
 
 /// Configure `tailscale serve` to front the local server with HTTPS at the
 /// node's MagicDNS name (needs "HTTPS Certificates" enabled on the tailnet).
-/// Returns the https URL and the session nonce to hand back to [`serve_stop`].
+/// Returns the https URL, the session nonce to hand back to [`serve_stop`], and
+/// the lease to hold until that teardown is done.
 /// A secure origin is what unlocks the full PWA on phones: service worker,
 /// background notifications, install.
 pub fn serve_start(
     data_dir: &Path,
     port: u16,
     info: &TailscaleInfo,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, ServeLease), String> {
     let Some(dns_name) = info.dns_name.clone() else {
         return Err("MagicDNS is disabled; HTTPS needs the tailnet DNS name".to_string());
     };
     let bin = locate().ok_or_else(|| "tailscale CLI not found".to_string())?;
     let _serve = SERVE_LOCK.lock();
+    let lease = take_lease(data_dir).ok_or_else(|| {
+        "another copy of Terminal Workspace is already serving over Tailscale HTTPS".to_string()
+    })?;
 
     let state = serve_state(&bin, Instant::now() + QUERY_TIMEOUT);
     match start_action(&state, read_marker(data_dir).as_ref(), port) {
@@ -402,24 +438,27 @@ pub fn serve_start(
         }
     }
 
+    // Written before the CLI runs: if it times out (or we exit mid-call) it may
+    // still apply the config later, and the marker lets a later launch find it.
+    let nonce = new_nonce();
+    write_marker(
+        data_dir,
+        &Marker {
+            port,
+            nonce: nonce.clone(),
+        },
+    );
     let target = format!("http://127.0.0.1:{port}");
     match run(
         &bin,
         &["serve", "--bg", "--https=443", &target],
         Instant::now() + SERVE_TIMEOUT,
     ) {
-        Ok(out) if out.success => {
-            let nonce = new_nonce();
-            write_marker(
-                data_dir,
-                &Marker {
-                    port,
-                    nonce: nonce.clone(),
-                },
-            );
-            Ok((format!("https://{dns_name}"), nonce))
+        Ok(out) if out.success => Ok((format!("https://{dns_name}"), nonce, lease)),
+        Ok(out) => {
+            remove_marker(data_dir);
+            Err(describe_serve_failure(&out.stdout, &out.stderr))
         }
-        Ok(out) => Err(describe_serve_failure(&out.stdout, &out.stderr)),
         Err(RunError::TimedOut { stdout, stderr }) => Err(match enable_url(&stdout, &stderr) {
             Some(url) => format!(
                 "Tailscale Serve isn't enabled on your tailnet yet. Open {url} to enable it, \
@@ -427,7 +466,10 @@ pub fn serve_start(
             ),
             None => "`tailscale serve` didn't answer".to_string(),
         }),
-        Err(RunError::Spawn(e)) => Err(format!("tailscale serve failed to run: {e}")),
+        Err(RunError::Spawn(e)) => {
+            remove_marker(data_dir);
+            Err(format!("tailscale serve failed to run: {e}"))
+        }
     }
 }
 
@@ -461,7 +503,8 @@ fn enable_url(stdout: &str, stderr: &str) -> Option<String> {
 /// Remove the serve config installed by [`serve_start`], if it is still ours.
 ///
 /// With `nonce`, only the session that installed the marker may remove it (a
-/// newer session may have replaced it). Gives up at `deadline`.
+/// newer session may have replaced it). The caller holds the [`ServeLease`].
+/// Gives up at `deadline`.
 pub fn serve_stop(data_dir: &Path, nonce: Option<&str>, deadline: Instant) {
     let Some(_serve) = SERVE_LOCK.try_lock_until(deadline) else {
         return;
@@ -577,6 +620,24 @@ mod tests {
     fn other_ports_do_not_count() {
         let other = r#"{"TCP":{"8443":{"HTTPS":true}},"Web":{"b.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}"#;
         assert_eq!(parse_serve_status(other), ServeState::Free);
+    }
+
+    #[test]
+    fn null_status_is_free() {
+        assert_eq!(parse_serve_status("null\n"), ServeState::Free);
+    }
+
+    #[test]
+    fn a_held_lease_blocks_a_second_one() {
+        let dir = std::env::temp_dir().join(format!("tw-ts-lease-{}", new_nonce()));
+        let first = take_lease(&dir).expect("free lease");
+        assert!(
+            take_lease(&dir).is_none(),
+            "second copy must not get the lease"
+        );
+        drop(first);
+        assert!(take_lease(&dir).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

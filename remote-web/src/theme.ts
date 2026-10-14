@@ -123,12 +123,15 @@ export function applyTheme(theme: RemoteTheme): void {
 
   // The status bar sits over the page backdrop (see --shell-backdrop).
   const meta = document.querySelector('meta[name="theme-color"]')
+  // Halcyon's backdrop when the theme has no surface, matching index.html.
   const surface = chrome.surface
-  if (meta && surface) {
-    const backdrop = light
-      ? mix(surface, chrome.foreground ?? '#000000', 0.93)
-      : mix(surface, '#000000', 0.78)
-    meta.setAttribute('content', backdrop ?? surface)
+  if (meta) {
+    const backdrop = !surface
+      ? '#12161f'
+      : light
+        ? mix(surface, chrome.foreground ?? '#000000', 0.93)
+        : mix(surface, '#000000', 0.78)
+    meta.setAttribute('content', backdrop ?? surface ?? '#12161f')
   }
 
   try {
