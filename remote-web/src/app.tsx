@@ -13,6 +13,20 @@ import {
 import { GitSheet } from './git-sheet'
 import { SessionsSheet } from './sessions-sheet'
 import { PredictiveEcho } from './predictive-echo'
+import { applyTheme, xtermTheme, type RemoteTheme } from './theme'
+import {
+  BranchIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CloseIcon,
+  HistoryIcon,
+  MenuIcon,
+  SparklesIcon,
+  TerminalIcon,
+  ZapIcon,
+} from './icons'
 
 const TOKEN_KEY = 'tw_remote_token'
 // Speculative local echo is opt-in (prototype): it hides round-trip lag on
@@ -72,31 +86,6 @@ async function ensurePushSubscription(
   }
 }
 
-// Dark theme matching the desktop default. Following the desktop's *active*
-// theme (sent in hello.ok) is a later refinement.
-const XTERM_THEME = {
-  background: '#1a1b26',
-  foreground: '#c0caf5',
-  cursor: '#c0caf5',
-  selectionBackground: '#33467c',
-  black: '#15161e',
-  red: '#f7768e',
-  green: '#9ece6a',
-  yellow: '#e0af68',
-  blue: '#7aa2f7',
-  magenta: '#bb9af7',
-  cyan: '#7dcfff',
-  white: '#a9b1d6',
-  brightBlack: '#414868',
-  brightRed: '#f7768e',
-  brightGreen: '#9ece6a',
-  brightYellow: '#e0af68',
-  brightBlue: '#7aa2f7',
-  brightMagenta: '#bb9af7',
-  brightCyan: '#7dcfff',
-  brightWhite: '#c0caf5',
-}
-
 export function App() {
   const [phase, setPhase] = useState<Phase>(() => (tokenStore.get() ? 'connecting' : 'pair'))
   const [projects, setProjects] = useState<ProjectInfo[]>([])
@@ -128,7 +117,9 @@ export function App() {
   const workingRef = useRef<Set<string>>(working)
   workingRef.current = working
 
-  const [predEcho, setPredEcho] = useState<boolean>(() => localStorage.getItem(PRED_ECHO_KEY) === '1')
+  const [predEcho, setPredEcho] = useState<boolean>(
+    () => localStorage.getItem(PRED_ECHO_KEY) === '1'
+  )
 
   const clientRef = useRef<RemoteClient | null>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -138,6 +129,12 @@ export function App() {
   const curTagRef = useRef<number | null>(null)
   const phaseRef = useRef<Phase>(phase)
   phaseRef.current = phase
+
+  const setTheme = useCallback((theme: RemoteTheme | null) => {
+    if (!theme) return
+    applyTheme(theme)
+    if (termRef.current) termRef.current.options.theme = xtermTheme(theme)
+  }, [])
 
   const termName = (id: string): string =>
     projectsRef.current.flatMap((p) => p.terminals).find((t) => t.id === id)?.name ?? 'Terminal'
@@ -241,7 +238,8 @@ export function App() {
   // Create the client once and connect if a token is already stored.
   useEffect(() => {
     const client = new RemoteClient({
-      onState: (state, _version, vapidKey) => {
+      onState: (state, _version, vapidKey, theme) => {
+        setTheme(theme)
         setProjects(state.projects)
         setStatus('connected')
         setReconnecting(false)
@@ -385,6 +383,7 @@ export function App() {
           setSessionsLoading(false)
         }
       },
+      onTheme: (theme) => setTheme(theme),
       onEvicted: () => {
         tokenStore.clear()
         setReconnecting(false)
@@ -407,7 +406,7 @@ export function App() {
     const token = tokenStore.get()
     if (token) client.connect(token)
     return () => client.disconnect()
-  }, [attachTo])
+  }, [attachTo, setTheme])
 
   // Reconnect promptly when returning to the app or regaining connectivity —
   // this is what removes the "session ended for a bit" gap after an app switch.
@@ -464,171 +463,176 @@ export function App() {
     }
   }, [])
 
-  const mountTerminal = useCallback((node: HTMLDivElement | null) => {
-    if (!node || termRef.current) return
-    const term = new Terminal({
-      theme: XTERM_THEME,
-      fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
-      fontSize: 13,
-      cursorBlink: true,
-      scrollback: 5000,
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(node)
-    fit.fit()
-    // Read the toggle from storage (not React state) so this one-time mount
-    // callback never closes over a stale value.
-    predRef.current = new PredictiveEcho(term, localStorage.getItem(PRED_ECHO_KEY) === '1')
+  const mountTerminal = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node || termRef.current) return
+      const term = new Terminal({
+        theme: xtermTheme(),
+        fontFamily:
+          '"MesloLGS NF", "JetBrainsMono Nerd Font", "Hack Nerd Font", "Fira Code", Menlo, Monaco, monospace',
+        lineHeight: 1.2,
+        fontSize: 13,
+        cursorBlink: true,
+        scrollback: 5000,
+      })
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(node)
+      fit.fit()
+      // Read the toggle from storage (not React state) so this one-time mount
+      // callback never closes over a stale value.
+      predRef.current = new PredictiveEcho(term, localStorage.getItem(PRED_ECHO_KEY) === '1')
 
-    // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
-    // The alt buffer has no scrollback, so xterm converts each wheel tick into
-    // an ↑/↓ key — which a prompt reads as history navigation. Claude Code
-    // scrolls its transcript with PgUp/PgDn ("Scroll wheel is sending arrow
-    // keys · use PgUp/PgDn to scroll"), so we translate scroll gestures into
-    // page keys there instead. xterm 6 has no touch handling at all
-    // (xtermjs/xterm.js#5377), so touch pan is handled here for both buffers.
-    const sendSeq = (seq: string) => {
-      const id = curIdRef.current
-      if (id) clientRef.current?.input(id, seq)
-    }
-    const PAGE_UP = '\x1b[5~'
-    const PAGE_DOWN = '\x1b[6~'
-    const inAltBuffer = () => term.buffer.active.type === 'alternate'
-    const cellHeight = () => Math.max(1, node.clientHeight / term.rows)
-    // Drag distance that flips one page. Kept well under a typical flick
-    // (~200px) so casual swipes always move.
-    const pageThreshold = () => Math.max(48, Math.min(node.clientHeight / 3, 200))
+      // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
+      // The alt buffer has no scrollback, so xterm converts each wheel tick into
+      // an ↑/↓ key — which a prompt reads as history navigation. Claude Code
+      // scrolls its transcript with PgUp/PgDn ("Scroll wheel is sending arrow
+      // keys · use PgUp/PgDn to scroll"), so we translate scroll gestures into
+      // page keys there instead. xterm 6 has no touch handling at all
+      // (xtermjs/xterm.js#5377), so touch pan is handled here for both buffers.
+      const sendSeq = (seq: string) => {
+        const id = curIdRef.current
+        if (id) clientRef.current?.input(id, seq)
+      }
+      const PAGE_UP = '\x1b[5~'
+      const PAGE_DOWN = '\x1b[6~'
+      const inAltBuffer = () => term.buffer.active.type === 'alternate'
+      const cellHeight = () => Math.max(1, node.clientHeight / term.rows)
+      // Drag distance that flips one page. Kept well under a typical flick
+      // (~200px) so casual swipes always move.
+      const pageThreshold = () => Math.max(48, Math.min(node.clientHeight / 3, 200))
 
-    let touchY: number | null = null
-    let touchAcc = 0
-    let gestureDy = 0
-    let gestureStart = 0
-    let gesturePages = 0
-    node.addEventListener(
-      'touchstart',
-      (e) => {
-        touchY = e.touches.length === 1 ? e.touches[0].clientY : null
-        touchAcc = 0
-        gestureDy = 0
-        gesturePages = 0
-        gestureStart = performance.now()
-      },
-      { passive: true }
-    )
-    node.addEventListener(
-      'touchmove',
-      (e) => {
-        if (touchY === null || e.touches.length !== 1) return
-        const dy = e.touches[0].clientY - touchY
-        touchY = e.touches[0].clientY
-        gestureDy += dy
-        if (touchAcc !== 0 && Math.sign(dy) !== Math.sign(touchAcc)) touchAcc = 0
-        touchAcc += dy
-        if (inAltBuffer()) {
-          // Dragging down reveals older content → page up.
-          const page = pageThreshold()
-          while (touchAcc >= page) {
-            sendSeq(PAGE_UP)
-            touchAcc -= page
-            gesturePages++
+      let touchY: number | null = null
+      let touchAcc = 0
+      let gestureDy = 0
+      let gestureStart = 0
+      let gesturePages = 0
+      node.addEventListener(
+        'touchstart',
+        (e) => {
+          touchY = e.touches.length === 1 ? e.touches[0].clientY : null
+          touchAcc = 0
+          gestureDy = 0
+          gesturePages = 0
+          gestureStart = performance.now()
+        },
+        { passive: true }
+      )
+      node.addEventListener(
+        'touchmove',
+        (e) => {
+          if (touchY === null || e.touches.length !== 1) return
+          const dy = e.touches[0].clientY - touchY
+          touchY = e.touches[0].clientY
+          gestureDy += dy
+          if (touchAcc !== 0 && Math.sign(dy) !== Math.sign(touchAcc)) touchAcc = 0
+          touchAcc += dy
+          if (inAltBuffer()) {
+            // Dragging down reveals older content → page up.
+            const page = pageThreshold()
+            while (touchAcc >= page) {
+              sendSeq(PAGE_UP)
+              touchAcc -= page
+              gesturePages++
+            }
+            while (touchAcc <= -page) {
+              sendSeq(PAGE_DOWN)
+              touchAcc += page
+              gesturePages++
+            }
+          } else {
+            const cell = cellHeight()
+            const lines = Math.trunc(touchAcc / cell)
+            if (lines !== 0) {
+              term.scrollLines(-lines)
+              touchAcc -= lines * cell
+            }
           }
-          while (touchAcc <= -page) {
-            sendSeq(PAGE_DOWN)
-            touchAcc += page
-            gesturePages++
+          // Stop the browser from also panning / synthesizing wheel events.
+          e.preventDefault()
+        },
+        { passive: false }
+      )
+      node.addEventListener(
+        'touchend',
+        () => {
+          // A quick flick that didn't reach the page threshold still turns one
+          // page — otherwise short swipes feel dead in the alt buffer.
+          if (
+            touchY !== null &&
+            inAltBuffer() &&
+            gesturePages === 0 &&
+            Math.abs(gestureDy) >= 30 &&
+            performance.now() - gestureStart < 300
+          ) {
+            sendSeq(gestureDy > 0 ? PAGE_UP : PAGE_DOWN)
           }
+          touchY = null
+        },
+        { passive: true }
+      )
+
+      let wheelAcc = 0
+      term.attachCustomWheelEventHandler((ev) => {
+        if (!inAltBuffer()) return true // normal buffer: xterm scrolls its scrollback
+        const px =
+          ev.deltaMode === WheelEvent.DOM_DELTA_LINE
+            ? ev.deltaY * cellHeight()
+            : ev.deltaMode === WheelEvent.DOM_DELTA_PAGE
+              ? ev.deltaY * node.clientHeight
+              : ev.deltaY
+        if (wheelAcc !== 0 && Math.sign(px) !== Math.sign(wheelAcc)) wheelAcc = 0
+        wheelAcc += px
+        const page = pageThreshold()
+        while (wheelAcc >= page) {
+          sendSeq(PAGE_DOWN)
+          wheelAcc -= page
+        }
+        while (wheelAcc <= -page) {
+          sendSeq(PAGE_UP)
+          wheelAcc += page
+        }
+        return false // handled — suppress xterm's wheel→arrow fallback
+      })
+
+      term.onData((data) => {
+        const id = curIdRef.current
+        if (!id) return
+        // Render the keystroke locally first (instant), then send it unchanged.
+        predRef.current?.predict(data)
+        clientRef.current?.input(id, data)
+      })
+      term.onResize(({ cols, rows }) => {
+        const id = curIdRef.current
+        if (id) clientRef.current?.resize(id, cols, rows)
+      })
+      // OSC 52: a program in the remote terminal copied to the clipboard — route it
+      // to THIS device's clipboard (R3.16). Payload is "<selection>;<base64>".
+      term.parser.registerOscHandler(52, (payload) => {
+        const semi = payload.indexOf(';')
+        const b64 = semi >= 0 ? payload.slice(semi + 1) : ''
+        if (!b64 || b64 === '?') return true // clipboard query/clear — ignore
+        let text: string
+        try {
+          text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
+        } catch {
+          return true
+        }
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText(text)
+            .catch(() => notify('Copy', text.length > 48 ? `${text.slice(0, 48)}…` : text))
         } else {
-          const cell = cellHeight()
-          const lines = Math.trunc(touchAcc / cell)
-          if (lines !== 0) {
-            term.scrollLines(-lines)
-            touchAcc -= lines * cell
-          }
+          // No async Clipboard API (e.g. non-secure http on Tailscale) — surface it.
+          notify('Copied to terminal', text.length > 48 ? `${text.slice(0, 48)}…` : text)
         }
-        // Stop the browser from also panning / synthesizing wheel events.
-        e.preventDefault()
-      },
-      { passive: false }
-    )
-    node.addEventListener(
-      'touchend',
-      () => {
-        // A quick flick that didn't reach the page threshold still turns one
-        // page — otherwise short swipes feel dead in the alt buffer.
-        if (
-          touchY !== null &&
-          inAltBuffer() &&
-          gesturePages === 0 &&
-          Math.abs(gestureDy) >= 30 &&
-          performance.now() - gestureStart < 300
-        ) {
-          sendSeq(gestureDy > 0 ? PAGE_UP : PAGE_DOWN)
-        }
-        touchY = null
-      },
-      { passive: true }
-    )
-
-    let wheelAcc = 0
-    term.attachCustomWheelEventHandler((ev) => {
-      if (!inAltBuffer()) return true // normal buffer: xterm scrolls its scrollback
-      const px =
-        ev.deltaMode === WheelEvent.DOM_DELTA_LINE
-          ? ev.deltaY * cellHeight()
-          : ev.deltaMode === WheelEvent.DOM_DELTA_PAGE
-            ? ev.deltaY * node.clientHeight
-            : ev.deltaY
-      if (wheelAcc !== 0 && Math.sign(px) !== Math.sign(wheelAcc)) wheelAcc = 0
-      wheelAcc += px
-      const page = pageThreshold()
-      while (wheelAcc >= page) {
-        sendSeq(PAGE_DOWN)
-        wheelAcc -= page
-      }
-      while (wheelAcc <= -page) {
-        sendSeq(PAGE_UP)
-        wheelAcc += page
-      }
-      return false // handled — suppress xterm's wheel→arrow fallback
-    })
-
-    term.onData((data) => {
-      const id = curIdRef.current
-      if (!id) return
-      // Render the keystroke locally first (instant), then send it unchanged.
-      predRef.current?.predict(data)
-      clientRef.current?.input(id, data)
-    })
-    term.onResize(({ cols, rows }) => {
-      const id = curIdRef.current
-      if (id) clientRef.current?.resize(id, cols, rows)
-    })
-    // OSC 52: a program in the remote terminal copied to the clipboard — route it
-    // to THIS device's clipboard (R3.16). Payload is "<selection>;<base64>".
-    term.parser.registerOscHandler(52, (payload) => {
-      const semi = payload.indexOf(';')
-      const b64 = semi >= 0 ? payload.slice(semi + 1) : ''
-      if (!b64 || b64 === '?') return true // clipboard query/clear — ignore
-      let text: string
-      try {
-        text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
-      } catch {
         return true
-      }
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard
-          .writeText(text)
-          .catch(() => notify('Copy', text.length > 48 ? `${text.slice(0, 48)}…` : text))
-      } else {
-        // No async Clipboard API (e.g. non-secure http on Tailscale) — surface it.
-        notify('Copied to terminal', text.length > 48 ? `${text.slice(0, 48)}…` : text)
-      }
-      return true
-    })
-    termRef.current = term
-    fitRef.current = fit
-  }, [notify])
+      })
+      termRef.current = term
+      fitRef.current = fit
+    },
+    [notify]
+  )
 
   const doPair = async (code: string) => {
     setPairError(null)
@@ -679,15 +683,15 @@ export function App() {
     <div className="app">
       <div className="topbar">
         <button className="iconbtn" onClick={() => setDrawerOpen(true)} aria-label="Menu">
-          ☰
+          <MenuIcon size={18} />
         </button>
         <span className="title">
-          {current && working.has(current.id) && <span className="spin">◐</span>}
-          {current ? current.name : 'No terminal'}
+          {current && <span className={`state-dot ${working.has(current.id) ? 'busy' : ''}`} />}
+          <span className="title-text">{current ? current.name : 'No terminal'}</span>
         </span>
-        <span className="status">{reconnecting ? '⟳ reconnecting…' : status}</span>
+        <span className="status">{reconnecting ? 'Reconnecting…' : status}</span>
         <button className="iconbtn" onClick={openGit} aria-label="Git">
-          ⎇
+          <BranchIcon size={17} />
         </button>
       </div>
       {reconnecting && <div className="reconnbar">Connection lost — reconnecting…</div>}
@@ -696,7 +700,10 @@ export function App() {
         {current ? (
           <div className="term" ref={mountTerminal} onClick={() => termRef.current?.focus()} />
         ) : (
-          <div className="emptyterm">Open the menu (☰) to pick or create a terminal.</div>
+          <div className="emptyterm">
+            <TerminalIcon size={22} />
+            Open the menu to pick or create a terminal.
+          </div>
         )}
       </div>
 
@@ -704,6 +711,8 @@ export function App() {
         <button
           className={`key ${predEcho ? 'key-on' : ''}`}
           title="Speculative local echo — hides typing lag on high-latency links"
+          aria-label="Predictive typing"
+          aria-pressed={predEcho}
           onClick={() => {
             const next = !predEcho
             setPredEcho(next)
@@ -712,7 +721,7 @@ export function App() {
             termRef.current?.focus()
           }}
         >
-          ⚡
+          <ZapIcon size={14} />
         </button>
         <button className="key" onClick={() => sendKey('\x1b')}>
           Esc
@@ -723,24 +732,28 @@ export function App() {
         <button className="key" onClick={() => sendKey('\x03')}>
           ^C
         </button>
-        <button className="key" onClick={() => sendKey('\x1b[D')}>
-          ←
-        </button>
-        <button className="key" onClick={() => sendKey('\x1b[A')}>
-          ↑
-        </button>
-        <button className="key" onClick={() => sendKey('\x1b[B')}>
-          ↓
-        </button>
-        <button className="key" onClick={() => sendKey('\x1b[C')}>
-          →
-        </button>
-        <button className="key" onClick={() => sendKey('\x1b[5~')}>
-          PgUp
-        </button>
-        <button className="key" onClick={() => sendKey('\x1b[6~')}>
-          PgDn
-        </button>
+        <div className="key-group arrows">
+          <button className="key" aria-label="Left" onClick={() => sendKey('\x1b[D')}>
+            <ChevronLeftIcon size={15} />
+          </button>
+          <button className="key" aria-label="Up" onClick={() => sendKey('\x1b[A')}>
+            <ChevronUpIcon size={15} />
+          </button>
+          <button className="key" aria-label="Down" onClick={() => sendKey('\x1b[B')}>
+            <ChevronDownIcon size={15} />
+          </button>
+          <button className="key" aria-label="Right" onClick={() => sendKey('\x1b[C')}>
+            <ChevronRightIcon size={15} />
+          </button>
+        </div>
+        <div className="key-group paging">
+          <button className="key" onClick={() => sendKey('\x1b[5~')}>
+            PgUp
+          </button>
+          <button className="key" onClick={() => sendKey('\x1b[6~')}>
+            PgDn
+          </button>
+        </div>
       </div>
 
       {drawerOpen && (
@@ -752,27 +765,16 @@ export function App() {
               <div className="proj" key={p.id}>
                 <div className="proj-name">
                   <span className="dot" style={{ background: p.color }} />
-                  {p.name}
+                  <span className="label">{p.name}</span>
                 </div>
+                {p.terminals.length === 0 && <div className="proj-empty">No terminals</div>}
                 {p.terminals.map((t) => (
                   <div
                     key={t.id}
                     className={`term-row ${t.id === currentId ? 'active' : ''}`}
                     onClick={() => attachTo(t.id)}
                   >
-                    {working.has(t.id) && <span className="spin">◐</span>}
-                    {attention[t.id] && (
-                      <span
-                        className={`att-dot ${
-                          attention[t.id] === 'needs-permission' || attention[t.id] === 'failed'
-                            ? 'att-red'
-                            : attention[t.id] === 'finished'
-                              ? 'att-green'
-                              : 'att-amber'
-                        }`}
-                        title={attention[t.id]}
-                      />
-                    )}
+                    <span className={`state-dot ${dotClass(working.has(t.id), attention[t.id])}`} />
                     <span className={`name ${t.live ? '' : 'dead'}`}>{t.name}</span>
                     <button
                       className="x"
@@ -782,14 +784,23 @@ export function App() {
                       }}
                       aria-label="Close terminal"
                     >
-                      ×
+                      <CloseIcon size={13} />
                     </button>
                   </div>
                 ))}
                 <div className="mk">
-                  <button onClick={() => clientRef.current?.create(p.id, 'shell')}>+ Shell</button>
-                  <button onClick={() => clientRef.current?.create(p.id, 'claude')}>+ Claude</button>
-                  <button onClick={() => openSessions(p.id)}>⟳ Sessions</button>
+                  <button className="btn" onClick={() => clientRef.current?.create(p.id, 'shell')}>
+                    <TerminalIcon size={13} />
+                    Shell
+                  </button>
+                  <button className="btn" onClick={() => clientRef.current?.create(p.id, 'claude')}>
+                    <SparklesIcon size={13} />
+                    Claude
+                  </button>
+                  <button className="btn" onClick={() => openSessions(p.id)}>
+                    <HistoryIcon size={13} />
+                    Sessions
+                  </button>
                 </div>
               </div>
             ))}
@@ -825,6 +836,14 @@ export function App() {
   )
 }
 
+/** Busy beats attention, as on the desktop's terminal tabs. */
+function dotClass(busy: boolean, attention: string | undefined): string {
+  if (busy) return 'busy'
+  if (attention === 'needs-permission' || attention === 'failed') return 'att-red'
+  if (attention === 'finished') return 'att-green'
+  return attention ? 'att-amber' : ''
+}
+
 function PairScreen({
   onSubmit,
   error,
@@ -837,6 +856,7 @@ function PairScreen({
     <div className="app">
       <div className="center">
         <div className="card">
+          <img className="card-icon" src="/icon.svg" alt="" />
           <h1>Terminal Workspace</h1>
           <p>Enter the pairing code shown on your computer.</p>
           <input
@@ -874,6 +894,7 @@ function CenterCard({
     <div className="app">
       <div className="center">
         <div className="card">
+          <img className="card-icon" src="/icon.svg" alt="" />
           <h1>{title}</h1>
           {body && <p>{body}</p>}
           {action && onAction && (

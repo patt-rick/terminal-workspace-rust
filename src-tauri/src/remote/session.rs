@@ -108,7 +108,7 @@ impl SessionManager {
     pub fn validate_token(&self, token: &str) -> Option<u64> {
         let inner = self.inner.lock();
         match &inner.token {
-            Some(t) if t == token => Some(inner.generation),
+            Some(t) if ct_eq(t.as_bytes(), token.as_bytes()) => Some(inner.generation),
             _ => None,
         }
     }
@@ -135,6 +135,11 @@ impl SessionManager {
     }
 }
 
+/// Equality that takes the same time wherever the inputs first differ.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 fn random_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
@@ -152,6 +157,14 @@ mod tests {
         let token = s.verify_pair(&code).expect("pairs");
         assert!(s.validate_token(&token).is_some());
         assert!(s.validate_token("nope").is_none());
+    }
+
+    #[test]
+    fn ct_eq_matches_plain_equality() {
+        assert!(ct_eq(b"abc", b"abc"));
+        assert!(!ct_eq(b"abc", b"abd"));
+        assert!(!ct_eq(b"abc", b"ab"));
+        assert!(ct_eq(b"", b""));
     }
 
     #[test]

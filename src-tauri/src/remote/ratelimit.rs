@@ -7,6 +7,10 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::time::Instant;
 
+/// Most keys tracked at once, so a flood of distinct keys can't grow the map
+/// without bound.
+const MAX_KEYS: usize = 1024;
+
 struct Bucket {
     tokens: f64,
     last: Instant,
@@ -37,6 +41,9 @@ impl RateLimiter {
     /// Testable core: caller supplies the clock reading.
     fn check_at(&self, key: &str, now: Instant) -> bool {
         let mut map = self.inner.lock();
+        if map.len() >= MAX_KEYS && !map.contains_key(key) {
+            self.evict(&mut map, now);
+        }
         let bucket = map.entry(key.to_string()).or_insert(Bucket {
             tokens: self.capacity,
             last: now,
@@ -49,6 +56,26 @@ impl RateLimiter {
             true
         } else {
             false
+        }
+    }
+}
+
+impl RateLimiter {
+    /// Drop buckets that have refilled (idle keys behave exactly like new ones);
+    /// if every key is still active, drop the least recently used.
+    fn evict(&self, map: &mut HashMap<String, Bucket>, now: Instant) {
+        map.retain(|_, b| {
+            let elapsed = now.saturating_duration_since(b.last).as_secs_f64();
+            b.tokens + elapsed * self.refill_per_sec < self.capacity
+        });
+        if map.len() >= MAX_KEYS {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, b)| b.last)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
         }
     }
 }
@@ -80,6 +107,34 @@ mod tests {
         let t2 = t + Duration::from_secs(1);
         assert!(rl.check_at("ip", t2));
         assert!(!rl.check_at("ip", t2));
+    }
+
+    #[test]
+    fn key_count_stays_bounded() {
+        let rl = RateLimiter::new(2.0, 0.0);
+        let t = Instant::now();
+        for i in 0..(MAX_KEYS * 3) {
+            rl.check_at(&format!("ip{i}"), t + Duration::from_millis(i as u64));
+        }
+        assert!(rl.inner.lock().len() <= MAX_KEYS);
+        // The newest key survived; the oldest was the one evicted.
+        assert!(rl
+            .inner
+            .lock()
+            .contains_key(&format!("ip{}", MAX_KEYS * 3 - 1)));
+        assert!(!rl.inner.lock().contains_key("ip0"));
+    }
+
+    #[test]
+    fn idle_buckets_are_dropped_first() {
+        let rl = RateLimiter::new(1.0, 1.0);
+        let t = Instant::now();
+        for i in 0..MAX_KEYS {
+            rl.check_at(&format!("ip{i}"), t);
+        }
+        // Ten seconds on, every bucket has refilled: all are idle, so all go.
+        rl.check_at("late", t + Duration::from_secs(10));
+        assert_eq!(rl.inner.lock().len(), 1);
     }
 
     #[test]

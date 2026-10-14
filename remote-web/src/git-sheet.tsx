@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FileDiff, GitInfo, RepoInfo } from './protocol'
+import { BranchIcon, ChevronLeftIcon, CloseIcon, UploadIcon } from './icons'
 
 const repoLabel = (r: RepoInfo): string => r.relativePath || r.name
 
@@ -40,15 +41,18 @@ export function GitSheet({
   const [file, setFile] = useState<FileDiff | null>(null)
   const [confirm, setConfirm] = useState(false)
 
-  const canPush =
-    !!status?.branch && (status.dirty || status.ahead > 0 || !status.hasUpstream)
+  const canPush = !!status?.branch && (status.dirty || status.ahead > 0 || !status.hasUpstream)
   const pushLabel = status?.hasUpstream ? `Push ${status.ahead || ''}`.trim() : 'Publish branch'
 
   return (
     <div className="gitsheet">
       <div className="git-head">
-        <button className="iconbtn" onClick={file ? () => setFile(null) : onClose}>
-          {file ? '‹' : '✕'}
+        <button
+          className="iconbtn"
+          onClick={file ? () => setFile(null) : onClose}
+          aria-label={file ? 'Back' : 'Close'}
+        >
+          {file ? <ChevronLeftIcon size={18} /> : <CloseIcon size={17} />}
         </button>
         {file ? (
           <span className="title">{file.path}</span>
@@ -70,75 +74,81 @@ export function GitSheet({
         )}
       </div>
 
-      {file ? (
-        <div className="git-diff">
-          {file.binary ? (
-            <div className="git-empty">Binary file — diff not shown</div>
-          ) : file.hunks.length === 0 ? (
-            <div className="git-empty">No textual changes</div>
-          ) : (
-            file.hunks.map((h, i) => (
-              <div key={i}>
-                <div className="g-hunk">{h.header}</div>
-                {h.lines.map((l, j) => (
-                  <div key={j} className={`g-line ${lineClass(l.origin)}`}>
-                    <span className="g-o">{l.origin === ' ' ? '' : l.origin}</span>
-                    {l.content}
-                  </div>
-                ))}
-              </div>
-            ))
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="git-status">
-            {status?.isRepo ? (
-              <>
-                <span className="g-branch">⎇ {status.branch ?? 'detached'}</span>
-                {status.ahead > 0 && <span className="g-add">↑{status.ahead}</span>}
-                {status.behind > 0 && <span className="g-mod">↓{status.behind}</span>}
-              </>
+      <div className="sheet-body">
+        {file ? (
+          <div className="git-diff">
+            {file.binary ? (
+              <div className="git-empty">Binary file — diff not shown</div>
+            ) : file.hunks.length === 0 ? (
+              <div className="git-empty">No textual changes</div>
             ) : (
-              <span className="git-empty">Not a git repository</span>
-            )}
-          </div>
-
-          {canPush && (
-            <div className="git-push">
-              <button className="primary" disabled={pushing} onClick={() => setConfirm(true)}>
-                {pushing ? 'Pushing…' : pushLabel}
-              </button>
-            </div>
-          )}
-          {pushMsg && <div className="git-pushmsg">{pushMsg}</div>}
-
-          <div className="git-files">
-            {diffs.length === 0 ? (
-              <div className="git-empty">Working tree clean</div>
-            ) : (
-              diffs.map((f) => (
-                <div key={f.path} className="git-file" onClick={() => setFile(f)}>
-                  <span className={`g-glyph ${statusClass(f.status)}`}>
-                    {statusGlyph(f.status)}
-                  </span>
-                  <span className="g-path">{f.path}</span>
+              file.hunks.map((h, i) => (
+                <div key={i}>
+                  <div className="g-hunk">{h.header}</div>
+                  {h.lines.map((l, j) => (
+                    <div key={j} className={`g-line ${lineClass(l.origin)}`}>
+                      <span className="g-o">{l.origin === ' ' ? '' : l.origin}</span>
+                      {l.content}
+                    </div>
+                  ))}
                 </div>
               ))
             )}
           </div>
-        </>
-      )}
+        ) : (
+          <>
+            <div className="git-status">
+              {status?.isRepo ? (
+                <>
+                  <span className="g-branch">
+                    <BranchIcon size={13} />
+                    {status.branch ?? 'detached'}
+                  </span>
+                  {status.ahead > 0 && <span className="g-add">↑{status.ahead}</span>}
+                  {status.behind > 0 && <span className="g-mod">↓{status.behind}</span>}
+                </>
+              ) : (
+                <span className="git-empty">Not a git repository</span>
+              )}
+            </div>
+
+            {canPush && (
+              <div className="git-push">
+                <button className="primary" disabled={pushing} onClick={() => setConfirm(true)}>
+                  <UploadIcon size={15} />
+                  {pushing ? 'Pushing…' : pushLabel}
+                </button>
+              </div>
+            )}
+            {pushMsg && <div className="git-pushmsg">{pushMsg}</div>}
+
+            <div className="git-files">
+              {diffs.length === 0 ? (
+                <div className="git-empty">Working tree clean</div>
+              ) : (
+                diffs.map((f) => (
+                  <div key={f.path} className="git-file" onClick={() => setFile(f)}>
+                    <span className={`g-glyph ${statusClass(f.status)}`}>
+                      {statusGlyph(f.status)}
+                    </span>
+                    <span className="g-path">{f.path}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {confirm && (
-        <div className="scrim" onClick={() => setConfirm(false)}>
+        <div className="confirm-scrim" onClick={() => setConfirm(false)}>
           <div className="confirm" onClick={(e) => e.stopPropagation()}>
             <p>
               Push <b>{status?.branch}</b>
               {status && !status.hasUpstream ? ' (new upstream)' : ''}?
             </p>
             <div className="confirm-actions">
-              <button className="iconbtn" onClick={() => setConfirm(false)}>
+              <button className="btn" onClick={() => setConfirm(false)}>
                 Cancel
               </button>
               <button

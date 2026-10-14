@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { App } from './app'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
+import { restoreTheme } from './theme'
 
 // PWA wiring. The manifest/icon links are added at runtime (rather than in
 // index.html) so the single-file bundler doesn't try to resolve them at build
@@ -20,5 +21,7 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {})
   })
 }
+
+restoreTheme()
 
 createRoot(document.getElementById('root')!).render(<App />)

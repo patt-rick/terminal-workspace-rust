@@ -88,7 +88,9 @@ pub fn run() {
             );
             #[cfg(feature = "remote-access")]
             {
-                app.manage(remote::RemoteServer::new(app.handle().clone()));
+                app.manage(remote::RemoteServer::new(app.handle().clone(), data_dir.clone()));
+                // A `tailscale serve` front a crashed (or out-of-time) run left behind.
+                app.state::<remote::RemoteServer>().clean_leftover_serve();
                 // Headless/dev auto-start for testing: set TW_REMOTE_AUTOSTART=<port>
                 // to start remote access at launch and print the URL + pairing code.
                 if let Ok(port) = std::env::var("TW_REMOTE_AUTOSTART") {
@@ -229,6 +231,8 @@ pub fn run() {
             commands::remote_regenerate_code,
             #[cfg(feature = "remote-access")]
             commands::remote_detect_tailscale,
+            #[cfg(feature = "remote-access")]
+            commands::remote_set_theme,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -238,7 +242,7 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 app_handle.state::<PtyManager>().dispose_all();
                 #[cfg(feature = "remote-access")]
-                app_handle.state::<remote::RemoteServer>().stop();
+                app_handle.state::<remote::RemoteServer>().stop_blocking();
             }
         });
 }

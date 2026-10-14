@@ -14,10 +14,13 @@ pub mod tunnel;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{AppHandle, Listener, Manager};
+use tokio::sync::watch;
 
 use push::PushManager;
 use session::SessionManager;
@@ -62,8 +65,9 @@ struct Running {
     url: String,
     local_url: String,
     hint: Option<String>,
-    /// A `tailscale serve` HTTPS front is active and must be torn down on stop.
-    serve_active: bool,
+    /// Set while a `tailscale serve` HTTPS front we installed is active: the
+    /// session nonce that lets teardown remove exactly that config.
+    serve_nonce: Option<String>,
     /// Global bell/working listeners feeding Web Push; unlistened on stop.
     push_listeners: Vec<tauri::EventId>,
     shutdown: tokio::sync::oneshot::Sender<()>,
@@ -78,20 +82,68 @@ pub struct RemoteServer {
     /// Web Push (VAPID keys + subscription). None if keygen failed.
     push: Option<Arc<PushManager>>,
     app: AppHandle,
+    /// App data dir (honours `TW_DATA_DIR`); holds the `tailscale serve` marker.
+    data_dir: PathBuf,
+    /// True while `start()` is running, so two starts can't race.
+    starting: AtomicBool,
+    /// `tailscale serve` teardowns still running; exit waits for them.
+    teardowns: Mutex<Vec<JoinHandle<()>>>,
+    /// The desktop's active theme, pushed by the frontend; sent to clients.
+    theme: watch::Sender<Option<serde_json::Value>>,
+}
+
+/// Clears `RemoteServer::starting` however `start()` returns.
+struct StartingGuard<'a>(&'a AtomicBool);
+impl Drop for StartingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl RemoteServer {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(app: AppHandle, data_dir: PathBuf) -> Self {
         Self {
             inner: Mutex::new(None),
             sessions: Arc::new(SessionManager::new()),
             push: PushManager::new().map(Arc::new),
             app,
+            data_dir,
+            starting: AtomicBool::new(false),
+            teardowns: Mutex::new(Vec::new()),
+            theme: watch::channel(None).0,
         }
     }
 
     pub fn is_running(&self) -> bool {
         self.inner.lock().is_some()
+    }
+
+    /// Store the desktop's active theme; live clients get it straight away and
+    /// new ones on connect.
+    pub fn set_theme(&self, theme: serde_json::Value) {
+        self.theme.send_replace(Some(theme));
+    }
+
+    /// Remove a `tailscale serve` front an earlier run left behind (a crash, or
+    /// an exit that ran out of time). Only touches it if it is still ours.
+    pub fn clean_leftover_serve(&self) {
+        let Some(nonce) = tailscale::leftover_nonce(&self.data_dir) else {
+            return;
+        };
+        self.spawn_serve_stop(nonce);
+    }
+
+    /// Tear down the serve front for session `nonce` on a background thread,
+    /// tracked so exit can wait for it.
+    fn spawn_serve_stop(&self, nonce: String) {
+        let dir = self.data_dir.clone();
+        let handle = std::thread::spawn(move || {
+            let deadline = Instant::now() + 2 * tailscale::QUERY_TIMEOUT;
+            tailscale::serve_stop(&dir, Some(&nonce), deadline)
+        });
+        let mut teardowns = self.teardowns.lock();
+        teardowns.retain(|h| !h.is_finished());
+        teardowns.push(handle);
     }
 
     /// Start remote access in the given mode.
@@ -104,9 +156,15 @@ impl RemoteServer {
     pub async fn start(&self, port: u16, mode: &str, bind_all: bool) -> Result<StartInfo, String> {
         use std::net::{IpAddr, Ipv4Addr};
 
-        if self.is_running() {
+        if self.is_running()
+            || self
+                .starting
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
             return Err("remote access already running".into());
         }
+        let _starting = StartingGuard(&self.starting);
 
         // Tailscale needs the tailnet address resolved before we can bind it.
         let ts_info = if mode == MODE_TAILSCALE {
@@ -131,20 +189,29 @@ impl RemoteServer {
         // origin is required for the phone PWA (service worker, notifications,
         // install); when it works we bind localhost only — the HTTPS proxy is
         // the sole way in. Falls back to plain HTTP on the tailnet IP.
-        let (serve_url, mut hint) = if mode == MODE_TAILSCALE && !bind_all {
-            match tokio::task::spawn_blocking(move || tailscale::serve_start(port))
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                Ok(url) => (Some(url), None),
-                Err(why) => (None, Some(format!("HTTPS unavailable ({why})"))),
+        let (serve, mut hint) = match (&ts_info, bind_all) {
+            (Some(info), false) => {
+                let (dir, info) = (self.data_dir.clone(), info.clone());
+                match tokio::task::spawn_blocking(move || tailscale::serve_start(&dir, port, &info))
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    Ok(serve) => (Some(serve), None),
+                    Err(why) => (None, Some(format!("HTTPS unavailable ({why})."))),
+                }
             }
-        } else {
-            (None, None)
+            _ => (None, None),
+        };
+        let serve_nonce = serve.as_ref().map(|(_, nonce)| nonce.clone());
+        // Undo the serve config if we bail out before the server is up.
+        let abandon_serve = |nonce: &Option<String>| {
+            if let Some(nonce) = nonce.clone() {
+                self.spawn_serve_stop(nonce);
+            }
         };
 
         let bind_ip: IpAddr = match mode {
-            MODE_TAILSCALE if serve_url.is_some() => Ipv4Addr::LOCALHOST.into(),
+            MODE_TAILSCALE if serve.is_some() => Ipv4Addr::LOCALHOST.into(),
             MODE_TAILSCALE if bind_all => Ipv4Addr::UNSPECIFIED.into(),
             MODE_TAILSCALE => ts_info
                 .as_ref()
@@ -158,18 +225,26 @@ impl RemoteServer {
         let listener = match tokio::net::TcpListener::bind((bind_ip, port)).await {
             Ok(l) => l,
             Err(e) => {
-                // Don't leak the serve config if we never got a server behind it.
-                if serve_url.is_some() {
-                    let _ = tokio::task::spawn_blocking(tailscale::serve_stop);
-                }
+                abandon_serve(&serve_nonce);
                 return Err(format!("bind failed: {e}"));
             }
         };
-        let actual = listener
-            .local_addr()
-            .map_err(|e| e.to_string())?
-            .port();
+        let actual = match listener.local_addr() {
+            Ok(addr) => addr.port(),
+            Err(e) => {
+                abandon_serve(&serve_nonce);
+                return Err(e.to_string());
+            }
+        };
         let local_url = format!("http://{bind_ip}:{actual}");
+
+        // Which forwarded-for header (if any) names the real client: only the
+        // proxy in front of us sets it, and only it reaches us over loopback.
+        let forwarded = match mode {
+            MODE_CLOUDFLARE => server::Forwarded::Cloudflare,
+            MODE_TAILSCALE if serve.is_some() => server::Forwarded::TailscaleServe,
+            _ => server::Forwarded::None,
+        };
 
         let code = self.sessions.new_code();
         // Live-WebSocket count: pushes are only sent when this is zero (a
@@ -180,8 +255,10 @@ impl RemoteServer {
             sessions: self.sessions.clone(),
             // ~10 /pair attempts burst per IP, refilling 1/6s (10/min sustained).
             rate_limit: Arc::new(ratelimit::RateLimiter::new(10.0, 1.0 / 6.0)),
+            forwarded,
             push: self.push.clone(),
             sockets: sockets.clone(),
+            theme: self.theme.subscribe(),
         };
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let router = server::router(ctx);
@@ -209,15 +286,14 @@ impl RemoteServer {
                     return Err(e);
                 }
             },
-            MODE_TAILSCALE => match &serve_url {
-                Some(https) => (None, https.clone()),
+            MODE_TAILSCALE => match &serve {
+                Some((https, _)) => (None, https.clone()),
                 None => {
                     let host = ts_info.as_ref().unwrap().host();
-                    if hint.is_some() {
+                    if let Some(why) = hint.take() {
                         hint = Some(format!(
-                            "{} Serving plain HTTP — the phone PWA (install, notifications) \
-                             needs the HTTPS address.",
-                            hint.unwrap()
+                            "{why} Serving plain HTTP — the phone PWA (install, notifications) \
+                             needs the HTTPS address."
                         ));
                     }
                     (None, format!("http://{host}:{actual}"))
@@ -226,7 +302,6 @@ impl RemoteServer {
             _ => (None, local_url.clone()),
         };
 
-        let serve_active = serve_url.is_some();
         let push_listeners = match &self.push {
             Some(push) => register_push_listeners(&self.app, push.clone(), sockets),
             None => Vec::new(),
@@ -237,7 +312,7 @@ impl RemoteServer {
             url: url.clone(),
             local_url: local_url.clone(),
             hint: hint.clone(),
-            serve_active,
+            serve_nonce,
             push_listeners,
             shutdown,
             _tunnel: tunnel,
@@ -252,14 +327,38 @@ impl RemoteServer {
         })
     }
 
-    /// Stop the server (graceful shutdown) and invalidate all pairing/token state.
+    /// Stop the server (graceful shutdown) and invalidate all pairing/token
+    /// state. The `tailscale serve` teardown runs in the background.
     pub fn stop(&self) {
+        if let Some(nonce) = self.stop_inner() {
+            self.spawn_serve_stop(nonce);
+        }
+    }
+
+    /// [`stop`](Self::stop) for app exit: tears `tailscale serve` down on this
+    /// thread and waits for earlier teardowns, so they finish before the process
+    /// does. Bounded by one overall deadline; a teardown that misses it is
+    /// retried at the next launch (see [`clean_leftover_serve`](Self::clean_leftover_serve)).
+    pub fn stop_blocking(&self) {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        if let Some(nonce) = self.stop_inner() {
+            tailscale::serve_stop(&self.data_dir, Some(&nonce), deadline);
+        }
+        let pending = std::mem::take(&mut *self.teardowns.lock());
+        for handle in pending {
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+
+    /// Everything stop does except the serve teardown; returns the serve nonce
+    /// to tear down, if a serve front was active.
+    fn stop_inner(&self) -> Option<String> {
+        let mut nonce = None;
         if let Some(running) = self.inner.lock().take() {
             let _ = running.shutdown.send(());
-            if running.serve_active {
-                // CLI call; keep it off whatever thread called stop().
-                std::thread::spawn(tailscale::serve_stop);
-            }
+            nonce = running.serve_nonce;
             for id in running.push_listeners {
                 self.app.unlisten(id);
             }
@@ -268,6 +367,7 @@ impl RemoteServer {
             push.clear_subscription();
         }
         self.sessions.reset();
+        nonce
     }
 
     /// Mint a fresh pairing code (only meaningful while running).

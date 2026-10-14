@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from 'react'
 import { applyTheme, resolveTheme, THEMES } from './index'
 import { useSettings } from '../state/settings'
+import { ipc, isTauri } from '../lib/ipc'
 
 /**
  * Applies the selected theme to the document whenever it changes. Reading the
@@ -14,6 +15,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useLayoutEffect(() => {
     applyTheme(resolveTheme(themeId, customThemes))
+  }, [themeId, customThemes])
+
+  // Hand the theme to the remote-access server so the phone client matches.
+  // Builds without the remote-access feature have no such command.
+  useEffect(() => {
+    if (!isTauri) return
+    const { meta, chrome, terminal, gradients } = resolveTheme(themeId, customThemes)
+    ipc.remote.setTheme({ meta, chrome, terminal, gradients }).catch(() => {})
   }, [themeId, customThemes])
 
   // Daily shuffle: run on mount, then re-check on a minute timer and on window

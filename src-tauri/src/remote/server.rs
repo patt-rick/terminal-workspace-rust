@@ -1,5 +1,6 @@
-//! axum HTTP + WebSocket server. Binds 127.0.0.1 (Cloudflare/localhost mode);
-//! the tunnel/Tailscale bind modes arrive in later milestones.
+//! axum HTTP + WebSocket server. Binds 127.0.0.1 behind cloudflared or
+//! `tailscale serve`, the tailnet address for plain-HTTP Tailscale, or 0.0.0.0
+//! when the user opts in (see `RemoteServer::start`).
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
@@ -14,7 +15,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use super::bridge;
@@ -31,10 +32,28 @@ pub struct ServerCtx {
     pub app: AppHandle,
     pub sessions: Arc<SessionManager>,
     pub rate_limit: Arc<RateLimiter>,
+    /// Which proxy (if any) sits in front of us and names the real client.
+    pub forwarded: Forwarded,
     /// Web Push manager (None when keygen failed).
     pub push: Option<Arc<PushManager>>,
     /// Live authenticated WebSocket count; pushes only fire when it's zero.
     pub sockets: Arc<AtomicUsize>,
+    /// The desktop's active theme; `None` until the frontend has sent one.
+    pub theme: watch::Receiver<Option<serde_json::Value>>,
+}
+
+/// The proxy in front of the server, which decides whose forwarded-for header
+/// is believable. Clients can send any header they like, so only the one our
+/// own proxy sets counts, and only on a loopback connection (that proxy is the
+/// only thing that reaches us over loopback in these modes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Forwarded {
+    /// Nothing in front: the peer address is the client.
+    None,
+    /// cloudflared: Cloudflare's edge sets `cf-connecting-ip`.
+    Cloudflare,
+    /// `tailscale serve`: it appends the tailnet peer to `x-forwarded-for`.
+    TailscaleServe,
 }
 
 /// Drop-safe live-socket counter (decrements even if the task is cancelled).
@@ -102,15 +121,21 @@ struct PairResp {
     token: String,
 }
 
-/// Best-effort client IP: prefer Cloudflare's forwarded header (the socket is
-/// always 127.0.0.1 behind the tunnel), else the peer address.
-fn client_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
-    for h in ["cf-connecting-ip", "x-forwarded-for"] {
-        if let Some(v) = headers.get(h).and_then(|v| v.to_str().ok()) {
-            let first = v.split(',').next().unwrap_or("").trim();
-            if !first.is_empty() {
-                return first.to_string();
-            }
+/// Best-effort client IP for rate limiting: the header our proxy sets when
+/// there is one (the socket is 127.0.0.1 behind it), else the peer address.
+fn client_ip(headers: &HeaderMap, addr: SocketAddr, forwarded: Forwarded) -> String {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if addr.ip().is_loopback() {
+        let from_proxy = match forwarded {
+            Forwarded::None => None,
+            Forwarded::Cloudflare => header("cf-connecting-ip").map(str::trim),
+            // The proxy appends, so the rightmost entry is the one it added.
+            Forwarded::TailscaleServe => header("x-forwarded-for")
+                .and_then(|v| v.rsplit(',').next())
+                .map(str::trim),
+        };
+        if let Some(ip) = from_proxy.filter(|ip| !ip.is_empty()) {
+            return ip.to_string();
         }
     }
     addr.ip().to_string()
@@ -123,7 +148,8 @@ async fn pair(
     Json(req): Json<PairReq>,
 ) -> Response {
     // Rate-limit per client IP as defense in depth (R3.9).
-    if !ctx.rate_limit.check(&client_ip(&headers, addr)) {
+    let ip = client_ip(&headers, addr, ctx.forwarded);
+    if !ctx.rate_limit.check(&ip) {
         return (StatusCode::TOO_MANY_REQUESTS, "too many attempts, slow down").into_response();
     }
     match ctx.sessions.verify_pair(&req.code) {
@@ -444,11 +470,17 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         None => return,
     };
 
+    // Marking the current theme seen here means the loop below only sends
+    // later changes, not this one a second time.
+    let mut theme_rx = ctx.theme.clone();
+    let theme = theme_rx.borrow_and_update().clone();
+
     // hello.ok with the full state snapshot.
     let hello_ok = ServerMsg::HelloOk {
         state: bridge::state_snapshot(&ctx.app),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         vapid_public_key: ctx.push.as_ref().map(|p| p.vapid_public_key()),
+        theme,
     };
     if socket.send(text(&hello_ok)).await.is_err() {
         return;
@@ -458,6 +490,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(256);
     let listener_ids = spawn_state_forwarders(&ctx.app, out_tx.clone());
     let mut generation_rx = ctx.sessions.subscribe_generation();
+    let mut theme_open = true;
     let mut conn = Conn {
         ctx,
         out_tx,
@@ -472,6 +505,18 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
                 if *generation_rx.borrow() != my_generation {
                     let _ = socket.send(text(&ServerMsg::SessionEvicted)).await;
                     break;
+                }
+            }
+            changed = theme_rx.changed(), if theme_open => {
+                if changed.is_err() {
+                    theme_open = false;
+                    continue;
+                }
+                let theme = theme_rx.borrow_and_update().clone();
+                if let Some(theme) = theme {
+                    if socket.send(text(&ServerMsg::StateTheme { theme })).await.is_err() {
+                        break;
+                    }
                 }
             }
             outgoing = out_rx.recv() => {
@@ -502,5 +547,54 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
     use tauri::Listener;
     for id in listener_ids {
         conn.ctx.app.unlisten(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, HeaderValue::from_static(v));
+        }
+        h
+    }
+
+    const LOOPBACK: &str = "127.0.0.1:50000";
+    const TAILNET_PEER: &str = "100.101.1.2:50000";
+
+    #[test]
+    fn direct_modes_ignore_forwarded_headers() {
+        let h = headers(&[("cf-connecting-ip", "1.1.1.1"), ("x-forwarded-for", "2.2.2.2")]);
+        let peer: SocketAddr = TAILNET_PEER.parse().unwrap();
+        for mode in [Forwarded::None, Forwarded::Cloudflare, Forwarded::TailscaleServe] {
+            // A non-loopback peer is never a proxy of ours.
+            assert_eq!(client_ip(&h, peer, mode), "100.101.1.2");
+        }
+        assert_eq!(client_ip(&h, LOOPBACK.parse().unwrap(), Forwarded::None), "127.0.0.1");
+    }
+
+    #[test]
+    fn cloudflare_trusts_only_its_own_header() {
+        let addr = LOOPBACK.parse().unwrap();
+        let h = headers(&[("cf-connecting-ip", "1.1.1.1"), ("x-forwarded-for", "2.2.2.2")]);
+        assert_eq!(client_ip(&h, addr, Forwarded::Cloudflare), "1.1.1.1");
+        let spoof = headers(&[("x-forwarded-for", "2.2.2.2")]);
+        assert_eq!(client_ip(&spoof, addr, Forwarded::Cloudflare), "127.0.0.1");
+    }
+
+    #[test]
+    fn tailscale_serve_uses_the_entry_it_appended() {
+        let addr = LOOPBACK.parse().unwrap();
+        // A client-supplied cf-connecting-ip and a forged leading XFF entry are ignored.
+        let h = headers(&[
+            ("cf-connecting-ip", "9.9.9.9"),
+            ("x-forwarded-for", "6.6.6.6, 100.101.1.2"),
+        ]);
+        assert_eq!(client_ip(&h, addr, Forwarded::TailscaleServe), "100.101.1.2");
+        assert_eq!(client_ip(&HeaderMap::new(), addr, Forwarded::TailscaleServe), "127.0.0.1");
     }
 }

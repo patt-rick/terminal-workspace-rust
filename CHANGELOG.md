@@ -6,6 +6,21 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+### Changed
+- The phone app (remote access) has been redesigned to match the desktop: rounded panels,
+  the desktop's colours, type and icons, status dots, and a tidier key row where every key
+  fits on screen. It also follows the theme you use on the desktop, including custom
+  themes, and updates live when you switch.
+
+### Fixed
+- Tailscale remote access no longer leaves its HTTPS address (`tailscale serve`) running
+  after you quit the app or it crashes; a leftover is cleared at the next launch.
+- Starting Tailscale remote access no longer overwrites or removes your own
+  `tailscale serve` setup on port 443. It falls back to plain HTTP and says why.
+- **Start Remote Session** no longer hangs when the Tailscale command line stops
+  responding or is waiting for you to enable Serve. You get the link to enable it instead.
+- Tighter limits on pairing attempts: forged forwarding headers can no longer be used to
+  get around the per-device limit.
 
 ## [0.5.1] - 2026-10-14
 ### Added

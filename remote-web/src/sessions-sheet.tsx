@@ -1,4 +1,5 @@
 import type { SessionSummary } from './protocol'
+import { CloseIcon } from './icons'
 
 const relativeTime = (ms: number): string => {
   const diff = Date.now() - ms
@@ -24,39 +25,41 @@ export function SessionsSheet({
   return (
     <div className="gitsheet">
       <div className="git-head">
-        <button className="iconbtn" onClick={onClose}>
-          ✕
+        <button className="iconbtn" onClick={onClose} aria-label="Close">
+          <CloseIcon size={17} />
         </button>
         <span className="title">Claude sessions</span>
       </div>
 
-      <div className="git-files">
-        {loading ? (
-          <div className="git-empty">Loading…</div>
-        ) : sessions.length === 0 ? (
-          <div className="git-empty">No past sessions for this project.</div>
-        ) : (
-          sessions.map((s) => (
-            <div key={s.sessionId} className="sess-row" onClick={() => onResume(s.sessionId)}>
-              <div className="sess-main">
-                <span className="sess-title">{s.title || 'Untitled session'}</span>
-                <span className="sess-meta">
-                  {s.messageCount} msg · {relativeTime(s.lastActive)}
-                  {s.gitBranch ? ` · ⎇ ${s.gitBranch}` : ''}
-                </span>
+      <div className="sheet-body">
+        <div className="git-files">
+          {loading ? (
+            <div className="git-empty">Loading…</div>
+          ) : sessions.length === 0 ? (
+            <div className="git-empty">No past sessions for this project.</div>
+          ) : (
+            sessions.map((s) => (
+              <div key={s.sessionId} className="sess-row" onClick={() => onResume(s.sessionId)}>
+                <div className="sess-main">
+                  <span className="sess-title">{s.title || 'Untitled session'}</span>
+                  <span className="sess-meta">
+                    {s.messageCount} msg · {relativeTime(s.lastActive)}
+                    {s.gitBranch ? ` · ⎇ ${s.gitBranch}` : ''}
+                  </span>
+                </div>
+                <button
+                  className="primary sess-resume"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onResume(s.sessionId)
+                  }}
+                >
+                  Resume
+                </button>
               </div>
-              <button
-                className="primary sess-resume"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onResume(s.sessionId)
-                }}
-              >
-                Resume
-              </button>
-            </div>
-          ))
-        )}
+            ))
+          )}
+        </div>
       </div>
     </div>
   )

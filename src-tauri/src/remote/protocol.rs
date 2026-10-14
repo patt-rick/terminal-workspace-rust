@@ -72,6 +72,9 @@ pub enum ServerMsg {
         app_version: String,
         /// VAPID applicationServerKey (b64url) for Web Push, when available.
         vapid_public_key: Option<String>,
+        /// The desktop's active theme (`meta`, `chrome`, `terminal`,
+        /// `gradients`), passed through as the frontend sent it.
+        theme: Option<serde_json::Value>,
     },
     #[serde(rename = "hello.err")]
     HelloErr { message: String },
@@ -134,6 +137,9 @@ pub enum ServerMsg {
         project_id: String,
         sessions: Vec<crate::claude::SessionSummary>,
     },
+    /// The desktop switched theme (or edited the active custom one).
+    #[serde(rename = "state.theme")]
+    StateTheme { theme: serde_json::Value },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
     SessionEvicted,
@@ -266,8 +272,15 @@ mod tests {
                     state: StateSnapshot { projects: vec![] },
                     app_version: "0".into(),
                     vapid_public_key: None,
+                    theme: None,
                 },
                 "hello.ok",
+            ),
+            (
+                ServerMsg::StateTheme {
+                    theme: serde_json::json!({}),
+                },
+                "state.theme",
             ),
             (ServerMsg::HelloErr { message: "e".into() }, "hello.err"),
             (

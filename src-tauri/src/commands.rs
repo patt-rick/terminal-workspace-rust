@@ -1929,6 +1929,26 @@ pub fn remote_stop(server: State<crate::remote::RemoteServer>) {
     server.stop();
 }
 
+/// The desktop's active theme, forwarded to the phone client. The frontend
+/// calls this on every theme change, whether or not remote access is running.
+#[cfg(feature = "remote-access")]
+#[tauri::command]
+pub fn remote_set_theme(
+    server: State<crate::remote::RemoteServer>,
+    theme: serde_json::Value,
+) -> AppResult<()> {
+    const MAX_THEME_BYTES: usize = 32 * 1024;
+    if !theme.is_object() {
+        return Err(AppError::Msg("theme must be an object".into()));
+    }
+    let size = serde_json::to_vec(&theme).map(|v| v.len()).unwrap_or(usize::MAX);
+    if size > MAX_THEME_BYTES {
+        return Err(AppError::Msg("theme is too large".into()));
+    }
+    server.set_theme(theme);
+    Ok(())
+}
+
 #[cfg(feature = "remote-access")]
 #[tauri::command]
 pub fn remote_status(server: State<crate::remote::RemoteServer>) -> crate::remote::RemoteStatus {

@@ -4,6 +4,8 @@
 // `client_msg_wire_tags_all_deserialize` in protocol.rs); when those tags or
 // fields change, update this mirror to match.
 
+import type { RemoteTheme } from './theme'
+
 export interface TermInfo {
   id: string
   name: string
@@ -65,7 +67,14 @@ export interface SessionSummary {
 }
 
 export interface Handlers {
-  onState?: (state: StateSnapshot, appVersion: string, vapidPublicKey: string | null) => void
+  onState?: (
+    state: StateSnapshot,
+    appVersion: string,
+    vapidPublicKey: string | null,
+    theme: RemoteTheme | null
+  ) => void
+  /** The desktop switched theme (or edited a custom one). */
+  onTheme?: (theme: RemoteTheme) => void
   onAttached?: (terminalId: string, tag: number) => void
   onSnapshot?: (terminalId: string, tag: number, bytes: Uint8Array) => void
   onOutput?: (tag: number, bytes: Uint8Array) => void
@@ -92,8 +101,7 @@ export interface Handlers {
 }
 
 const b64ToBytes = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-const strToB64 = (s: string): string =>
-  btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+const strToB64 = (s: string): string => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
 
 /** Exchange a pairing code for a session token. */
 export async function pair(code: string): Promise<string> {
@@ -181,7 +189,7 @@ export class RemoteClient {
       const m = JSON.parse(ev.data)
       switch (m.type) {
         case 'hello.ok':
-          this.h.onState?.(m.state, m.appVersion, m.vapidPublicKey ?? null)
+          this.h.onState?.(m.state, m.appVersion, m.vapidPublicKey ?? null, m.theme ?? null)
           break
         case 'hello.err':
           this.stopped = true
@@ -228,6 +236,9 @@ export class RemoteClient {
           break
         case 'claude.sessions':
           this.h.onClaudeSessions?.(m.projectId, m.sessions)
+          break
+        case 'state.theme':
+          this.h.onTheme?.(m.theme)
           break
         case 'session.evicted':
           this.stopped = true
