@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+
+## [0.5.1] - 2026-10-14
 ### Added
 - Drag projects in the left pane, open or collapsed, to put them in any order. The order is
   kept across restarts. A project's menu also has **Move up** and **Move down**.
