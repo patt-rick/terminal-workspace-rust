@@ -168,6 +168,15 @@ impl StateStore {
         self.persist(&state);
     }
 
+    /// Puts the projects in the order of `ids`. A project missing from `ids`
+    /// keeps its place after the listed ones, so a stale list loses nothing.
+    pub fn reorder_projects(&self, ids: &[String]) {
+        let mut state = self.inner.lock();
+        let rank = |id: &str| ids.iter().position(|x| x == id).unwrap_or(usize::MAX);
+        state.projects.sort_by_key(|p| rank(&p.id));
+        self.persist(&state);
+    }
+
     /// Only `#rrggbb`: the value is written into styles in both web clients.
     pub fn set_project_color(&self, id: &str, color: &str) -> AppResult<Project> {
         if !is_hex_color(color) {
@@ -451,6 +460,24 @@ mod tests {
         }
         assert_eq!(store.snapshot().projects[0].color, p.color);
         assert!(store.set_project_color("missing", "#ffcc66").is_err());
+    }
+
+    #[test]
+    fn reorder_follows_the_ids_and_keeps_unlisted_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let store = StateStore::load(path.clone());
+        let a = store.add_project("/a".to_string());
+        let b = store.add_project("/b".to_string());
+        let c = store.add_project("/c".to_string());
+        store.reorder_projects(&[c.id.clone(), a.id.clone(), "gone".to_string()]);
+        let order: Vec<String> = StateStore::load(path)
+            .snapshot()
+            .projects
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(order, vec![c.id, a.id, b.id]);
     }
 
     #[test]

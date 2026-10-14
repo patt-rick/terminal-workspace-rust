@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useProjects } from '../../hooks/use-projects'
+import { useDragReorder } from '../../hooks/use-drag-reorder'
 import { useWorkspace } from '../../state/store'
 import type { Project } from '../../lib/ipc'
 import { hoverLines, projectBadge, stateDotClass } from '../../lib/project-status'
@@ -13,12 +14,30 @@ const HOVER_DELAY_MS = 150
 /** The left nav's small state: one tile per project. */
 export function ProjectRail() {
   const { projects, addProject } = useProjects()
+  const moveProject = useWorkspace((s) => s.moveProject)
+  const { containerRef, drag, onPointerDown } = useDragReorder(moveProject)
 
   return (
     <aside className="flex w-[52px] flex-shrink-0 flex-col items-center">
-      <div className="no-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
-        {projects.map((p) => (
-          <RailTile key={p.id} project={p} />
+      <div
+        ref={containerRef}
+        className="no-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-2.5 overflow-y-auto overflow-x-hidden px-1 py-1.5"
+      >
+        {projects.map((p, i) => (
+          <RailTile
+            key={p.id}
+            project={p}
+            dragging={drag?.id === p.id}
+            dragActive={drag !== null}
+            drop={
+              drag?.slot === i
+                ? 'before'
+                : drag?.slot === projects.length && i === projects.length - 1
+                  ? 'after'
+                  : null
+            }
+            onDragStart={(e) => onPointerDown(e, p.id)}
+          />
         ))}
         <button
           type="button"
@@ -40,7 +59,20 @@ export function ProjectRail() {
   )
 }
 
-function RailTile({ project }: { project: Project }) {
+function RailTile({
+  project,
+  dragging,
+  dragActive,
+  drop,
+  onDragStart,
+}: {
+  project: Project
+  dragging: boolean
+  dragActive: boolean
+  /** which side of this tile a dragged project would land on */
+  drop: 'before' | 'after' | null
+  onDragStart: (e: React.PointerEvent<HTMLElement>) => void
+}) {
   const selected = useWorkspace((s) => s.selectedProjectId === project.id)
   const selectProject = useWorkspace((s) => s.selectProject)
   const busy = useWorkspace((s) => s.busyByTerminal)
@@ -81,11 +113,23 @@ function RailTile({ project }: { project: Project }) {
   )
 
   return (
-    <div className="relative flex-shrink-0">
+    <div data-reorder-id={project.id} className={`relative flex-shrink-0 ${dragging ? 'opacity-40' : ''}`}>
+      {drop && (
+        <span
+          aria-hidden
+          className={`pointer-events-none absolute -inset-x-1.5 h-0.5 rounded-full bg-accent ${
+            drop === 'before' ? '-top-1.5' : '-bottom-1.5'
+          }`}
+        />
+      )}
       <button
         ref={ref}
         type="button"
-        aria-label={project.name}
+        onPointerDown={(e) => {
+          hide()
+          onDragStart(e)
+        }}
+        aria-label={`${project.name}, ${project.terminals.length} terminal${project.terminals.length === 1 ? '' : 's'}`}
         aria-current={selected || undefined}
         onClick={() => {
           hide()
@@ -116,7 +160,15 @@ function RailTile({ project }: { project: Project }) {
           }`}
         />
       )}
-      {label && !menu && <HoverLabel project={project} left={label.left} top={label.top} />}
+      {project.terminals.length > 0 && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -bottom-1 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border-2 border-[var(--shell-backdrop)] bg-surface-tertiary px-1 text-[10px] font-semibold leading-none text-foreground"
+        >
+          {project.terminals.length}
+        </span>
+      )}
+      {label && !menu && !dragActive && <HoverLabel project={project} left={label.left} top={label.top} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
       {dialogs}
     </div>

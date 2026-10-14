@@ -121,6 +121,7 @@ pub fn run() {
             commands::project_icon_set_navii,
             commands::project_icon_clear,
             commands::project_icons_load,
+            commands::projects_reorder,
             commands::projects_select,
             commands::projects_set_active,
             commands::project_open_in_terminal,

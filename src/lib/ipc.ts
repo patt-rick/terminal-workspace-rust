@@ -498,6 +498,7 @@ export const ipc = {
     clearIcon: (id: string) => invoke<Project>('project_icon_clear', { id }),
     /** uploaded icons as `data:` URLs by project id */
     loadIcons: () => invoke<Record<string, string>>('project_icons_load'),
+    reorder: (ids: string[]) => invoke<void>('projects_reorder', { ids }),
     select: (id: string | null) => invoke<void>('projects_select', { id }),
     setActive: (projectId: string, terminalId: string | null) =>
       invoke<void>('projects_set_active', { projectId, terminalId }),

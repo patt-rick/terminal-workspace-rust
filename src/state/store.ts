@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ipc, type Project, type TerminalRecord } from '../lib/ipc'
 import { distroOfUncPath } from '../lib/wsl-paths'
+import { isNoopSlot, moveToSlot } from '../lib/reorder'
 import { WSL_CLAUDE_INSTALL, wslClaudeCheckTarget } from '../lib/wsl-claude'
 import { useSettings } from './settings'
 import { applySkipPermissions, linkClaudeSession } from './claude-command'
@@ -90,6 +91,8 @@ interface WorkspaceState {
   removeProject: (id: string) => void
   selectProject: (id: string | null) => void
   renameProject: (id: string, name: string) => void
+  /** Moves a project into a slot of the current order (see lib/reorder) and saves the order. */
+  moveProject: (id: string, slot: number) => void
 
   addTerminal: (projectId: string, terminal: TerminalRecord) => void
   removeTerminalLocal: (projectId: string, terminalId: string) => void
@@ -215,11 +218,22 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   selectProject: (id) => {
     useUsage.getState().closePage()
     useUi.getState().closeSettings()
+    if (useWorkspace.getState().selectedProjectId === id) return
     set({ selectedProjectId: id })
+    void ipc.projects.select(id).catch(() => {})
   },
 
   renameProject: (id, name) =>
     set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p)) })),
+
+  moveProject: (id, slot) => {
+    const { projects } = useWorkspace.getState()
+    const from = projects.findIndex((p) => p.id === id)
+    if (from < 0 || isNoopSlot(from, slot)) return
+    const next = moveToSlot(projects, from, slot)
+    set({ projects: next })
+    void ipc.projects.reorder(next.map((p) => p.id)).catch(() => {})
+  },
 
   addTerminal: (projectId, terminal) => {
     set((state) => ({

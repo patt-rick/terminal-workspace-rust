@@ -138,6 +138,11 @@ pub fn projects_rename(store: State<StateStore>, id: String, name: String) {
 }
 
 #[tauri::command]
+pub fn projects_reorder(store: State<StateStore>, ids: Vec<String>) {
+    store.reorder_projects(&ids)
+}
+
+#[tauri::command]
 pub fn projects_select(store: State<StateStore>, id: Option<String>) {
     store.select(id)
 }

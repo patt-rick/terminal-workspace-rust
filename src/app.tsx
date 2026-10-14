@@ -22,7 +22,7 @@ import { Resizer } from './components/resizer'
 import { useFiles } from './state/files'
 import { useDiffView } from './state/diff'
 import { useRepos } from './state/repos'
-import { useProjects } from './hooks/use-projects'
+import { useLoadProjects, useProjects } from './hooks/use-projects'
 import { closeProjectTerminal, createProjectTerminal, useWorkspace } from './state/store'
 import { registerAutoSwitch } from './state/auto-switch'
 import { useUi } from './state/ui'
@@ -42,6 +42,7 @@ import { ipc, isTauri, type Project, type TerminalRecord } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
 
 export default function App() {
+  useLoadProjects()
   const { projects, selectedProject, addProject } = useProjects()
 
   const openFiles = useFiles((s) => s.openFiles)

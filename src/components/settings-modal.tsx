@@ -188,8 +188,14 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
           </button>
         ))}
       </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-2xl px-6 pb-6 pt-14">
+      <div className={`min-w-0 flex-1 ${tab === 'updates' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        <div
+          className={
+            tab === 'updates'
+              ? 'mx-auto flex h-full max-w-4xl flex-col px-6 pb-6 pt-14'
+              : 'mx-auto max-w-2xl px-6 pb-6 pt-14'
+          }
+        >
           {tab === 'general' && (
             <>
               <Section title="Appearance">
@@ -796,41 +802,45 @@ function UpdatesSection() {
 
   const checking = status === 'checking'
 
+  // The release history takes the rest of the page and scrolls on its own.
   return (
-    <Section title="Updates">
-      <Row label="Current version">
-        <span className="text-foreground/60">{version ?? '—'}</span>
-      </Row>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void runCheck(true)}
-          disabled={checking}
-          className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5 disabled:opacity-50"
-        >
-          {checking ? 'Checking…' : 'Check for updates'}
-        </button>
-        {status === 'upToDate' && (
-          <span className="text-xs text-muted">You're on the latest version.</span>
-        )}
-        {status === 'available' && (
-          <span className="text-xs text-muted">Update available.</span>
-        )}
-        {status === 'error' && error && (
-          <span className="text-xs text-danger">{error}</span>
-        )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Updates</div>
+      <div className="flex flex-col gap-2">
+        <Row label="Current version">
+          <span className="text-foreground/60">{version ?? '—'}</span>
+        </Row>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void runCheck(true)}
+            disabled={checking}
+            className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-foreground/5 disabled:opacity-50"
+          >
+            {checking ? 'Checking…' : 'Check for updates'}
+          </button>
+          {status === 'upToDate' && (
+            <span className="text-xs text-muted">You're on the latest version.</span>
+          )}
+          {status === 'available' && (
+            <span className="text-xs text-muted">Update available.</span>
+          )}
+          {status === 'error' && error && (
+            <span className="text-xs text-danger">{error}</span>
+          )}
+        </div>
       </div>
       {releases.length > 0 && (
-        <div className="mt-4">
+        <div className="mt-5 flex min-h-0 flex-1 flex-col">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
             Release history
           </div>
-          <div className="max-h-64 overflow-auto rounded-md border border-border bg-field-background p-3">
+          <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-field-background p-4">
             <ChangelogList entries={releases} />
           </div>
         </div>
       )}
-    </Section>
+    </div>
   )
 }
 

@@ -17,6 +17,9 @@ import { useUsage } from '../../state/usage'
 export function StatusBar() {
   const project = useWorkspace((s) => s.projects.find((p) => p.id === s.selectedProjectId) ?? null)
   const busyByTerminal = useWorkspace((s) => s.busyByTerminal)
+  const terminalCount = useWorkspace((s) =>
+    s.projects.reduce((n, p) => n + p.terminals.length, 0)
+  )
   const projectId = project?.id ?? null
   const reposLoaded = useRepos((s) => (projectId ? s.reposByProject[projectId] !== undefined : true))
   const repoId = useRepos((s) => (projectId ? (s.selectedByProject[projectId] ?? null) : null))
@@ -56,7 +59,7 @@ export function StatusBar() {
     hasProject: project !== null,
     info,
     fiveHourUtilization: fiveHour,
-    terminalCount: project?.terminals.length ?? 0,
+    terminalCount,
   })
   const left = items.filter((i) => i.action === 'git')
   const right = items.filter((i) => i.action !== 'git')

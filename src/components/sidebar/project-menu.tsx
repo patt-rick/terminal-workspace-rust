@@ -16,6 +16,9 @@ import { useNewTerminalItems } from '../workspace/new-terminal-items'
 export function useProjectMenu(project: Project): { items: MenuItem[]; dialogs: ReactNode } {
   const newItems = useNewTerminalItems(project.id)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const index = useWorkspace((s) => s.projects.findIndex((p) => p.id === project.id))
+  const count = useWorkspace((s) => s.projects.length)
+  const moveProject = useWorkspace((s) => s.moveProject)
 
   const doRemove = (): void => {
     void ipc.projects.remove(project.id)
@@ -37,6 +40,12 @@ export function useProjectMenu(project: Project): { items: MenuItem[]; dialogs: 
       onClick: () => void ipc.projects.openInFileManager(project.id),
     },
     { label: 'Open in Terminal', onClick: () => void ipc.projects.openInTerminal(project.id) },
+    ...(index > 0
+      ? [{ label: 'Move up', separatorBefore: true, onClick: () => moveProject(project.id, index - 1) }]
+      : []),
+    ...(index >= 0 && index < count - 1
+      ? [{ label: 'Move down', separatorBefore: index === 0, onClick: () => moveProject(project.id, index + 2) }]
+      : []),
     { label: 'Remove', danger: true, separatorBefore: true, onClick: () => setConfirmRemove(true) },
   ]
 

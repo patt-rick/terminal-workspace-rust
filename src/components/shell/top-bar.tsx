@@ -7,6 +7,7 @@ import { withShortcut } from '../../lib/keybindings'
 import { useNarrowWindow } from '../../lib/use-narrow-window'
 import { useShortcutLabel } from '../../state/keybindings'
 import { useWorkspace } from '../../state/store'
+import appIcon from '../../../src-tauri/icons/64x64.png'
 
 const BUTTON =
   'flex h-6 w-6 items-center justify-center rounded-md hover:bg-foreground/10 hover:text-[var(--title-bar-fg)] disabled:opacity-30'
@@ -56,8 +57,11 @@ export function TopBar() {
             <line x1="9" y1="3" x2="9" y2="21" />
           </svg>
         </button>
-        <span className="truncate text-xs font-medium text-[var(--title-bar-fg-faint)]">
-          Terminal Workspace
+        <span className="flex min-w-0 items-center gap-1.5">
+          <img src={appIcon} alt="" width={16} height={16} draggable={false} className="flex-shrink-0" />
+          <span className="truncate text-xs font-medium text-[var(--title-bar-fg-faint)]">
+            Terminal Workspace
+          </span>
         </span>
       </div>
 

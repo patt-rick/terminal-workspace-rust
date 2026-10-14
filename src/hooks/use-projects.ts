@@ -12,10 +12,12 @@ export async function addProject(): Promise<void> {
   ws.selectProject(project.id)
 }
 
-/** Loads the persisted project snapshot on mount and exposes add-project. */
-export function useProjects() {
-  const projects = useWorkspace((s) => s.projects)
-  const selectedProjectId = useWorkspace((s) => s.selectedProjectId)
+/**
+ * Loads the persisted project snapshot. Call it once, from the app root: the
+ * snapshot's selection replaces the live one, so a component that mounts and
+ * remounts (the nav list and rail swap on collapse) must not reload it.
+ */
+export function useLoadProjects(): void {
   const setProjects = useWorkspace((s) => s.setProjects)
 
   useEffect(() => {
@@ -31,6 +33,11 @@ export function useProjects() {
         // backend unavailable (e.g. plain browser dev) — start empty
       })
   }, [setProjects])
+}
+
+export function useProjects() {
+  const projects = useWorkspace((s) => s.projects)
+  const selectedProjectId = useWorkspace((s) => s.selectedProjectId)
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null
 

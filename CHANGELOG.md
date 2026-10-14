@@ -6,6 +6,29 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+### Added
+- Drag projects in the left pane, open or collapsed, to put them in any order. The order is
+  kept across restarts. A project's menu also has **Move up** and **Move down**.
+
+### Changed
+- Redesigned Claude account switcher: clearer account rows with an **Active** badge, and
+  proper buttons along the bottom for Log in, Import from CLI, API keys and Usage.
+- Project rows in the left pane: one highlight for what is selected, full-width project
+  names (the action buttons appear on hover), a count of hidden terminals on a collapsed
+  project, and a **New terminal** button on a project with none. In the minimised pane,
+  each project tile shows its terminal count.
+- Usage and Settings at the foot of the open left pane are labelled rows with their
+  shortcuts, and show when their page is open.
+- Settings → Updates: the release history fills the page.
+- The app's logo shows in the title bar, next to its name.
+- The status bar's terminal count covers every project, not just the selected one.
+- The selected project is remembered across restarts.
+
+### Fixed
+- Collapsing or expanding the left pane no longer jumps back to the first project.
+- Collapsing or expanding the left pane (or resizing the window) no longer freezes the app
+  while terminals are busy. Only the terminal on screen is resized; the others catch up
+  when you switch to them.
 
 ## [0.5.0] - 2026-10-13
 ### Added

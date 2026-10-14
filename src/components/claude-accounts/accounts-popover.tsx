@@ -1,9 +1,10 @@
+import type { ReactNode } from 'react'
 import { useClaudeAccounts } from '../../state/claude-accounts'
 import { useApiKeys } from '../../state/apikeys'
 import { useUi } from '../../state/ui'
 import { useUsage } from '../../state/usage'
 import { formatAgo, sortAccounts } from '../../lib/claude-accounts'
-import { AccountRow } from './account-row'
+import { AccountRow, ActiveBadge } from './account-row'
 
 /**
  * The dropdown under the title-bar pill: login-account list, API-key row
@@ -20,19 +21,34 @@ export function AccountsPopover({ onClose }: { onClose: () => void }) {
   const sorted = sortAccounts(s.accounts, s.activeAccountId)
 
   return (
-    <div className="flex max-h-[70vh] w-80 flex-col overflow-y-auto rounded-md border border-border bg-surface p-2 shadow-lg">
-      <div className="mb-1.5 flex items-baseline gap-1.5 px-1">
-        <span className="text-sm font-semibold text-foreground">Accounts</span>
-        <span className="text-xs text-muted">({s.accounts.length})</span>
+    <div className="flex max-h-[70vh] w-[340px] flex-col overflow-hidden rounded-xl border border-border bg-overlay shadow-xl">
+      <div className="flex h-11 flex-shrink-0 items-center gap-1.5 border-b border-border pl-3.5 pr-2">
+        <span className="text-sm font-semibold text-foreground">Claude accounts</span>
+        <span className="text-xs text-muted">{s.accounts.length}</span>
+        <span className="ml-auto text-[11px] text-muted">
+          {s.usageFetchedAt ? `Usage ${formatAgo(s.usageFetchedAt, Date.now())}` : ''}
+        </span>
+        <button
+          type="button"
+          onClick={() => void s.refreshUsage(true)}
+          title="Refresh usage"
+          aria-label="Refresh usage"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-foreground/55 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+            <path d="M20 4v7h-7" />
+          </svg>
+        </button>
       </div>
 
-      {s.accounts.length === 0 && (
-        <div className="px-1 py-2 text-xs text-muted">
-          No Claude accounts yet. Log in or import the account you're already using in the CLI.
-        </div>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
+        {s.accounts.length === 0 && anthropicKeys.length === 0 && (
+          <div className="px-1.5 py-3 text-center text-xs leading-relaxed text-muted">
+            No Claude accounts yet. Log in, or import the account the claude CLI already uses.
+          </div>
+        )}
 
-      <div className="flex flex-col gap-1">
         {sorted.map((a) => (
           <AccountRow
             key={a.id}
@@ -49,105 +65,178 @@ export function AccountsPopover({ onClose }: { onClose: () => void }) {
         {anthropicKeys.map((k) => (
           <div
             key={k.id}
-            className={`rounded-md border px-3 py-2 ${
-              k.enabled ? 'border-l-2 border-accent bg-accent/5' : 'border-border'
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2.5 ${
+              k.enabled ? 'border-accent/50 bg-accent/5' : 'border-border'
             }`}
           >
-            <div className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <div className={`truncate text-sm font-medium ${k.enabled ? 'text-accent' : 'text-foreground'}`}>
-                  🔑 {k.label}
-                </div>
-                <div className="truncate text-xs text-muted">
-                  API key · pay per token{k.enabled ? ' · overrides login for claude' : ''}
-                </div>
+            <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-foreground/10 text-foreground/70">
+              <KeyIcon />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-sm font-medium text-foreground">{k.label}</span>
+                {k.enabled && <ActiveBadge />}
               </div>
-              {!k.enabled && (
-                <button
-                  type="button"
-                  onClick={() => void s.switchToApiKey(k.id)}
-                  disabled={s.busy || s.loggingIn}
-                  title="Enable this key — claude will bill the API key instead of a subscription"
-                  className="rounded border border-border px-2 py-1 text-xs hover:bg-foreground/5 disabled:opacity-50"
-                >
-                  ⇄ Switch
-                </button>
-              )}
+              <div className="truncate text-xs text-muted">
+                API key · pay per token{k.enabled ? ' · overrides login' : ''}
+              </div>
             </div>
+            {!k.enabled && (
+              <button
+                type="button"
+                onClick={() => void s.switchToApiKey(k.id)}
+                disabled={s.busy || s.loggingIn}
+                title="Enable this key — claude will bill the API key instead of a subscription"
+                className="flex h-7 shrink-0 items-center rounded-md border border-border px-2.5 text-xs font-medium text-foreground/85 outline-none hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50"
+              >
+                Switch
+              </button>
+            )}
           </div>
         ))}
+
+        {s.error && (
+          <div className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-2.5 py-2 text-xs text-danger">
+            <span className="min-w-0 flex-1 break-words">{s.error}</span>
+            <button
+              type="button"
+              onClick={s.clearError}
+              aria-label="Dismiss"
+              className="flex-shrink-0 opacity-70 hover:opacity-100"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
-      {s.error && (
-        <div className="mt-2 flex items-start gap-2 px-1 text-xs text-danger">
-          <span className="min-w-0 flex-1 break-words">{s.error}</span>
-          <button type="button" onClick={s.clearError} className="flex-shrink-0 hover:underline">
-            ✕
-          </button>
-        </div>
-      )}
-
-      <div className="mt-2 flex items-center gap-3 border-t border-border px-1 pt-2 text-xs">
+      <div className="flex-shrink-0 border-t border-border bg-foreground/5 p-2">
         {s.loggingIn ? (
-          <span className="flex items-center gap-2 text-muted">
-            Waiting for browser…
-            <button
-              type="button"
-              onClick={() => void s.cancelLogin()}
-              className="text-link hover:underline"
-            >
-              Cancel
-            </button>
-          </span>
+          <div className="flex h-8 items-center gap-2 pl-1.5 text-xs text-muted">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent motion-reduce:animate-none" />
+            <span className="min-w-0 flex-1 truncate">Finish signing in in your browser…</span>
+            <FooterButton onClick={() => void s.cancelLogin()}>Cancel</FooterButton>
+          </div>
         ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => void s.addViaOauth()}
-              className="text-link hover:underline"
-            >
-              Log In
-            </button>
-            <button
-              type="button"
+          <div className="grid grid-cols-2 gap-1.5">
+            <FooterButton primary icon={<PlusIcon />} onClick={() => void s.addViaOauth()}>
+              Log in
+            </FooterButton>
+            <FooterButton
+              icon={<ImportIcon />}
               onClick={() => void s.importCli()}
               disabled={s.busy}
               title="Import the account already logged in via the claude CLI"
-              className="text-link hover:underline disabled:opacity-50"
             >
               Import from CLI
-            </button>
-            <button
-              type="button"
-              onClick={() => openSettings('ai')}
-              className="text-link hover:underline"
+            </FooterButton>
+            <FooterButton
+              icon={<KeyIcon />}
+              onClick={() => {
+                onClose()
+                openSettings('ai')
+              }}
             >
-              API Key
-            </button>
-            <button
-              type="button"
+              API keys
+            </FooterButton>
+            <FooterButton
+              icon={<ChartIcon />}
               onClick={() => {
                 onClose()
                 useUsage.getState().openPage()
               }}
-              className="text-link hover:underline"
             >
               Usage
-            </button>
-          </>
+            </FooterButton>
+          </div>
         )}
-        <span className="ml-auto flex items-center gap-1 text-muted">
-          {s.usageFetchedAt ? formatAgo(s.usageFetchedAt, Date.now()) : ''}
-          <button
-            type="button"
-            onClick={() => void s.refreshUsage(true)}
-            title="Refresh usage"
-            className="hover:text-foreground"
-          >
-            ⟳
-          </button>
-        </span>
       </div>
     </div>
+  )
+}
+
+function FooterButton({
+  children,
+  icon,
+  primary,
+  onClick,
+  disabled,
+  title,
+}: {
+  children: ReactNode
+  icon?: ReactNode
+  primary?: boolean
+  onClick: () => void
+  disabled?: boolean
+  title?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50 ${
+        primary
+          ? 'bg-accent font-semibold text-accent-foreground shadow-sm hover:brightness-110'
+          : 'border border-border text-foreground/85 hover:bg-foreground/10 hover:text-foreground'
+      }`}
+    >
+      {icon}
+      <span className="truncate">{children}</span>
+    </button>
+  )
+}
+
+const iconProps = {
+  width: 14,
+  height: 14,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+  className: 'flex-shrink-0',
+}
+
+function PlusIcon() {
+  return (
+    <svg {...iconProps}>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  )
+}
+
+function ImportIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M12 4v11" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 20h14" />
+    </svg>
+  )
+}
+
+function KeyIcon() {
+  return (
+    <svg {...iconProps}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="m11 12 9-9" />
+      <path d="m17 6 3 3" />
+    </svg>
+  )
+}
+
+function ChartIcon() {
+  return (
+    <svg {...iconProps}>
+      <path d="M4 20V10" />
+      <path d="M10 20V4" />
+      <path d="M16 20v-7" />
+      <path d="M3 20h18" />
+    </svg>
   )
 }
