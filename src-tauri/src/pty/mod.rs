@@ -151,6 +151,9 @@ struct PtyHandle {
     /// Transcript path last reported by a Claude hook (Linux path under WSL).
     #[cfg(feature = "remote-access")]
     transcript_path: Option<String>,
+    /// A hook reported SessionEnd for `session_id` (see `hooks::decide`).
+    #[cfg(feature = "remote-access")]
+    session_ended: bool,
 }
 
 /// Extract the Claude session id from a startup command, if present. Only a
@@ -199,6 +202,55 @@ fn prompt_like_tail(tail: &[u8]) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Native-shell terminals the detector thinks run Claude but whose process
+/// tree has no Claude in it (a crash, or an exit PowerShell gave no OSC 133
+/// for). Flips them to not-alive and returns their ids. WSL terminals are
+/// skipped: their job only holds wsl.exe, so titles and hooks decide there.
+#[cfg(all(windows, feature = "remote-access"))]
+fn claude_gone(entries: &Mutex<HashMap<String, PtyHandle>>) -> Vec<String> {
+    let mut gone = Vec::new();
+    let map = entries.lock();
+    for (id, h) in map.iter() {
+        if crate::wsl::parse_shell_token(&h.shell).is_some()
+            || !h.out.lock().detector.is_claude_alive()
+        {
+            continue;
+        }
+        let Some(paths) = h.job.as_ref().and_then(|j| j.image_paths()) else {
+            continue;
+        };
+        if claude_in_images(&paths) == Some(false) && h.out.lock().detector.set_claude_alive(false) {
+            gone.push(id.clone());
+        }
+    }
+    gone
+}
+
+/// Is Claude among these process image paths? `Some(true)` for `claude.exe`
+/// (or a node/bun runtime living under a claude path), `None` when another
+/// node/bun process might be an npm-installed Claude (its image path doesn't
+/// say), `Some(false)` otherwise.
+#[cfg(feature = "remote-access")]
+#[cfg_attr(not(windows), allow(dead_code))]
+fn claude_in_images(paths: &[String]) -> Option<bool> {
+    let mut unsure = false;
+    for p in paths {
+        let lower = p.to_lowercase();
+        let name = lower.rsplit(['\\', '/']).next().unwrap_or("");
+        match name {
+            "claude.exe" => return Some(true),
+            "node.exe" | "bun.exe" => {
+                if lower.contains("claude") {
+                    return Some(true);
+                }
+                unsure = true;
+            }
+            _ => {}
+        }
+    }
+    (!unsure).then_some(false)
 }
 
 /// Resize a PTY master, clamping to a 1x1 floor.
@@ -355,6 +407,8 @@ impl PtyManager {
                 shell: shell.clone(),
                 #[cfg(feature = "remote-access")]
                 transcript_path: None,
+                #[cfg(feature = "remote-access")]
+                session_ended: false,
             },
         );
         #[cfg(feature = "remote-access")]
@@ -466,7 +520,22 @@ impl PtyManager {
         if let Some(h) = self.entries.lock().get_mut(id) {
             h.session_id = Some(session_id.to_string());
             h.transcript_path = None;
+            h.session_ended = false;
         }
+    }
+
+    /// A hook reported SessionEnd (true) or SessionStart (false) for the
+    /// terminal's current session.
+    #[cfg(feature = "remote-access")]
+    pub fn set_session_ended(&self, id: &str, ended: bool) {
+        if let Some(h) = self.entries.lock().get_mut(id) {
+            h.session_ended = ended;
+        }
+    }
+
+    #[cfg(feature = "remote-access")]
+    pub fn session_ended(&self, id: &str) -> bool {
+        self.entries.lock().get(id).is_some_and(|h| h.session_ended)
     }
 
     /// Remember the transcript path a hook reported for the current session.
@@ -525,6 +594,10 @@ impl PtyManager {
             }
             for (id, line) in flagged {
                 emit_attention(&app, &id, "waiting-input", Some(line));
+            }
+            #[cfg(windows)]
+            for id in claude_gone(&entries) {
+                emit_detect_event(&app, &id, detect::DetectEvent::ClaudeAlive(false));
             }
         });
     }
@@ -599,9 +672,12 @@ impl PtyManager {
     pub fn restore_local_size(&self, id: &str) {
         let mut entries = self.entries.lock();
         if let Some(handle) = entries.get_mut(id) {
-            handle.remote_size = None;
-            let (cols, rows) = handle.local_size;
-            apply_size(handle.master.as_ref(), cols, rows);
+            // Only a remote that actually took the size gives it back; otherwise
+            // the desktop's size is already applied and a resize would nudge the TUI.
+            if handle.remote_size.take().is_some() {
+                let (cols, rows) = handle.local_size;
+                apply_size(handle.master.as_ref(), cols, rows);
+            }
         }
     }
 
@@ -857,6 +933,24 @@ mod tests {
         assert_eq!(extract_claude_session("claude --session-id abc-123"), None);
         assert_eq!(extract_claude_session("claude"), None);
         assert_eq!(extract_claude_session("npm run dev"), None);
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn claude_in_images_is_conservative_about_node() {
+        let v = |ps: &[&str]| claude_in_images(&ps.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let ps = r"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe";
+        assert_eq!(v(&[ps, r"C:\Users\me\.local\bin\claude.exe"]), Some(true));
+        assert_eq!(v(&[ps, r"C:\Users\me\.local\bin\CLAUDE.EXE"]), Some(true));
+        assert_eq!(v(&[ps, r"C:\Users\me\AppData\Roaming\claude-code\bun.exe"]), Some(true));
+        // A node.exe that could be an npm-installed Claude: unknown, never "gone".
+        assert_eq!(v(&[ps, r"C:\Program Files\nodejs\node.exe"]), None);
+        // Only the shell (Claude crashed or exited): gone.
+        assert_eq!(v(&[ps]), Some(false));
+        assert_eq!(v(&[ps, r"C:\Windows\System32\conhost.exe"]), Some(false));
+        // A path merely containing "claude" in a folder name doesn't count.
+        assert_eq!(v(&[r"C:\claude\tools\git.exe"]), Some(false));
+        assert_eq!(v(&[]), Some(false));
     }
 
     #[cfg(feature = "remote-access")]

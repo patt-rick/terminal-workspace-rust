@@ -35,7 +35,15 @@ pub fn find_in_projects(projects: &Path, session_id: &str) -> Option<PathBuf> {
 /// this session's file, else a search of the terminal's own home only.
 pub fn resolve(home: &Path, src: &ChatSource) -> Option<PathBuf> {
     let sid = src.session_id.as_deref()?;
-    let distro = crate::wsl::parse_shell_token(&src.shell);
+    // A bare `wsl:` is the default distro; `\\wsl$\` needs its real name.
+    let distro = match crate::wsl::parse_shell_token(&src.shell) {
+        #[cfg(windows)]
+        Some(d) => Some(crate::wsl::resolve_distro(d)?),
+        #[cfg(not(windows))]
+        Some(d) => Some(d.to_string()),
+        None => None,
+    };
+    let distro = distro.as_deref();
     if let Some(tp) = &src.transcript_path {
         let p = match distro {
             Some(d) if tp.starts_with('/') => crate::wsl::unc_path(d, tp),

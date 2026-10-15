@@ -191,6 +191,7 @@ pub fn uninstall(settings_path: &Path) -> Result<(), String> {
 }
 
 /// The command an existing install uses (from a core event's marker entry).
+#[cfg(feature = "remote-access")]
 fn our_command(root: &Value) -> Option<String> {
     CORE_EVENTS.iter().find_map(|ev| {
         root.get("hooks")?
@@ -211,6 +212,7 @@ fn our_command(root: &Value) -> Option<String> {
 /// Add events introduced after an install, reusing that install's own command.
 /// Existing entries are never rewritten, so a dev build can't take over the
 /// installed app's hooks. Returns whether anything changed.
+#[cfg(feature = "remote-access")]
 pub fn upgrade(settings_path: &Path) -> Result<bool, String> {
     let mut root = read_settings(settings_path);
     if !CORE_EVENTS.iter().all(|ev| has_our_entry(&root, ev)) {
@@ -299,14 +301,25 @@ pub struct Route {
     pub ended: bool,
 }
 
+/// `current_ended`: a SessionEnd for `current` was already routed. Hooks can't
+/// tell a nested `claude -p --resume X` (run by a tool, sharing the env var)
+/// from the TUI's own `/resume`; only the latter ends the current session
+/// first, so a `resume` start is adopted only after that.
 #[cfg(feature = "remote-access")]
-pub fn decide(ev: &HookEvent, current: Option<&str>) -> Route {
+pub fn decide(ev: &HookEvent, current: Option<&str>, current_ended: bool) -> Route {
     let continues = ev.event == "SessionStart"
         && current.is_some()
-        && matches!(ev.source.as_deref(), Some("clear" | "compact" | "resume"));
+        && match ev.source.as_deref() {
+            Some("clear" | "compact") => true,
+            Some("resume") => current_ended,
+            _ => false,
+        };
     let adopt = continues && current != Some(ev.session_id.as_str());
     let accept = adopt || current == Some(ev.session_id.as_str());
-    let ended = accept && ev.event == "SessionEnd" && ev.source.as_deref() != Some("clear");
+    // `/clear` and `/resume` end a session but Claude keeps running.
+    let ended = accept
+        && ev.event == "SessionEnd"
+        && !matches!(ev.source.as_deref(), Some("clear" | "resume"));
     Route { accept, adopt, ended }
 }
 
@@ -342,12 +355,17 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                 continue;
             };
             let current = pty.chat_source(&terminal_id).and_then(|s| s.session_id);
-            let route = decide(&ev, current.as_deref());
+            let route = decide(&ev, current.as_deref(), pty.session_ended(&terminal_id));
             if !route.accept {
                 continue; // a nested Claude sharing the env var
             }
             if route.adopt {
                 pty.adopt_session(&terminal_id, &ev.session_id);
+            }
+            match ev.event.as_str() {
+                "SessionStart" => pty.set_session_ended(&terminal_id, false),
+                "SessionEnd" => pty.set_session_ended(&terminal_id, true),
+                _ => {}
             }
             pty.note_transcript(&terminal_id, ev.transcript_path.clone());
             pty.set_claude_alive(&app, &terminal_id, !route.ended);
@@ -480,20 +498,28 @@ mod tests {
             attention: None,
         };
         let r = |accept, adopt, ended| Route { accept, adopt, ended };
+        let live = |e: &HookEvent, cur| decide(e, cur, false);
         // Same session: routed.
-        assert_eq!(decide(&ev("Stop", "a", None), Some("a")), r(true, false, false));
+        assert_eq!(live(&ev("Stop", "a", None), Some("a")), r(true, false, false));
         // A nested `claude -p` sharing the env var: dropped.
-        assert_eq!(decide(&ev("Stop", "b", None), Some("a")), r(false, false, false));
-        assert_eq!(decide(&ev("SessionStart", "b", Some("startup")), Some("a")), r(false, false, false));
-        // /clear (and resume/compact forks) moves the terminal to the new session.
-        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), Some("a")), r(true, true, false));
-        assert_eq!(decide(&ev("SessionStart", "b", Some("resume")), Some("a")), r(true, true, false));
-        assert_eq!(decide(&ev("SessionStart", "a", Some("compact")), Some("a")), r(true, false, false));
+        assert_eq!(live(&ev("Stop", "b", None), Some("a")), r(false, false, false));
+        assert_eq!(live(&ev("SessionStart", "b", Some("startup")), Some("a")), r(false, false, false));
+        assert_eq!(live(&ev("SessionEnd", "b", Some("other")), Some("a")), r(false, false, false));
+        // /clear (and compact) moves the terminal to the new session.
+        assert_eq!(live(&ev("SessionStart", "b", Some("clear")), Some("a")), r(true, true, false));
+        assert_eq!(live(&ev("SessionStart", "a", Some("compact")), Some("a")), r(true, false, false));
+        // A nested `claude -p --resume b` while `a` is live: not a takeover.
+        assert_eq!(live(&ev("SessionStart", "b", Some("resume")), Some("a")), r(false, false, false));
+        // The TUI's /resume ends `a` (reason "resume") first, then starts `b`.
+        assert_eq!(live(&ev("SessionEnd", "a", Some("resume")), Some("a")), r(true, false, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("resume")), Some("a"), true), r(true, true, false));
+        assert_eq!(live(&ev("SessionStart", "a", Some("resume")), Some("a")), r(true, false, false));
         // A terminal without a session never gains one (shells stay shells).
-        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), None), r(false, false, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), None, true), r(false, false, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("resume")), None, true), r(false, false, false));
         // Exit ends Claude; the SessionEnd that /clear fires does not.
-        assert_eq!(decide(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a")), r(true, false, true));
-        assert_eq!(decide(&ev("SessionEnd", "a", Some("clear")), Some("a")), r(true, false, false));
+        assert_eq!(live(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a")), r(true, false, true));
+        assert_eq!(live(&ev("SessionEnd", "a", Some("clear")), Some("a")), r(true, false, false));
     }
 
     #[test]
@@ -507,6 +533,7 @@ mod tests {
         assert_eq!(wrap_with_terminal("garbage", Some("t1")), "garbage");
     }
 
+    #[cfg(feature = "remote-access")]
     #[test]
     fn upgrade_adds_new_events_with_the_installed_command() {
         let dir = tempfile::tempdir().unwrap();

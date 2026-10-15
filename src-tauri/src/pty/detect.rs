@@ -355,6 +355,9 @@ mod tests {
         // …and so does a non-Claude title (a shell resetting it after exit).
         assert!(d.feed(&osc("2;C:\\repo")).contains(&DetectEvent::ClaudeAlive(false)));
         assert!(!d.is_claude_alive());
+        // Claude's own exit clears the title (`OSC 0;` empty) — also an end.
+        assert!(d.feed(&osc("2;✳ Claude Code")).contains(&DetectEvent::ClaudeAlive(true)));
+        assert!(d.feed(&osc("0;")).contains(&DetectEvent::ClaudeAlive(false)));
         assert!(d.set_claude_alive(true));
         assert!(!d.set_claude_alive(true));
     }

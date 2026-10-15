@@ -214,6 +214,23 @@ pub fn list_distros() -> Vec<Distro> {
     Vec::new()
 }
 
+/// The real name of the distro a `wsl:` token names: `""` (the default
+/// distro) is looked up once and cached; failures are retried next call.
+#[cfg(all(windows, feature = "remote-access"))]
+pub fn resolve_distro(distro: &str) -> Option<String> {
+    use std::sync::Mutex;
+    if !distro.is_empty() {
+        return Some(distro.to_string());
+    }
+    static DEFAULT: Mutex<Option<String>> = Mutex::new(None);
+    if let Some(name) = DEFAULT.lock().ok()?.clone() {
+        return Some(name);
+    }
+    let name = list_distros().into_iter().find(|d| d.is_default).map(|d| d.name)?;
+    *DEFAULT.lock().ok()? = Some(name.clone());
+    Some(name)
+}
+
 /// $HOME inside a distro, cached for the app's lifetime. `""` = default distro.
 #[cfg(windows)]
 pub fn distro_home(distro: &str) -> Option<String> {

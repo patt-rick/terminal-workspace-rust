@@ -70,36 +70,72 @@ impl JobObject {
         }
     }
 
-    #[cfg(test)]
-    pub fn pids(&self) -> Vec<u32> {
+    /// Every process in the job, or None if the query failed (including a
+    /// tree too big for the buffer) — callers must treat None as "unknown".
+    #[cfg(any(test, feature = "remote-access"))]
+    pub fn pids(&self) -> Option<Vec<u32>> {
         use windows_sys::Win32::System::JobObjects::{
             JobObjectBasicProcessIdList, QueryInformationJobObject,
         };
+        const CAP: usize = 1024;
 
         // Mirrors JOBOBJECT_BASIC_PROCESS_ID_LIST but with room for many pids.
         #[repr(C)]
         struct ProcessIdList {
             number_of_assigned_processes: u32,
             number_of_process_ids_in_list: u32,
-            process_id_list: [usize; 64],
+            process_id_list: [usize; CAP],
         }
 
-        let mut list: ProcessIdList = unsafe { std::mem::zeroed() };
+        let mut list: Box<ProcessIdList> = Box::new(unsafe { std::mem::zeroed() });
         // SAFETY: buffer and length match; return length is optional (null).
         let ok = unsafe {
             QueryInformationJobObject(
                 self.handle.as_raw_handle() as HANDLE,
                 JobObjectBasicProcessIdList,
-                &mut list as *mut _ as *mut _,
+                &mut *list as *mut _ as *mut _,
                 std::mem::size_of::<ProcessIdList>() as u32,
                 std::ptr::null_mut(),
             )
         };
         if ok == 0 {
-            return Vec::new();
+            return None;
         }
-        let n = (list.number_of_process_ids_in_list as usize).min(64);
-        list.process_id_list[..n].iter().map(|&p| p as u32).collect()
+        let n = (list.number_of_process_ids_in_list as usize).min(CAP);
+        Some(list.process_id_list[..n].iter().map(|&p| p as u32).collect())
+    }
+
+    /// Full image paths of the job's processes, or None when the job can't be
+    /// listed. A process that exited (or can't be opened) is skipped.
+    #[cfg(feature = "remote-access")]
+    pub fn image_paths(&self) -> Option<Vec<String>> {
+        use windows_sys::Win32::System::Threading::{
+            QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        let mut out = Vec::new();
+        for pid in self.pids()? {
+            // SAFETY: a non-null return is a process handle we own and close on drop.
+            let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+            if raw.is_null() {
+                continue;
+            }
+            let proc = unsafe { OwnedHandle::from_raw_handle(raw as _) };
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            // SAFETY: `buf` holds `len` u16s; the call writes at most that many.
+            let ok = unsafe {
+                QueryFullProcessImageNameW(
+                    proc.as_raw_handle() as HANDLE,
+                    PROCESS_NAME_WIN32,
+                    buf.as_mut_ptr(),
+                    &mut len,
+                )
+            };
+            if ok != 0 {
+                out.push(String::from_utf16_lossy(&buf[..len as usize]));
+            }
+        }
+        Some(out)
     }
 }
 
@@ -152,7 +188,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut saw_tree = false;
         while Instant::now() < deadline {
-            if job.pids().len() >= 2 {
+            if job.pids().unwrap_or_default().len() >= 2 {
                 saw_tree = true;
                 break;
             }
@@ -165,7 +201,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut emptied = false;
         while Instant::now() < deadline {
-            if job.pids().is_empty() {
+            if job.pids().is_some_and(|p| p.is_empty()) {
                 emptied = true;
                 break;
             }

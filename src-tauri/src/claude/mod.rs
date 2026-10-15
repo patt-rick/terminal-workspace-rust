@@ -7,6 +7,7 @@ pub mod creds;
 pub mod accounts;
 pub mod oauth;
 pub mod usage;
+#[cfg(feature = "remote-access")]
 pub mod transcript;
 
 use crate::error::{AppError, AppResult};
@@ -64,6 +65,7 @@ pub fn valid_session_id(id: &str) -> bool {
 }
 
 /// A canonical 8-4-4-4-12 hex UUID — the only shape Claude session ids take.
+#[cfg(feature = "remote-access")]
 pub fn is_uuid(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 36
@@ -287,6 +289,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "remote-access")]
     fn is_uuid_accepts_only_canonical_uuids() {
         assert!(is_uuid("2b5c191b-945b-418d-9a3e-0d6c3f1e2a4b"));
         assert!(is_uuid("2B5C191B-945B-418D-9A3E-0D6C3F1E2A4B"));

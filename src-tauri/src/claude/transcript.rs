@@ -155,8 +155,13 @@ impl Transcript {
 
     fn push(&mut self, msg: ChatMessage) -> Vec<String> {
         let id = msg.id.clone();
-        self.by_id.insert(id.clone(), self.msgs.len());
-        self.msgs.push(msg);
+        // A repeated row uuid replaces its message: ids stay unique for upserts.
+        if let Some(&i) = self.by_id.get(&id) {
+            self.msgs[i] = msg;
+        } else {
+            self.by_id.insert(id.clone(), self.msgs.len());
+            self.msgs.push(msg);
+        }
         vec![id]
     }
 
@@ -478,6 +483,22 @@ mod tests {
         }).collect();
         assert_eq!(results[0], Some(ToolResult { ok: true, preview: "file body".into() }));
         assert_eq!(results[1], Some(ToolResult { ok: false, preview: "exit 1".into() }));
+    }
+
+    #[test]
+    fn duplicate_row_uuid_replaces_in_place() {
+        let mut t = Transcript::default();
+        let changed = feed(&mut t, &[
+            r#"{"type":"user","uuid":"u1","message":{"content":"first"}}"#,
+            r#"{"type":"user","uuid":"u2","message":{"content":"other"}}"#,
+            r#"{"type":"user","uuid":"u1","message":{"content":"again"}}"#,
+        ]);
+        assert_eq!(changed, vec!["u1".to_string(), "u2".to_string(), "u1".to_string()]);
+        let h = t.history();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[0].id, "u1");
+        assert_eq!(h[0].blocks, vec![ChatBlock::Text { text: "again".into() }]);
+        assert_eq!(t.get(&["u1".to_string()]).len(), 1);
     }
 
     #[test]
