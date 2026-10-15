@@ -323,18 +323,105 @@ pub fn decide(ev: &HookEvent, current: Option<&str>, current_ended: bool) -> Rou
     Route { accept, adopt, ended }
 }
 
+/// How long a held-back `resume` start waits for the old session's SessionEnd.
+#[cfg(feature = "remote-access")]
+pub const PARK_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A `resume` SessionStart for another session, held back because the current
+/// session hasn't ended yet: it's the TUI's `/resume` whose SessionEnd is late
+/// (or lost), or a nested `claude -p --resume` that must never take over.
+#[cfg(feature = "remote-access")]
+#[derive(Debug, Clone)]
+pub struct Parked {
+    pub session_id: String,
+    pub transcript_path: Option<String>,
+    pub at: std::time::Instant,
+}
+
+#[cfg(feature = "remote-access")]
+#[derive(Debug, PartialEq, Eq)]
+pub enum Fate {
+    Keep,
+    Drop,
+    Adopt,
+}
+
+/// Whether `decide` rejected `ev` only because the current session hasn't ended.
+#[cfg(feature = "remote-access")]
+pub fn should_park(ev: &HookEvent, current: Option<&str>, current_ended: bool) -> bool {
+    ev.event == "SessionStart"
+        && ev.source.as_deref() == Some("resume")
+        && !current_ended
+        && current.is_some_and(|c| c != ev.session_id)
+}
+
+/// What becomes of a parked start after `ev` arrives (`None`: a timer tick).
+/// - The current session ends within the window → adopt (the late SessionEnd).
+/// - The current session does anything else → drop: it's alive, so the start
+///   came from a nested Claude.
+/// - The parked session ends → drop (a nested `-p` run finishing).
+/// - The window passes with the current session silent and the terminal idle
+///   → adopt. A nested run happens mid-turn, while the terminal is working.
+#[cfg(feature = "remote-access")]
+pub fn parked_fate(
+    p: &Parked,
+    ev: Option<&HookEvent>,
+    current: Option<&str>,
+    working: bool,
+    now: std::time::Instant,
+) -> Fate {
+    let fresh = now.saturating_duration_since(p.at) <= PARK_WINDOW;
+    match ev {
+        None if !fresh && !working => Fate::Adopt,
+        None => Fate::Keep,
+        Some(ev) if current == Some(ev.session_id.as_str()) => {
+            if ev.event == "SessionEnd" && fresh {
+                Fate::Adopt
+            } else {
+                Fate::Drop
+            }
+        }
+        Some(ev) if ev.session_id == p.session_id && ev.event == "SessionEnd" => Fate::Drop,
+        Some(_) => Fate::Keep,
+    }
+}
+
+#[cfg(feature = "remote-access")]
+fn adopt_parked(app: &tauri::AppHandle, pty: &crate::pty::PtyManager, terminal_id: &str, p: &Parked) {
+    pty.adopt_session(terminal_id, &p.session_id);
+    pty.note_transcript(terminal_id, p.transcript_path.clone());
+    pty.set_claude_alive(app, terminal_id, true);
+}
+
 /// Poll the spool dir and route events to terminals as attention events.
 #[cfg(feature = "remote-access")]
 pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
     use tauri::Manager;
     std::fs::create_dir_all(&spool).ok();
+    let mut parked: std::collections::HashMap<String, Parked> = std::collections::HashMap::new();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
+        let pty = app.state::<crate::pty::PtyManager>();
+        // Timer pass: a parked resume whose old session went quiet is adopted.
+        parked.retain(|terminal_id, p| {
+            let current = pty.chat_source(terminal_id).and_then(|s| s.session_id);
+            let working = pty.chat_flags(terminal_id).1;
+            match parked_fate(p, None, current.as_deref(), working, std::time::Instant::now()) {
+                Fate::Keep => true,
+                Fate::Drop => false,
+                Fate::Adopt => {
+                    adopt_parked(&app, &pty, terminal_id, p);
+                    false
+                }
+            }
+        });
         let Ok(entries) = std::fs::read_dir(&spool) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
+        // Spool names start with a nanosecond timestamp: oldest first.
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
             let Ok(body) = std::fs::read_to_string(&path) else {
                 continue;
             };
@@ -345,7 +432,6 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
             // Route to the spawning terminal: by its id when the payload is
             // wrapped, else by session id. Events from sessions outside
             // Terminal Workspace are dropped.
-            let pty = app.state::<crate::pty::PtyManager>();
             let terminal = ev
                 .terminal_id
                 .clone()
@@ -355,8 +441,35 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                 continue;
             };
             let current = pty.chat_source(&terminal_id).and_then(|s| s.session_id);
-            let route = decide(&ev, current.as_deref(), pty.session_ended(&terminal_id));
+            if let Some(p) = parked.get(&terminal_id) {
+                let working = pty.chat_flags(&terminal_id).1;
+                match parked_fate(p, Some(&ev), current.as_deref(), working, std::time::Instant::now()) {
+                    Fate::Keep => {}
+                    Fate::Drop => {
+                        parked.remove(&terminal_id);
+                    }
+                    Fate::Adopt => {
+                        // The old session's late SessionEnd: it is done with.
+                        if let Some(p) = parked.remove(&terminal_id) {
+                            adopt_parked(&app, &pty, &terminal_id, &p);
+                        }
+                        continue;
+                    }
+                }
+            }
+            let ended = pty.session_ended(&terminal_id);
+            let route = decide(&ev, current.as_deref(), ended);
             if !route.accept {
+                if should_park(&ev, current.as_deref(), ended) {
+                    parked.insert(
+                        terminal_id,
+                        Parked {
+                            session_id: ev.session_id.clone(),
+                            transcript_path: ev.transcript_path.clone(),
+                            at: std::time::Instant::now(),
+                        },
+                    );
+                }
                 continue; // a nested Claude sharing the env var
             }
             if route.adopt {
@@ -520,6 +633,50 @@ mod tests {
         // Exit ends Claude; the SessionEnd that /clear fires does not.
         assert_eq!(live(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a")), r(true, false, true));
         assert_eq!(live(&ev("SessionEnd", "a", Some("clear")), Some("a")), r(true, false, false));
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn parked_resume_adopts_only_when_the_old_session_is_gone() {
+        use std::time::{Duration, Instant};
+        let ev = |event: &str, sid: &str, source: Option<&str>| HookEvent {
+            terminal_id: Some("t".into()),
+            session_id: sid.into(),
+            transcript_path: None,
+            event: event.into(),
+            source: source.map(str::to_string),
+            attention: None,
+        };
+        let start_b = ev("SessionStart", "b", Some("resume"));
+        assert!(should_park(&start_b, Some("a"), false));
+        assert!(!should_park(&start_b, Some("a"), true)); // decide adopts it outright
+        assert!(!should_park(&start_b, None, false));
+        assert!(!should_park(&ev("SessionStart", "b", Some("startup")), Some("a"), false));
+        assert!(!should_park(&ev("SessionStart", "a", Some("resume")), Some("a"), false));
+
+        let t0 = Instant::now();
+        let p = Parked { session_id: "b".into(), transcript_path: None, at: t0 };
+        let soon = t0 + Duration::from_secs(1);
+        let late = t0 + PARK_WINDOW + Duration::from_millis(500);
+        let fate = |e: Option<&HookEvent>, working, now| parked_fate(&p, e, Some("a"), working, now);
+
+        // The TUI's /resume with a late SessionEnd for `a`.
+        assert_eq!(fate(Some(&ev("SessionEnd", "a", Some("resume"))), false, soon), Fate::Adopt);
+        // …or a lost one: the window passes, `a` silent, terminal idle.
+        assert_eq!(fate(None, false, soon), Fate::Keep);
+        assert_eq!(fate(None, false, late), Fate::Adopt);
+
+        // A nested `claude -p --resume b` while `a` keeps going: never adopted.
+        assert_eq!(fate(Some(&ev("Stop", "a", None)), true, soon), Fate::Drop);
+        assert_eq!(fate(Some(&ev("Notification", "a", None)), false, late), Fate::Drop);
+        // Mid-turn (working) the timer never adopts, however long it waits.
+        assert_eq!(fate(None, true, late), Fate::Keep);
+        assert_eq!(fate(None, true, t0 + Duration::from_secs(600)), Fate::Keep);
+        // The nested run's own events: its Stop is ignored, its end drops it.
+        assert_eq!(fate(Some(&ev("Stop", "b", None)), true, soon), Fate::Keep);
+        assert_eq!(fate(Some(&ev("SessionEnd", "b", Some("other"))), true, soon), Fate::Drop);
+        // A SessionEnd for `a` after the window is not taken as the late one.
+        assert_eq!(fate(Some(&ev("SessionEnd", "a", Some("resume"))), true, late), Fate::Drop);
     }
 
     #[test]

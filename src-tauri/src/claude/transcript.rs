@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::truncate;
 
@@ -104,6 +104,8 @@ pub struct Transcript {
     by_id: HashMap<String, usize>,
     /// tool_use id → index of the message holding that tool call.
     tool_owner: HashMap<String, usize>,
+    /// Row uuids already ingested; a repeated row is skipped whole.
+    seen: HashSet<String>,
     anon: u64,
 }
 
@@ -133,6 +135,11 @@ impl Transcript {
         };
         if row.is_sidechain {
             return Vec::new();
+        }
+        if let Some(uuid) = &row.uuid {
+            if !self.seen.insert(uuid.clone()) {
+                return Vec::new();
+            }
         }
         let ts = row.timestamp.clone().unwrap_or_default();
         match row.ty.as_str() {
@@ -486,19 +493,50 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_row_uuid_replaces_in_place() {
+    fn repeated_row_uuid_is_skipped() {
         let mut t = Transcript::default();
         let changed = feed(&mut t, &[
             r#"{"type":"user","uuid":"u1","message":{"content":"first"}}"#,
             r#"{"type":"user","uuid":"u2","message":{"content":"other"}}"#,
             r#"{"type":"user","uuid":"u1","message":{"content":"again"}}"#,
         ]);
-        assert_eq!(changed, vec!["u1".to_string(), "u2".to_string(), "u1".to_string()]);
+        assert_eq!(changed, vec!["u1".to_string(), "u2".to_string()]);
         let h = t.history();
         assert_eq!(h.len(), 2);
-        assert_eq!(h[0].id, "u1");
-        assert_eq!(h[0].blocks, vec![ChatBlock::Text { text: "again".into() }]);
-        assert_eq!(t.get(&["u1".to_string()]).len(), 1);
+        assert_eq!(h[0].blocks, vec![ChatBlock::Text { text: "first".into() }]);
+    }
+
+    #[test]
+    fn repeated_assistant_tool_row_keeps_one_tool_use_and_its_result() {
+        let mut t = Transcript::default();
+        let row = r#"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}]}}"#;
+        feed(&mut t, &[
+            row,
+            row,
+            r#"{"type":"user","uuid":"u1","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}]}}"#,
+        ]);
+        let h = t.history();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].blocks, vec![ChatBlock::ToolUse {
+            id: "tu_1".into(),
+            name: "Bash".into(),
+            summary: "ls".into(),
+            result: Some(ToolResult { ok: true, preview: "ok".into() }),
+        }]);
+    }
+
+    #[test]
+    fn colliding_message_id_replaces_in_place() {
+        // Not a repeated row: an interrupt divider's derived id meets a real one.
+        let mut t = Transcript::default();
+        feed(&mut t, &[
+            r#"{"type":"user","uuid":"i1-int","message":{"content":"typed"}}"#,
+            r#"{"type":"user","uuid":"i1","message":{"content":"[Request interrupted by user]"}}"#,
+        ]);
+        let h = t.history();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].id, "i1-int");
+        assert_eq!(h[0].role, "divider");
     }
 
     #[test]

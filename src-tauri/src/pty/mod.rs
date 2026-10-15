@@ -228,29 +228,41 @@ fn claude_gone(entries: &Mutex<HashMap<String, PtyHandle>>) -> Vec<String> {
     gone
 }
 
+/// Shells and console hosts: a tree of only these has no Claude in it.
+#[cfg(feature = "remote-access")]
+const SHELL_IMAGES: [&str; 10] = [
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+    "bash.exe",
+    "sh.exe",
+    "zsh.exe",
+    "fish.exe",
+    "nu.exe",
+    "conhost.exe",
+    "openconsole.exe",
+];
+
 /// Is Claude among these process image paths? `Some(true)` for `claude.exe`
-/// (or a node/bun runtime living under a claude path), `None` when another
-/// node/bun process might be an npm-installed Claude (its image path doesn't
-/// say), `Some(false)` otherwise.
+/// (or a node/bun runtime under a claude path); `Some(false)` only when every
+/// image is a known shell or console host; otherwise `None` — anything else
+/// (an npm Claude's node.exe, `wsl.exe`/`ssh.exe` fronting a remote Claude, a
+/// helper) might be or hold Claude, so it never counts as gone.
 #[cfg(feature = "remote-access")]
 #[cfg_attr(not(windows), allow(dead_code))]
 fn claude_in_images(paths: &[String]) -> Option<bool> {
-    let mut unsure = false;
+    let mut only_shells = true;
     for p in paths {
         let lower = p.to_lowercase();
         let name = lower.rsplit(['\\', '/']).next().unwrap_or("");
         match name {
             "claude.exe" => return Some(true),
-            "node.exe" | "bun.exe" => {
-                if lower.contains("claude") {
-                    return Some(true);
-                }
-                unsure = true;
-            }
-            _ => {}
+            "node.exe" | "bun.exe" if lower.contains("claude") => return Some(true),
+            _ if SHELL_IMAGES.contains(&name) => {}
+            _ => only_shells = false,
         }
     }
-    (!unsure).then_some(false)
+    only_shells.then_some(false)
 }
 
 /// Resize a PTY master, clamping to a 1x1 floor.
@@ -945,12 +957,16 @@ mod tests {
         assert_eq!(v(&[ps, r"C:\Users\me\AppData\Roaming\claude-code\bun.exe"]), Some(true));
         // A node.exe that could be an npm-installed Claude: unknown, never "gone".
         assert_eq!(v(&[ps, r"C:\Program Files\nodejs\node.exe"]), None);
-        // Only the shell (Claude crashed or exited): gone.
+        // Only shells / console hosts (Claude crashed or exited): gone.
         assert_eq!(v(&[ps]), Some(false));
-        assert_eq!(v(&[ps, r"C:\Windows\System32\conhost.exe"]), Some(false));
-        // A path merely containing "claude" in a folder name doesn't count.
-        assert_eq!(v(&[r"C:\claude\tools\git.exe"]), Some(false));
+        assert_eq!(v(&[ps, r"C:\Windows\System32\conhost.exe", r"C:\x\OpenConsole.EXE"]), Some(false));
+        assert_eq!(v(&[r"C:\Windows\System32\cmd.exe", r"C:\Program Files\PowerShell\7\pwsh.exe"]), Some(false));
         assert_eq!(v(&[]), Some(false));
+        // Claude may sit behind wsl/ssh/docker: unknown.
+        assert_eq!(v(&[ps, r"C:\WINDOWS\system32\wsl.exe"]), None);
+        assert_eq!(v(&[ps, r"C:\WINDOWS\System32\OpenSSH\ssh.exe"]), None);
+        // Any other leftover helper is unknown too, even under a "claude" folder.
+        assert_eq!(v(&[ps, r"C:\claude\tools\git.exe"]), None);
     }
 
     #[cfg(feature = "remote-access")]
