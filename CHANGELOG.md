@@ -10,12 +10,24 @@ All notable changes to this project are documented here. Format follows
 - On the phone, Claude Code sessions started from the app (new or resumed) now show as a chat:
   - Your messages and Claude's replies wrap to the phone's width, and tool calls
     collapse into one-line rows you can tap open.
-  - You type in a normal text box, with autocorrect and dictation.
-  - Permission prompts get buttons.
+  - You type in a normal text box, with autocorrect and dictation. It grows
+    as you write, up to six lines.
+  - Tables, strikethrough and checklists in Claude's replies display properly;
+    a wide table scrolls sideways instead of stretching the screen.
+  - Permission prompts get a button for each choice, labelled with Claude's
+    own wording ("Yes", "Yes, and don't ask again…", "No").
+  - You can attach photos or screenshots (up to five per message) from your
+    camera or photo library; they reach Claude as images.
 
   Tap the terminal icon in the top bar to switch to the raw terminal at any
   time. The desktop terminal is unchanged, and it no longer letterboxes while
   the phone is in chat.
+
+### Changed
+- The phone app's menu now looks like the desktop's project list: project
+  tiles in their colours, terminals listed under each project with an icon for
+  Claude or shell and a status (working, needs you, failed, done, exited), and
+  projects you can fold away. Every button is sized for a finger.
 
 ### Fixed
 - Claude notifications (needs permission, finished) keep working after
