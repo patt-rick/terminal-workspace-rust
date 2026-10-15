@@ -5,6 +5,7 @@
 //! - Agent TUIs (Claude Code) report turn activity through the window TITLE:
 //!   while working it is prefixed with an animated braille spinner
 //!   (U+2800–U+28FF) or the ✳ marker, resetting to a bare "✳ Claude Code" idle.
+//!   Newer versions (2.1.300) spin ◐◑◒◓ instead and idle on "✳ <topic>".
 //! - OSC 9;4 (ConEmu progress) reports busy/idle.
 //! - OSC 133 C/D (shell integration) brackets a running command.
 //! - A standalone BEL is a bell.
@@ -42,6 +43,8 @@ pub struct ShellDetector {
     osc: Vec<u8>,
     working: bool,
     claude_alive: bool,
+    /// A ◐◑◒◓ spinner title was seen: this Claude marks idle with "✳ <topic>".
+    circle_spinner: bool,
 }
 
 // Guard against an unterminated OSC growing without bound.
@@ -128,7 +131,10 @@ impl ShellDetector {
         match code {
             "0" | "2" => {
                 self.note_alive(is_claude_title(rest), events);
-                let working = title_indicates_work(rest);
+                if rest.trim_start().chars().next().is_some_and(is_circle_spinner) {
+                    self.circle_spinner = true;
+                }
+                let working = title_indicates_work(rest, self.circle_spinner);
                 self.set_working(working, events);
             }
             "9" => {
@@ -187,21 +193,31 @@ fn is_braille(c: char) -> bool {
     ('\u{2800}'..='\u{28ff}').contains(&c)
 }
 
-/// Claude Code's titles start with a braille spinner or the ✳ marker.
+/// The ◐◑◒◓ spinner newer Claude Code versions (2.1.300) put in the title.
+fn is_circle_spinner(c: char) -> bool {
+    ('\u{25d0}'..='\u{25d3}').contains(&c)
+}
+
+/// Claude Code's titles start with a spinner (braille or ◐◑◒◓) or the ✳ marker.
 fn is_claude_title(title: &str) -> bool {
-    title.trim_start().chars().next().is_some_and(|c| c == '✳' || is_braille(c))
+    title
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|c| c == '✳' || is_braille(c) || is_circle_spinner(c))
 }
 
 /// Whether a window title indicates the agent is mid-task (see module docs).
-fn title_indicates_work(title: &str) -> bool {
+/// With the circle spinner, "✳ <topic>" is the idle title that ends a turn.
+fn title_indicates_work(title: &str, circle_spinner: bool) -> bool {
     let t = title.trim_start();
     let Some(first) = t.chars().next() else {
         return false;
     };
-    if is_braille(first) {
+    if is_braille(first) || is_circle_spinner(first) {
         return true;
     }
-    if first != '✳' {
+    if first != '✳' || circle_spinner {
         return false;
     }
     let task = t
@@ -339,6 +355,26 @@ mod tests {
         let mut d = ShellDetector::default();
         assert_eq!(d.feed("\x1b]2;\u{2809} Cla".as_bytes()), vec![]);
         assert_eq!(d.feed("ude Code\x07".as_bytes()), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
+    }
+
+    #[test]
+    fn half_circle_spinner_titles_claude_2_1_300() {
+        // Real sequence from Claude Code 2.1.300: the spinner is ◐◑◒◓ and the
+        // final "✳ <topic>" title is idle, not working.
+        let mut d = ShellDetector::default();
+        assert_eq!(d.feed(&osc("0;claude")), vec![]);
+        assert_eq!(d.feed(&osc("0;✳ Claude Code")), vec![DetectEvent::ClaudeAlive(true)]);
+        assert_eq!(d.feed(&osc("0;◐ Claude Code")), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("0;◐ Multiplication of 6 and 7")), vec![]);
+        assert_eq!(d.feed(&osc("0;◑ Multiplication of 6 and 7")), vec![]);
+        assert_eq!(d.feed(&osc("0;◒ Multiplication of 6 and 7")), vec![]);
+        assert_eq!(d.feed(&osc("0;✳ Multiplication of 6 and 7")), vec![DetectEvent::Working(false)]);
+        assert!(d.is_claude_alive());
+        // Next turn.
+        assert_eq!(d.feed(&osc("0;◓ Multiplication of 6 and 7")), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("0;✳ Multiplication of 6 and 7")), vec![DetectEvent::Working(false)]);
+        // Exit.
+        assert_eq!(d.feed(&osc("0;")), vec![DetectEvent::ClaudeAlive(false)]);
     }
 
     #[test]
