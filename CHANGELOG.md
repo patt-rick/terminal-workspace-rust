@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-10-15
 ### Added
 - On the phone, Claude Code sessions started from the app (new or resumed) now show as a chat:
   - Your messages and Claude's replies wrap to the phone's width, and tool calls
