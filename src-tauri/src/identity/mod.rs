@@ -18,17 +18,12 @@ pub struct Account {
     pub email: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UnmappedBehavior {
     UseDefault,
+    #[default]
     Ask,
-}
-
-impl Default for UnmappedBehavior {
-    fn default() -> Self {
-        UnmappedBehavior::Ask
-    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]

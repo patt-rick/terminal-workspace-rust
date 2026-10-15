@@ -144,11 +144,11 @@ impl ShellDetector {
             "133" => {
                 if rest.starts_with('C') {
                     self.set_working(true, events);
-                } else if rest.starts_with('D') {
+                } else if let Some(after) = rest.strip_prefix('D') {
                     self.note_alive(false, events);
                     self.set_working(false, events);
                     // OSC 133;D;<exit-code> — surface success/failure.
-                    let exit_code = rest[1..]
+                    let exit_code = after
                         .strip_prefix(';')
                         .and_then(|c| c.split(';').next())
                         .and_then(|c| c.trim().parse::<i32>().ok());

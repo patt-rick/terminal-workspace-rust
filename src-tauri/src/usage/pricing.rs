@@ -145,8 +145,8 @@ pub fn usable_overrides(overrides: &HashMap<String, Override>) -> HashMap<String
                     Override::Rates { input, output, cache_read, cache_write } => {
                         rate_ok(*input)
                             && rate_ok(*output)
-                            && cache_read.map_or(true, rate_ok)
-                            && cache_write.map_or(true, rate_ok)
+                            && cache_read.is_none_or(rate_ok)
+                            && cache_write.is_none_or(rate_ok)
                     }
                 }
         })

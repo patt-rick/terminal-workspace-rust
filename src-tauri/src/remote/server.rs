@@ -570,11 +570,8 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
                 }
             }
             outgoing = out_rx.recv() => {
-                match outgoing {
-                    Some(msg) => {
-                        if socket.send(msg).await.is_err() { break; }
-                    }
-                    None => {}
+                if let Some(msg) = outgoing {
+                    if socket.send(msg).await.is_err() { break; }
                 }
             }
             incoming = socket.recv() => {

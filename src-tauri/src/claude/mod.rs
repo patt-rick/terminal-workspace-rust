@@ -239,7 +239,7 @@ pub fn list_sessions(home: &Path, project_root: &str) -> Vec<SessionSummary> {
             out.push(summary);
         }
     }
-    out.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    out.sort_by_key(|s| std::cmp::Reverse(s.last_active));
     out
 }
 

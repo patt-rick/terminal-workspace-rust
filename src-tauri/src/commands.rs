@@ -1018,7 +1018,7 @@ pub async fn claude_sessions_list(
         let mut out = crate::claude::list_sessions(&home, &root);
         #[cfg(windows)]
         out.extend(crate::claude::list_sessions_wsl(&root));
-        out.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        out.sort_by_key(|s| std::cmp::Reverse(s.last_active));
         out
     })
     .await
@@ -1590,7 +1590,7 @@ async fn ensure_fresh_creds(
             }
             RefreshResult::Transient(msg) => {
                 // Token may still be usable if not FULLY expired (buffer only).
-                if !expires_at.is_some_and(|exp| now < exp) {
+                if expires_at.is_none_or(|exp| now >= exp) {
                     return Err(AppError::Msg(format!("token refresh failed: {msg}")));
                 }
             }
@@ -2025,7 +2025,7 @@ pub async fn usage_scan(app: AppHandle) -> AppResult<crate::usage::ScanResult> {
         let roots = crate::usage::scan::roots(&home);
         let mut last_emit: Option<std::time::Instant> = None;
         store.scan(&roots, crate::claude::creds::now_ms(), &mut |done, total| {
-            let due = last_emit.map_or(true, |at| at.elapsed().as_millis() >= 100);
+            let due = last_emit.is_none_or(|at| at.elapsed().as_millis() >= 100);
             if due || done == total {
                 last_emit = Some(std::time::Instant::now());
                 let _ = app.emit("usage:scan-progress", json!({ "done": done, "total": total }));
@@ -2089,7 +2089,7 @@ pub async fn usage_refresh_prices(app: AppHandle, force: bool) -> AppResult<bool
     let body = match request.send().await {
         Ok(resp)
             if resp.status().is_success()
-                && resp.content_length().map_or(true, |len| len <= MAX_PRICE_TABLE_BYTES) =>
+                && resp.content_length().is_none_or(|len| len <= MAX_PRICE_TABLE_BYTES) =>
         {
             resp.text().await.ok()
         }

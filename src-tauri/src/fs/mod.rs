@@ -72,14 +72,12 @@ pub fn list(root: &Path, rel: &str) -> AppResult<Vec<FsEntry>> {
         .git_exclude(true)
         .parents(true)
         .build();
-    for result in walker {
-        if let Ok(d) = result {
-            if d.depth() == 0 {
-                continue;
-            }
-            if let Some(n) = d.file_name().to_str() {
-                allowed.insert(n.to_string());
-            }
+    for d in walker.flatten() {
+        if d.depth() == 0 {
+            continue;
+        }
+        if let Some(n) = d.file_name().to_str() {
+            allowed.insert(n.to_string());
         }
     }
     for entry in &mut entries {
