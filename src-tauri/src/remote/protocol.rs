@@ -68,6 +68,15 @@ pub enum ClientMsg {
     /// Give the PTY size back to the desktop (the phone is showing chat).
     #[serde(rename = "term.releaseSize")]
     TermReleaseSize { terminal_id: String },
+    /// An image for a Claude prompt; `data` is base64 (standard alphabet). The
+    /// server picks where it is saved and replies `image.saved` / `image.error`.
+    #[serde(rename = "image.upload")]
+    ImageUpload {
+        req_id: String,
+        terminal_id: String,
+        mime: String,
+        data: String,
+    },
     Ping,
 }
 
@@ -98,6 +107,14 @@ pub enum ServerMsg {
         terminal_id: String,
         tag: u32,
         data: String,
+    },
+    /// The PTY's grid, on attach, on `term.releaseSize` and when the desktop
+    /// resizes it: a phone showing chat sizes its hidden terminal to match.
+    #[serde(rename = "term.size")]
+    TermSize {
+        terminal_id: String,
+        cols: u16,
+        rows: u16,
     },
     #[serde(rename = "term.created")]
     TermCreated { terminal: TermInfo },
@@ -169,6 +186,11 @@ pub enum ServerMsg {
     ChatUnavailable { terminal_id: String, reason: String },
     #[serde(rename = "state.claudeAlive")]
     StateClaudeAlive { terminal_id: String, alive: bool },
+    /// Where an uploaded image was saved, as the terminal's shell sees it.
+    #[serde(rename = "image.saved")]
+    ImageSaved { req_id: String, path: String },
+    #[serde(rename = "image.error")]
+    ImageError { req_id: String, message: String },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
     SessionEvicted,
@@ -336,6 +358,14 @@ mod tests {
                 },
                 "term.snapshot",
             ),
+            (
+                ServerMsg::TermSize {
+                    terminal_id: "t".into(),
+                    cols: 93,
+                    rows: 31,
+                },
+                "term.size",
+            ),
             (ServerMsg::TermCreated { terminal: ti }, "term.created"),
             (
                 ServerMsg::TermClosed {
@@ -443,6 +473,20 @@ mod tests {
                 },
                 "state.claudeAlive",
             ),
+            (
+                ServerMsg::ImageSaved {
+                    req_id: "r".into(),
+                    path: "p".into(),
+                },
+                "image.saved",
+            ),
+            (
+                ServerMsg::ImageError {
+                    req_id: "r".into(),
+                    message: "m".into(),
+                },
+                "image.error",
+            ),
             (ServerMsg::SessionEvicted, "session.evicted"),
             (ServerMsg::Error { message: "e".into() }, "error"),
             (ServerMsg::Pong, "pong"),
@@ -477,6 +521,7 @@ mod tests {
             r#"{"type":"chat.open","terminalId":"t"}"#,
             r#"{"type":"chat.close","terminalId":"t"}"#,
             r#"{"type":"term.releaseSize","terminalId":"t"}"#,
+            r#"{"type":"image.upload","reqId":"r","terminalId":"t","mime":"image/png","data":"iVBORw=="}"#,
         ];
         for json in cases {
             assert!(
@@ -511,6 +556,44 @@ mod tests {
         assert_eq!(v["claude"], true);
         assert_eq!(v["working"], true);
         assert_eq!(v["claudeAlive"], false);
+    }
+
+    #[test]
+    fn term_size_and_image_replies_use_camel_case_fields() {
+        let v = serde_json::to_value(ServerMsg::TermSize {
+            terminal_id: "t".into(),
+            cols: 93,
+            rows: 31,
+        })
+        .unwrap();
+        assert_eq!((v["terminalId"].as_str(), v["cols"].as_u64(), v["rows"].as_u64()), (Some("t"), Some(93), Some(31)));
+        let v = serde_json::to_value(ServerMsg::ImageSaved {
+            req_id: "r1".into(),
+            path: "/mnt/c/x.png".into(),
+        })
+        .unwrap();
+        assert_eq!((v["reqId"].as_str(), v["path"].as_str()), (Some("r1"), Some("/mnt/c/x.png")));
+        let v = serde_json::to_value(ServerMsg::ImageError {
+            req_id: "r1".into(),
+            message: "m".into(),
+        })
+        .unwrap();
+        assert_eq!((v["reqId"].as_str(), v["message"].as_str()), (Some("r1"), Some("m")));
+    }
+
+    #[test]
+    fn image_upload_takes_no_path() {
+        // The client can't choose where the file goes (AC-3.10).
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"type":"image.upload","reqId":"r","terminalId":"t","mime":"image/png","data":"AA==","path":"C:\\Windows\\x.png"}"#,
+        )
+        .unwrap();
+        match m {
+            ClientMsg::ImageUpload { req_id, terminal_id, mime, data } => {
+                assert_eq!((req_id.as_str(), terminal_id.as_str(), mime.as_str(), data.as_str()), ("r", "t", "image/png", "AA=="));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

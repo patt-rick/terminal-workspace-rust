@@ -265,6 +265,21 @@ fn claude_in_images(paths: &[String]) -> Option<bool> {
     only_shells.then_some(false)
 }
 
+/// Programs that run the session on another machine or in a container, where
+/// a path on this PC means nothing.
+#[cfg(feature = "remote-access")]
+const REMOTE_FRONTS: [&str; 5] = ["ssh.exe", "docker.exe", "podman.exe", "kubectl.exe", "mosh.exe"];
+
+/// Is one of these process images an ssh/docker-style front to another host?
+#[cfg(feature = "remote-access")]
+#[cfg_attr(not(windows), allow(dead_code))]
+fn remote_front_in_images(paths: &[String]) -> bool {
+    paths.iter().any(|p| {
+        let lower = p.to_lowercase();
+        REMOTE_FRONTS.contains(&lower.rsplit(['\\', '/']).next().unwrap_or(""))
+    })
+}
+
 /// Resize a PTY master, clamping to a 1x1 floor.
 fn apply_size(master: &(dyn MasterPty + Send), cols: u16, rows: u16) {
     let _ = master.resize(PtySize {
@@ -511,6 +526,29 @@ impl PtyManager {
         })
     }
 
+    /// Whether the terminal's process tree runs ssh, docker or the like, so a
+    /// file on this PC isn't visible to what runs there. False when unknown.
+    #[cfg(feature = "remote-access")]
+    pub fn fronts_remote_host(&self, id: &str) -> bool {
+        #[cfg(windows)]
+        {
+            self.entries
+                .lock()
+                .get(id)
+                .and_then(|h| h.job.as_ref()?.image_paths())
+                // A local Claude can run ssh (git push) or docker itself; only
+                // without one in the tree does ssh/docker front the session.
+                .is_some_and(|paths| {
+                    claude_in_images(&paths) != Some(true) && remote_front_in_images(&paths)
+                })
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = id;
+            false
+        }
+    }
+
     /// (has a Claude session, working, Claude alive) — all false when gone.
     #[cfg(feature = "remote-access")]
     pub fn chat_flags(&self, id: &str) -> (bool, bool, bool) {
@@ -640,19 +678,22 @@ impl PtyManager {
     /// Resize from the desktop pane. Records the size as the "local" size so a
     /// later remote detach can snap the PTY back to it (R3.14). While a remote
     /// client owns the size, the request is recorded but not applied — the
-    /// remote wins until it detaches (remote-wins sizing).
-    pub fn resize(&self, id: &str, cols: u16, rows: u16) {
+    /// remote wins until it detaches (remote-wins sizing). Returns whether the
+    /// PTY was resized.
+    pub fn resize(&self, id: &str, cols: u16, rows: u16) -> bool {
         let mut entries = self.entries.lock();
-        if let Some(handle) = entries.get_mut(id) {
-            #[cfg(feature = "remote-access")]
-            {
-                handle.local_size = (cols, rows);
-                if handle.remote_size.is_some() {
-                    return;
-                }
+        let Some(handle) = entries.get_mut(id) else {
+            return false;
+        };
+        #[cfg(feature = "remote-access")]
+        {
+            handle.local_size = (cols, rows);
+            if handle.remote_size.is_some() {
+                return false;
             }
-            apply_size(handle.master.as_ref(), cols, rows);
         }
+        apply_size(handle.master.as_ref(), cols, rows);
+        true
     }
 
     /// Resize from a remote client: takes ownership of the PTY size (remote-wins sizing).
@@ -669,6 +710,15 @@ impl PtyManager {
         } else {
             false
         }
+    }
+
+    /// The PTY's current grid: the remote's while one owns it, else the desktop pane's.
+    #[cfg(feature = "remote-access")]
+    pub fn size(&self, id: &str) -> Option<(u16, u16)> {
+        self.entries
+            .lock()
+            .get(id)
+            .map(|h| h.remote_size.unwrap_or(h.local_size))
     }
 
     /// The size an attached remote client currently mandates, if any.
@@ -786,6 +836,19 @@ pub fn emit_remote_size(app: &AppHandle, id: &str, size: Option<(u16, u16)>) {
             id: id.to_string(),
             cols: size.map(|s| s.0),
             rows: size.map(|s| s.1),
+        },
+    );
+}
+
+/// The desktop pane resized a PTY it owns; a phone showing chat mirrors the grid.
+#[cfg(feature = "remote-access")]
+pub fn emit_pty_size(app: &AppHandle, id: &str, cols: u16, rows: u16) {
+    let _ = app.emit(
+        "terminals:size",
+        RemoteSizePayload {
+            id: id.to_string(),
+            cols: Some(cols),
+            rows: Some(rows),
         },
     );
 }
@@ -967,6 +1030,18 @@ mod tests {
         assert_eq!(v(&[ps, r"C:\WINDOWS\System32\OpenSSH\ssh.exe"]), None);
         // Any other leftover helper is unknown too, even under a "claude" folder.
         assert_eq!(v(&[ps, r"C:\claude\tools\git.exe"]), None);
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn remote_fronts_are_recognised() {
+        let v = |ps: &[&str]| remote_front_in_images(&ps.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let ps = r"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe";
+        assert!(v(&[ps, r"C:\WINDOWS\System32\OpenSSH\ssh.exe"]));
+        assert!(v(&[ps, r"C:\Program Files\Docker\Docker\resources\bin\DOCKER.EXE"]));
+        assert!(!v(&[ps, r"C:\Users\me\.local\bin\claude.exe"]));
+        assert!(!v(&[ps, r"C:\WINDOWS\system32\wsl.exe"]));
+        assert!(!v(&[]));
     }
 
     #[cfg(feature = "remote-access")]

@@ -12,13 +12,15 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use super::{bridge, chat};
+use super::{bridge, chat, uploads};
 use super::protocol::{output_frame, ClientMsg, ServerMsg};
 use super::push::{PushManager, PushSubscription};
 use super::ratelimit::RateLimiter;
@@ -40,7 +42,12 @@ pub struct ServerCtx {
     pub sockets: Arc<AtomicUsize>,
     /// The desktop's active theme; `None` until the frontend has sent one.
     pub theme: watch::Receiver<Option<serde_json::Value>>,
+    /// App data dir (honours `TW_DATA_DIR`); phone images go in its `remote-uploads`.
+    pub data_dir: PathBuf,
 }
+
+/// Largest WebSocket message: one base64 image (5 MB decoded) plus its JSON.
+const MAX_WS_MESSAGE: usize = 12 * 1024 * 1024;
 
 /// The proxy in front of the server, which decides whose forwarded-for header
 /// is believable. Clients can send any header they like, so only the one our
@@ -168,7 +175,9 @@ async fn pair(
 }
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(ctx): State<ServerCtx>) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, ctx))
+    ws.max_message_size(MAX_WS_MESSAGE)
+        .max_frame_size(MAX_WS_MESSAGE)
+        .on_upgrade(move |socket| handle_socket(socket, ctx))
 }
 
 fn text(msg: &ServerMsg) -> Message {
@@ -185,6 +194,13 @@ struct WorkingEvt {
 struct AliveEvt {
     id: String,
     alive: bool,
+}
+
+#[derive(Deserialize)]
+struct SizeEvt {
+    id: String,
+    cols: u16,
+    rows: u16,
 }
 
 #[derive(Deserialize)]
@@ -221,6 +237,17 @@ fn spawn_state_forwarders(app: &AppHandle, out_tx: mpsc::Sender<Message>) -> Vec
             let _ = tx.try_send(text(&ServerMsg::StateClaudeAlive {
                 terminal_id: p.id,
                 alive: p.alive,
+            }));
+        }
+    }));
+
+    let tx = out_tx.clone();
+    ids.push(app.listen("terminals:size", move |ev| {
+        if let Ok(p) = serde_json::from_str::<SizeEvt>(ev.payload()) {
+            let _ = tx.try_send(text(&ServerMsg::TermSize {
+                terminal_id: p.id,
+                cols: p.cols,
+                rows: p.rows,
             }));
         }
     }));
@@ -297,6 +324,16 @@ struct Conn {
     attachments: HashMap<String, Attachment>,
     next_tag: u32,
     chat: Option<chat::ChatFollow>,
+    /// An image upload is being decoded and written (one at a time).
+    uploading: Arc<AtomicBool>,
+}
+
+/// Clears the connection's upload flag however the upload task ends.
+struct UploadSlot(Arc<AtomicBool>);
+impl Drop for UploadSlot {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl Conn {
@@ -436,13 +473,68 @@ impl Conn {
                 }
             }
             ClientMsg::TermReleaseSize { terminal_id } => {
-                let pty = self.ctx.app.state::<PtyManager>();
-                if pty.remote_size(&terminal_id).is_some() {
-                    pty.restore_local_size(&terminal_id);
-                    crate::pty::emit_remote_size(&self.ctx.app, &terminal_id, None);
+                let size = {
+                    let pty = self.ctx.app.state::<PtyManager>();
+                    if pty.remote_size(&terminal_id).is_some() {
+                        pty.restore_local_size(&terminal_id);
+                        crate::pty::emit_remote_size(&self.ctx.app, &terminal_id, None);
+                    }
+                    pty.size(&terminal_id)
+                };
+                if let Some((cols, rows)) = size {
+                    self.send(ServerMsg::TermSize { terminal_id, cols, rows }).await;
                 }
             }
+            ClientMsg::ImageUpload {
+                req_id,
+                terminal_id,
+                mime,
+                data,
+            } => self.upload(req_id, terminal_id, mime, data).await,
         }
+    }
+
+    async fn upload(&self, req_id: String, terminal_id: String, mime: String, data: String) {
+        let fail = |message: &str| ServerMsg::ImageError {
+            req_id: req_id.clone(),
+            message: message.into(),
+        };
+        let shell = {
+            let pty = self.ctx.app.state::<PtyManager>();
+            match pty.chat_source(&terminal_id) {
+                Some(_) if pty.fronts_remote_host(&terminal_id) => {
+                    return self.send(fail("Images can't be sent to this terminal.")).await;
+                }
+                Some(src) => src.shell,
+                None => return self.send(fail("That terminal has closed.")).await,
+            }
+        };
+        if self.uploading.swap(true, Ordering::AcqRel) {
+            return self.send(fail("Another image is still uploading.")).await;
+        }
+        let slot = UploadSlot(self.uploading.clone());
+        let dir = self.ctx.data_dir.join(uploads::DIR_NAME);
+        let out_tx = self.out_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            let msg = match uploads::decode(&mime, &data) {
+                Err(message) => ServerMsg::ImageError { req_id, message },
+                Ok((kind, bytes)) => match uploads::save(&dir, kind, &bytes) {
+                    Err(e) => ServerMsg::ImageError {
+                        req_id,
+                        message: format!("Couldn't save the image: {e}"),
+                    },
+                    Ok(path) => match uploads::path_for_shell(&path, &shell) {
+                        Some(path) => ServerMsg::ImageSaved { req_id, path },
+                        None => ServerMsg::ImageError {
+                            req_id,
+                            message: "Images can't be sent to this terminal.".into(),
+                        },
+                    },
+                },
+            };
+            let _ = out_tx.blocking_send(text(&msg));
+        });
     }
 
     async fn send(&self, msg: ServerMsg) {
@@ -469,6 +561,15 @@ impl Conn {
             tag,
         })
         .await;
+        // Before the snapshot, so a phone showing chat replays it at the PTY's grid.
+        if let Some((cols, rows)) = pty.size(&terminal_id) {
+            self.send(ServerMsg::TermSize {
+                terminal_id: terminal_id.clone(),
+                cols,
+                rows,
+            })
+            .await;
+        }
         self.send(ServerMsg::TermSnapshot {
             terminal_id: terminal_id.clone(),
             tag,
@@ -546,6 +647,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         attachments: HashMap::new(),
         next_tag: 1,
         chat: None,
+        uploading: Arc::new(AtomicBool::new(false)),
     };
 
     loop {

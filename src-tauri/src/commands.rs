@@ -312,8 +312,14 @@ pub fn reset_limit_detector(pty: State<PtyManager>, id: String) {
 }
 
 #[tauri::command]
-pub fn terminal_resize(pty: State<PtyManager>, id: String, cols: u16, rows: u16) {
-    pty.resize(&id, cols, rows)
+pub fn terminal_resize(app: AppHandle, pty: State<PtyManager>, id: String, cols: u16, rows: u16) {
+    let applied = pty.resize(&id, cols, rows);
+    #[cfg(feature = "remote-access")]
+    if applied {
+        crate::pty::emit_pty_size(&app, &id, cols, rows);
+    }
+    #[cfg(not(feature = "remote-access"))]
+    let _ = (app, applied);
 }
 
 /// Size a remote client currently mandates for this terminal, if one is

@@ -12,6 +12,7 @@ pub mod server;
 pub mod session;
 pub mod tailscale;
 pub mod tunnel;
+mod uploads;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -303,6 +304,8 @@ impl RemoteServer {
             push: self.push.clone(),
             sockets: sockets.clone(),
             theme: self.theme.subscribe(),
+            // A path handed to the shell must not depend on its working directory.
+            data_dir: std::path::absolute(&self.data_dir).unwrap_or_else(|_| self.data_dir.clone()),
         };
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let router = server::router(ctx);
