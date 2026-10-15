@@ -391,6 +391,9 @@ export function App() {
           else n.delete(tid)
           return n
         })
+        // Work resumes only once the dialog is closed (e.g. answered on the
+        // desktop). Not on stopping: that can race the hook that opens the card.
+        if (!wasWorking && isWorking) dropPermission(tid)
         // Notify when a background terminal finishes a task.
         if (wasWorking && !isWorking && tid !== curIdRef.current) {
           notify(termName(tid), 'Finished')
