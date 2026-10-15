@@ -11,6 +11,11 @@ export interface TermInfo {
   name: string
   projectId: string
   live: boolean
+  /** Runs a tracked Claude session — gets the chat view. */
+  claude: boolean
+  working: boolean
+  /** Claude's TUI is running right now (not just the shell it ran in). */
+  claudeAlive: boolean
 }
 export interface ProjectInfo {
   id: string
@@ -66,12 +71,29 @@ export interface SessionSummary {
   gitBranch: string | null
 }
 
+export interface ToolResult {
+  ok: boolean
+  preview: string
+}
+export type ChatBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'image' }
+  | { kind: 'toolUse'; id: string; name: string; summary: string; result: ToolResult | null }
+  | { kind: 'divider'; label: string }
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant' | 'divider'
+  ts: string
+  blocks: ChatBlock[]
+}
+
 export interface Handlers {
   onState?: (
     state: StateSnapshot,
     appVersion: string,
     vapidPublicKey: string | null,
-    theme: RemoteTheme | null
+    theme: RemoteTheme | null,
+    claudeHooks: boolean
   ) => void
   /** The desktop switched theme (or edited a custom one). */
   onTheme?: (theme: RemoteTheme) => void
@@ -91,6 +113,10 @@ export interface Handlers {
   onGitPushProgress?: (repoId: string, message: string) => void
   onGitPushDone?: (repoId: string, ok: boolean, output: string) => void
   onClaudeSessions?: (projectId: string, sessions: SessionSummary[]) => void
+  onChatHistory?: (terminalId: string, messages: ChatMessage[], truncated: boolean) => void
+  onChatAppend?: (terminalId: string, messages: ChatMessage[]) => void
+  onChatUnavailable?: (terminalId: string, reason: string) => void
+  onClaudeAlive?: (terminalId: string, alive: boolean) => void
   onEvicted?: () => void
   onError?: (message: string) => void
   /** The socket dropped but we'll auto-reconnect (transient — e.g. app switch). */
@@ -189,7 +215,7 @@ export class RemoteClient {
       const m = JSON.parse(ev.data)
       switch (m.type) {
         case 'hello.ok':
-          this.h.onState?.(m.state, m.appVersion, m.vapidPublicKey ?? null, m.theme ?? null)
+          this.h.onState?.(m.state, m.appVersion, m.vapidPublicKey ?? null, m.theme ?? null, m.claudeHooks ?? false)
           break
         case 'hello.err':
           this.stopped = true
@@ -236,6 +262,18 @@ export class RemoteClient {
           break
         case 'claude.sessions':
           this.h.onClaudeSessions?.(m.projectId, m.sessions)
+          break
+        case 'chat.history':
+          this.h.onChatHistory?.(m.terminalId, m.messages, m.truncated)
+          break
+        case 'chat.append':
+          this.h.onChatAppend?.(m.terminalId, m.messages)
+          break
+        case 'chat.unavailable':
+          this.h.onChatUnavailable?.(m.terminalId, m.reason)
+          break
+        case 'state.claudeAlive':
+          this.h.onClaudeAlive?.(m.terminalId, m.alive)
           break
         case 'state.theme':
           this.h.onTheme?.(m.theme)
@@ -309,6 +347,19 @@ export class RemoteClient {
   }
   resize(terminalId: string, cols: number, rows: number): void {
     this.send({ type: 'term.resize', terminalId, cols, rows })
+  }
+  releaseSize(terminalId: string): void {
+    this.send({ type: 'term.releaseSize', terminalId })
+  }
+  chatOpen(terminalId: string): void {
+    this.send({ type: 'chat.open', terminalId })
+  }
+  chatClose(terminalId: string): void {
+    this.send({ type: 'chat.close', terminalId })
+  }
+  /** True when a message can be sent right now. */
+  isOpen(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN
   }
   create(projectId: string, kind: 'shell' | 'claude'): void {
     this.send({ type: 'term.create', projectId, kind })
