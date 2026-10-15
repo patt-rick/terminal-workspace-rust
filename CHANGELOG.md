@@ -6,6 +6,20 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+### Added
+- The phone app now shows Claude Code terminals as a chat:
+  - Your messages and Claude's replies wrap to the phone's width, and tool calls
+    collapse into one-line rows you can tap open.
+  - You type in a normal text box, with autocorrect and dictation.
+  - Permission prompts get buttons.
+
+  Tap the terminal icon in the top bar to switch to the raw terminal at any
+  time. The desktop terminal is unchanged, and it no longer letterboxes while
+  the phone is in chat.
+
+### Fixed
+- Claude notifications (needs permission, finished) keep working after
+  `/clear`.
 
 ## [0.5.2] - 2026-10-15
 ### Changed

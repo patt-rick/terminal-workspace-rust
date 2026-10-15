@@ -1,7 +1,8 @@
 # Mobile chat view: design
 
 Date: 2026-10-15
-Status: approved in conversation; revised after an Opus spec review
+Status: built (2026-10-15). Where the sections below differ from the final code,
+"As built" at the end wins.
 
 ## Problem
 
@@ -404,3 +405,50 @@ Manual testing, on a real phone over Tailscale:
 - token-level streaming;
 - syncing a re-pointed session id back to the desktop's store;
 - replaying a pending attention after a reconnect.
+
+## As built
+
+What changed from the design during planning, testing against real Claude Code
+2.1.300, and code review:
+
+- **Message model.** `ts` is the row's ISO-8601 string. Tool results are folded
+  into their tool call on the server (`toolUse.result`), so there is no
+  separate `toolResult` block. A repeated row uuid replaces its message.
+- **Initial load.** Rows are parsed one at a time from up to 3,000 trailing
+  lines (16 MB cap). The tail resets only when the file shrinks.
+- **Finding the transcript.** The search repeats every 2 s until the file
+  exists (`distro_home` is cached). The default-distro token `wsl:` resolves to
+  the default distro.
+- **Hooks.** `SessionStart` and `SessionEnd` are both subscribed. Existing
+  installs are upgraded at startup in place, reusing their own command, and
+  key order is preserved. WSL distros are upgraded on the next enable.
+  `hello.ok` carries `claudeHooks`. The banner checks only the Windows home, so
+  it can be wrong for WSL-only setups (known limitation).
+- **Session adoption.** A terminal adopts a new id only from `SessionStart`
+  with source `clear` or `compact`, or `resume` after its current session sent
+  `SessionEnd`, and only when it already has a session. Events for any other
+  session id (a nested `claude -p` run by a tool) are dropped.
+  `CLAUDE_CODE_CHILD_SESSION` can't tell nested sessions apart: it is set for
+  every hook. The picker-form `--resume` never gets the chat view.
+- **Claude alive.** It turns false on `SessionEnd` (except `clear` and
+  `resume`), on a non-Claude or empty window title (Claude sends an empty title
+  on exit, and PowerShell resets it even after a kill), or on OSC 133;D. For
+  native shells, a 2 s sweep also checks the terminal's Job Object for a
+  Claude process. `TermInfo.claude` is refreshed only on `hello.ok` and
+  `term.created`.
+- **Composer.**
+  - **Send** writes Ctrl+U first (``), because an Esc before Claude
+    prints anything puts the prompt back in the input box. Then it writes the
+    bracketed paste, and `` 100 ms later. All three were verified on
+    Windows ConPTY.
+  - Send is disabled while a permission card is open, because Claude would
+    take the Enter as the dialog's default choice.
+  - The draft belongs to its terminal.
+- **Permission card.**
+  - It has generic buttons 1–4, because the prompt has four options, one of
+    which is "switch to auto mode". A digit alone selects; no Enter is needed.
+  - It closes on a tap, on `finished`, or once no tool call is still waiting.
+- **Markdown.** It is rendered with react-markdown, the desktop's library.
+  Links open in a new tab and images are not loaded.
+- **Size.** Restoring the desktop size happens only when a remote actually
+  held it.
