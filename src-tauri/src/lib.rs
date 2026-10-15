@@ -86,6 +86,13 @@ pub fn run() {
                 app.handle().clone(),
                 claude::hooks::spool_dir(&data_dir),
             );
+            // Installs made before SessionStart/SessionEnd existed get them,
+            // with their own command (see hooks::upgrade). WSL distros are
+            // upgraded the next time the user turns hooks on.
+            #[cfg(feature = "remote-access")]
+            if let Ok(home) = app.path().home_dir() {
+                let _ = claude::hooks::upgrade(&home.join(".claude").join("settings.json"));
+            }
             #[cfg(feature = "remote-access")]
             {
                 app.manage(remote::RemoteServer::new(app.handle().clone(), data_dir.clone()));

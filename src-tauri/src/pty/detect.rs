@@ -22,6 +22,9 @@ pub enum DetectEvent {
     /// An explicit tool notification: OSC 9;<message> (iTerm2 style) or
     /// OSC 777;notify;<title>;<body>.
     Notify { message: String },
+    /// A Claude Code TUI started (its title appeared) or ended (a non-Claude
+    /// title, or the shell's OSC 133;D closing the command it ran in).
+    ClaudeAlive(bool),
 }
 
 #[derive(Default)]
@@ -38,6 +41,7 @@ pub struct ShellDetector {
     state: State,
     osc: Vec<u8>,
     working: bool,
+    claude_alive: bool,
 }
 
 // Guard against an unterminated OSC growing without bound.
@@ -47,6 +51,23 @@ impl ShellDetector {
     /// Current working state (for the prompt-silence sweeper).
     pub fn is_working(&self) -> bool {
         self.working
+    }
+
+    pub fn is_claude_alive(&self) -> bool {
+        self.claude_alive
+    }
+
+    /// Set from outside (a Claude hook event); true if it changed.
+    pub fn set_claude_alive(&mut self, alive: bool) -> bool {
+        let changed = self.claude_alive != alive;
+        self.claude_alive = alive;
+        changed
+    }
+
+    fn note_alive(&mut self, alive: bool, events: &mut Vec<DetectEvent>) {
+        if self.set_claude_alive(alive) {
+            events.push(DetectEvent::ClaudeAlive(alive));
+        }
     }
 
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<DetectEvent> {
@@ -106,6 +127,7 @@ impl ShellDetector {
         };
         match code {
             "0" | "2" => {
+                self.note_alive(is_claude_title(rest), events);
                 let working = title_indicates_work(rest);
                 self.set_working(working, events);
             }
@@ -123,6 +145,7 @@ impl ShellDetector {
                 if rest.starts_with('C') {
                     self.set_working(true, events);
                 } else if rest.starts_with('D') {
+                    self.note_alive(false, events);
                     self.set_working(false, events);
                     // OSC 133;D;<exit-code> — surface success/failure.
                     let exit_code = rest[1..]
@@ -162,6 +185,11 @@ impl ShellDetector {
 
 fn is_braille(c: char) -> bool {
     ('\u{2800}'..='\u{28ff}').contains(&c)
+}
+
+/// Claude Code's titles start with a braille spinner or the ✳ marker.
+fn is_claude_title(title: &str) -> bool {
+    title.trim_start().chars().next().is_some_and(|c| c == '✳' || is_braille(c))
 }
 
 /// Whether a window title indicates the agent is mid-task (see module docs).
@@ -209,7 +237,7 @@ mod tests {
     #[test]
     fn braille_title_marks_working_then_idle() {
         let mut d = ShellDetector::default();
-        assert_eq!(d.feed(&osc("2;\u{2809} Claude Code")), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("2;\u{2809} Claude Code")), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
         // repeated working title is not re-emitted
         assert_eq!(d.feed(&osc("2;\u{280b} Claude Code")), vec![]);
         // back to the bare idle title
@@ -219,7 +247,7 @@ mod tests {
     #[test]
     fn marker_title_with_task_is_working() {
         let mut d = ShellDetector::default();
-        assert_eq!(d.feed(&osc("2;✳ Compiling…")), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("2;✳ Compiling…")), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
     }
 
     #[test]
@@ -310,7 +338,25 @@ mod tests {
     fn sequence_split_across_chunks_is_handled() {
         let mut d = ShellDetector::default();
         assert_eq!(d.feed("\x1b]2;\u{2809} Cla".as_bytes()), vec![]);
-        assert_eq!(d.feed("ude Code\x07".as_bytes()), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed("ude Code\x07".as_bytes()), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
+    }
+
+    #[test]
+    fn claude_alive_follows_titles_and_command_done() {
+        let mut d = ShellDetector::default();
+        assert!(!d.is_claude_alive());
+        assert!(d.feed(&osc("2;✳ Claude Code")).contains(&DetectEvent::ClaudeAlive(true)));
+        assert!(d.is_claude_alive());
+        // Further Claude titles don't repeat the event.
+        assert!(!d.feed(&osc("2;\u{2809} Working")).contains(&DetectEvent::ClaudeAlive(true)));
+        // Shell integration closing the command ends it (bash/zsh/fish)…
+        assert!(d.feed(&osc("133;D;0")).contains(&DetectEvent::ClaudeAlive(false)));
+        assert!(d.feed(&osc("2;✳ Claude Code")).contains(&DetectEvent::ClaudeAlive(true)));
+        // …and so does a non-Claude title (a shell resetting it after exit).
+        assert!(d.feed(&osc("2;C:\\repo")).contains(&DetectEvent::ClaudeAlive(false)));
+        assert!(!d.is_claude_alive());
+        assert!(d.set_claude_alive(true));
+        assert!(!d.set_claude_alive(true));
     }
 
     #[test]
@@ -320,6 +366,6 @@ mod tests {
         let mut seq = vec![0x1b, b']'];
         seq.extend_from_slice("2;\u{2809} x".as_bytes());
         seq.extend_from_slice(&[0x1b, b'\\']);
-        assert_eq!(d.feed(&seq), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&seq), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
     }
 }

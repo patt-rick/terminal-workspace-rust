@@ -144,6 +144,13 @@ struct PtyHandle {
     /// `--resume`), used to route Claude-hook events back to this terminal.
     #[cfg(feature = "remote-access")]
     session_id: Option<String>,
+    /// Shell token the PTY runs (`wsl:<distro>` for WSL); picks the home that
+    /// holds the transcript.
+    #[cfg(feature = "remote-access")]
+    shell: String,
+    /// Transcript path last reported by a Claude hook (Linux path under WSL).
+    #[cfg(feature = "remote-access")]
+    transcript_path: Option<String>,
 }
 
 /// Extract the Claude session id from a startup command, if present. Only a
@@ -218,6 +225,15 @@ pub struct CreateOpts {
     pub env_remove: Vec<String>,
 }
 
+/// What the chat follower needs to find a terminal's transcript.
+#[cfg(feature = "remote-access")]
+#[derive(Debug, Clone)]
+pub struct ChatSource {
+    pub session_id: Option<String>,
+    pub transcript_path: Option<String>,
+    pub shell: String,
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     entries: Arc<Mutex<HashMap<String, PtyHandle>>>,
@@ -265,6 +281,8 @@ impl PtyManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "ghostty");
         cmd.env("TERM_PROGRAM_VERSION", "1.1.0");
+        // Lets Claude hook events name the terminal that spawned them.
+        cmd.env("TW_TERMINAL_ID", &opts.id);
         for (k, v) in &opts.env {
             cmd.env(k, v);
         }
@@ -276,6 +294,7 @@ impl PtyManager {
             let mut names: Vec<String> = vec![
                 "TERM_PROGRAM".to_string(),
                 "TERM_PROGRAM_VERSION".to_string(),
+                "TW_TERMINAL_ID".to_string(),
             ];
             names.extend(opts.env.iter().map(|(k, _)| k.clone()));
             let existing = std::env::var("WSLENV").ok();
@@ -332,6 +351,10 @@ impl PtyManager {
                     .startup_command
                     .as_deref()
                     .and_then(extract_claude_session),
+                #[cfg(feature = "remote-access")]
+                shell: shell.clone(),
+                #[cfg(feature = "remote-access")]
+                transcript_path: None,
             },
         );
         #[cfg(feature = "remote-access")]
@@ -410,6 +433,64 @@ impl PtyManager {
             .iter()
             .find(|(_, h)| h.session_id.as_deref() == Some(session_id))
             .map(|(id, _)| id.clone())
+    }
+
+    /// Session id / transcript / shell of a live terminal (None once it's gone).
+    #[cfg(feature = "remote-access")]
+    pub fn chat_source(&self, id: &str) -> Option<ChatSource> {
+        self.entries.lock().get(id).map(|h| ChatSource {
+            session_id: h.session_id.clone(),
+            transcript_path: h.transcript_path.clone(),
+            shell: h.shell.clone(),
+        })
+    }
+
+    /// (has a Claude session, working, Claude alive) — all false when gone.
+    #[cfg(feature = "remote-access")]
+    pub fn chat_flags(&self, id: &str) -> (bool, bool, bool) {
+        let entries = self.entries.lock();
+        let Some(h) = entries.get(id) else {
+            return (false, false, false);
+        };
+        let out = h.out.lock();
+        (h.session_id.is_some(), out.detector.is_working(), out.detector.is_claude_alive())
+    }
+
+    /// The terminal's Claude moved to a new session (`/clear`, a fork); the
+    /// old transcript path no longer applies.
+    #[cfg(feature = "remote-access")]
+    pub fn adopt_session(&self, id: &str, session_id: &str) {
+        if !crate::claude::is_uuid(session_id) {
+            return;
+        }
+        if let Some(h) = self.entries.lock().get_mut(id) {
+            h.session_id = Some(session_id.to_string());
+            h.transcript_path = None;
+        }
+    }
+
+    /// Remember the transcript path a hook reported for the current session.
+    #[cfg(feature = "remote-access")]
+    pub fn note_transcript(&self, id: &str, transcript_path: Option<String>) {
+        let Some(p) = transcript_path else {
+            return;
+        };
+        if let Some(h) = self.entries.lock().get_mut(id) {
+            h.transcript_path = Some(p);
+        }
+    }
+
+    /// A Claude hook says whether Claude is running here (SessionEnd → false).
+    #[cfg(feature = "remote-access")]
+    pub fn set_claude_alive(&self, app: &AppHandle, id: &str, alive: bool) {
+        let changed = self
+            .entries
+            .lock()
+            .get(id)
+            .is_some_and(|h| h.out.lock().detector.set_claude_alive(alive));
+        if changed {
+            emit_detect_event(app, id, detect::DetectEvent::ClaudeAlive(alive));
+        }
     }
 
     /// Start the prompt-silence sweeper once: a terminal that is mid-command
@@ -577,6 +658,13 @@ struct WorkingPayload {
 
 #[cfg(feature = "remote-access")]
 #[derive(Clone, Serialize)]
+struct ClaudeAlivePayload {
+    id: String,
+    alive: bool,
+}
+
+#[cfg(feature = "remote-access")]
+#[derive(Clone, Serialize)]
 struct IdPayload {
     id: String,
 }
@@ -656,6 +744,15 @@ fn emit_detect_event(app: &AppHandle, id: &str, ev: detect::DetectEvent) {
         }
         detect::DetectEvent::Notify { message } => {
             emit_attention(app, id, "notify", Some(message));
+        }
+        detect::DetectEvent::ClaudeAlive(alive) => {
+            let _ = app.emit(
+                "terminals:claude-alive",
+                ClaudeAlivePayload {
+                    id: id.to_string(),
+                    alive,
+                },
+            );
         }
     }
 }

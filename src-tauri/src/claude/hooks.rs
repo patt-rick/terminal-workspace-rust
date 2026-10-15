@@ -21,8 +21,11 @@ use std::path::{Path, PathBuf};
 
 /// Our entries are recognized by this substring in the hook command.
 const MARKER: &str = "--hook-sink";
-/// The hook events we subscribe to.
-const EVENTS: [&str; 2] = ["Notification", "Stop"];
+/// The hook events we subscribe to. `SessionStart`/`SessionEnd` let the phone's
+/// chat view follow `/clear` and notice Claude exiting.
+const EVENTS: [&str; 4] = ["Notification", "Stop", "SessionStart", "SessionEnd"];
+/// Present in every install, old or new — what "installed" means.
+const CORE_EVENTS: [&str; 2] = ["Notification", "Stop"];
 
 pub fn spool_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("hook-events")
@@ -41,7 +44,20 @@ pub fn run_sink(spool: &Path) {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let name = format!("{nanos}-{}.json", std::process::id());
-    let _ = std::fs::write(spool.join(name), body);
+    let terminal = std::env::var("TW_TERMINAL_ID").ok();
+    let _ = std::fs::write(spool.join(name), wrap_with_terminal(&body, terminal.as_deref()));
+}
+
+/// Tag a hook payload with the Terminal Workspace terminal it came from (the
+/// PTY sets `TW_TERMINAL_ID`), so routing survives a session-id change.
+pub fn wrap_with_terminal(body: &str, terminal: Option<&str>) -> String {
+    let Some(t) = terminal.filter(|t| !t.is_empty()) else {
+        return body.to_string();
+    };
+    match serde_json::from_str::<Value>(body) {
+        Ok(payload) => json!({ "terminalId": t, "payload": payload }).to_string(),
+        Err(_) => body.to_string(),
+    }
 }
 
 /// The command string written into Claude's settings.
@@ -142,7 +158,7 @@ fn write_settings(path: &Path, root: &Value) -> Result<(), String> {
 /// Whether our hooks are installed in the given Claude settings file.
 pub fn is_installed(settings_path: &Path) -> bool {
     let root = read_settings(settings_path);
-    EVENTS.iter().all(|ev| has_our_entry(&root, ev))
+    CORE_EVENTS.iter().all(|ev| has_our_entry(&root, ev))
 }
 
 /// Idempotently add our Notification/Stop hook entries (existing user hooks
@@ -174,33 +190,81 @@ pub fn uninstall(settings_path: &Path) -> Result<(), String> {
     write_settings(settings_path, &root)
 }
 
-/// Attention reason derived from one hook event.
-#[cfg(feature = "remote-access")]
-#[derive(Debug, PartialEq, Eq)]
-pub struct HookAttention {
-    pub session_id: String,
-    pub reason: &'static str,
-    pub message: Option<String>,
+/// The command an existing install uses (from a core event's marker entry).
+fn our_command(root: &Value) -> Option<String> {
+    CORE_EVENTS.iter().find_map(|ev| {
+        root.get("hooks")?
+            .get(ev)?
+            .as_array()?
+            .iter()
+            .filter_map(|e| e.get("hooks")?.as_array())
+            .flatten()
+            .find_map(|c| {
+                c.get("command")?
+                    .as_str()
+                    .filter(|s| s.contains(MARKER))
+                    .map(str::to_string)
+            })
+    })
 }
 
-/// Classify a raw hook JSON body into an attention event.
+/// Add events introduced after an install, reusing that install's own command.
+/// Existing entries are never rewritten, so a dev build can't take over the
+/// installed app's hooks. Returns whether anything changed.
+pub fn upgrade(settings_path: &Path) -> Result<bool, String> {
+    let mut root = read_settings(settings_path);
+    if !CORE_EVENTS.iter().all(|ev| has_our_entry(&root, ev)) {
+        return Ok(false);
+    }
+    let Some(command) = our_command(&root) else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    for event in EVENTS {
+        if !has_our_entry(&root, event) {
+            hooks_array(&mut root, event).push(json!({
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": command }],
+            }));
+            changed = true;
+        }
+    }
+    if changed {
+        write_settings(settings_path, &root)?;
+    }
+    Ok(changed)
+}
+
+/// One hook event from the spool.
 #[cfg(feature = "remote-access")]
-pub fn classify(body: &str) -> Option<HookAttention> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookEvent {
+    /// The PTY that spawned this Claude (wrapped payloads only).
+    pub terminal_id: Option<String>,
+    pub session_id: String,
+    pub transcript_path: Option<String>,
+    /// `hook_event_name`.
+    pub event: String,
+    /// SessionStart `source` / SessionEnd `reason`.
+    pub source: Option<String>,
+    /// (reason, message) when the event wants the user's attention.
+    pub attention: Option<(&'static str, Option<String>)>,
+}
+
+/// Parse a spool file body (wrapped `{terminalId, payload}` or a bare payload).
+#[cfg(feature = "remote-access")]
+pub fn parse_event(body: &str) -> Option<HookEvent> {
     let v: Value = serde_json::from_str(body).ok()?;
-    let session_id = v.get("session_id")?.as_str()?.to_string();
-    let event = v.get("hook_event_name")?.as_str()?;
-    match event {
-        "Stop" => Some(HookAttention {
-            session_id,
-            reason: "finished",
-            message: None,
-        }),
+    let (terminal_id, p) = match v.get("payload") {
+        Some(p) => (v.get("terminalId").and_then(Value::as_str).map(str::to_string), p),
+        None => (None, &v),
+    };
+    let session_id = p.get("session_id")?.as_str()?.to_string();
+    let event = p.get("hook_event_name")?.as_str()?.to_string();
+    let attention = match event.as_str() {
+        "Stop" => Some(("finished", None)),
         "Notification" => {
-            let message = v
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
+            let message = p.get("message").and_then(Value::as_str).unwrap_or("").to_string();
             let lower = message.to_lowercase();
             let reason = if lower.contains("permission") {
                 "needs-permission"
@@ -209,14 +273,41 @@ pub fn classify(body: &str) -> Option<HookAttention> {
             } else {
                 "notify"
             };
-            Some(HookAttention {
-                session_id,
-                reason,
-                message: if message.is_empty() { None } else { Some(message) },
-            })
+            Some((reason, (!message.is_empty()).then_some(message)))
         }
-        _ => None,
-    }
+        "SessionStart" | "SessionEnd" => None,
+        _ => return None,
+    };
+    let source = p
+        .get("source")
+        .or_else(|| p.get("reason"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let transcript_path = p.get("transcript_path").and_then(Value::as_str).map(str::to_string);
+    Some(HookEvent { terminal_id, session_id, transcript_path, event, source, attention })
+}
+
+/// What to do with an event routed to a terminal whose session is `current`.
+#[cfg(feature = "remote-access")]
+#[derive(Debug, PartialEq, Eq)]
+pub struct Route {
+    /// The event belongs to this terminal's Claude.
+    pub accept: bool,
+    /// Switch the terminal to the event's session id (`/clear` and forks).
+    pub adopt: bool,
+    /// Claude exited.
+    pub ended: bool,
+}
+
+#[cfg(feature = "remote-access")]
+pub fn decide(ev: &HookEvent, current: Option<&str>) -> Route {
+    let continues = ev.event == "SessionStart"
+        && current.is_some()
+        && matches!(ev.source.as_deref(), Some("clear" | "compact" | "resume"));
+    let adopt = continues && current != Some(ev.session_id.as_str());
+    let accept = adopt || current == Some(ev.session_id.as_str());
+    let ended = accept && ev.event == "SessionEnd" && ev.source.as_deref() != Some("clear");
+    Route { accept, adopt, ended }
 }
 
 /// Poll the spool dir and route events to terminals as attention events.
@@ -235,16 +326,33 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                 continue;
             };
             let _ = std::fs::remove_file(&path);
-            let Some(att) = classify(&body) else {
+            let Some(ev) = parse_event(&body) else {
                 continue;
             };
-            // Route to the terminal that launched this Claude session; events
-            // from sessions outside Terminal Workspace are dropped.
-            let terminal = app
-                .state::<crate::pty::PtyManager>()
-                .terminal_for_session(&att.session_id);
-            if let Some(terminal_id) = terminal {
-                crate::pty::emit_attention(&app, &terminal_id, att.reason, att.message);
+            // Route to the spawning terminal: by its id when the payload is
+            // wrapped, else by session id. Events from sessions outside
+            // Terminal Workspace are dropped.
+            let pty = app.state::<crate::pty::PtyManager>();
+            let terminal = ev
+                .terminal_id
+                .clone()
+                .filter(|id| pty.has(id))
+                .or_else(|| pty.terminal_for_session(&ev.session_id));
+            let Some(terminal_id) = terminal else {
+                continue;
+            };
+            let current = pty.chat_source(&terminal_id).and_then(|s| s.session_id);
+            let route = decide(&ev, current.as_deref());
+            if !route.accept {
+                continue; // a nested Claude sharing the env var
+            }
+            if route.adopt {
+                pty.adopt_session(&terminal_id, &ev.session_id);
+            }
+            pty.note_transcript(&terminal_id, ev.transcript_path.clone());
+            pty.set_claude_alive(&app, &terminal_id, !route.ended);
+            if let Some((reason, message)) = ev.attention {
+                crate::pty::emit_attention(&app, &terminal_id, reason, message);
             }
         }
     });
@@ -296,6 +404,8 @@ mod tests {
         // Only ours removed.
         assert_eq!(root["hooks"]["Notification"].as_array().unwrap().len(), 1);
         assert_eq!(root["hooks"]["Stop"].as_array().unwrap().len(), 0);
+        assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 0);
+        assert_eq!(root["hooks"]["SessionEnd"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -317,28 +427,112 @@ mod tests {
 
     #[cfg(feature = "remote-access")]
     #[test]
-    fn classify_permission_input_stop() {
-        let perm = classify(
-            r#"{"session_id":"s1","hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}"#,
+    fn parse_event_attention_and_routing_fields() {
+        let perm = parse_event(
+            r#"{"session_id":"s1","hook_event_name":"Notification","message":"Claude needs your permission to use Bash","transcript_path":"/x/s1.jsonl"}"#,
         )
         .unwrap();
-        assert_eq!(perm.reason, "needs-permission");
         assert_eq!(perm.session_id, "s1");
-        assert!(perm.message.unwrap().contains("Bash"));
+        assert_eq!(perm.event, "Notification");
+        assert_eq!(perm.terminal_id, None);
+        assert_eq!(perm.transcript_path.as_deref(), Some("/x/s1.jsonl"));
+        let (reason, msg) = perm.attention.clone().unwrap();
+        assert_eq!(reason, "needs-permission");
+        assert!(msg.unwrap().contains("Bash"));
 
-        let waiting = classify(
+        let waiting = parse_event(
             r#"{"session_id":"s2","hook_event_name":"Notification","message":"Claude is waiting for your input"}"#,
         )
         .unwrap();
-        assert_eq!(waiting.reason, "waiting-input");
+        assert_eq!(waiting.attention.unwrap().0, "waiting-input");
 
-        let stop = classify(r#"{"session_id":"s3","hook_event_name":"Stop"}"#).unwrap();
-        assert_eq!(stop.reason, "finished");
-        assert_eq!(stop.message, None);
+        let stop = parse_event(r#"{"session_id":"s3","hook_event_name":"Stop"}"#).unwrap();
+        assert_eq!(stop.attention, Some(("finished", None)));
 
-        // Unknown events and garbage are dropped.
-        assert!(classify(r#"{"session_id":"s","hook_event_name":"PreToolUse"}"#).is_none());
-        assert!(classify("not json").is_none());
+        let start = parse_event(
+            r#"{"terminalId":"t9","payload":{"session_id":"s4","hook_event_name":"SessionStart","source":"clear"}}"#,
+        )
+        .unwrap();
+        assert_eq!(start.terminal_id.as_deref(), Some("t9"));
+        assert_eq!(start.source.as_deref(), Some("clear"));
+        assert_eq!(start.attention, None);
+
+        let end = parse_event(
+            r#"{"session_id":"s5","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}"#,
+        )
+        .unwrap();
+        assert_eq!(end.source.as_deref(), Some("prompt_input_exit"));
+        assert_eq!(end.attention, None);
+
+        assert!(parse_event(r#"{"session_id":"s","hook_event_name":"PreToolUse"}"#).is_none());
+        assert!(parse_event("not json").is_none());
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn decide_routes_only_this_terminals_session() {
+        let ev = |event: &str, sid: &str, source: Option<&str>| HookEvent {
+            terminal_id: Some("t".into()),
+            session_id: sid.into(),
+            transcript_path: None,
+            event: event.into(),
+            source: source.map(str::to_string),
+            attention: None,
+        };
+        let r = |accept, adopt, ended| Route { accept, adopt, ended };
+        // Same session: routed.
+        assert_eq!(decide(&ev("Stop", "a", None), Some("a")), r(true, false, false));
+        // A nested `claude -p` sharing the env var: dropped.
+        assert_eq!(decide(&ev("Stop", "b", None), Some("a")), r(false, false, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("startup")), Some("a")), r(false, false, false));
+        // /clear (and resume/compact forks) moves the terminal to the new session.
+        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), Some("a")), r(true, true, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("resume")), Some("a")), r(true, true, false));
+        assert_eq!(decide(&ev("SessionStart", "a", Some("compact")), Some("a")), r(true, false, false));
+        // A terminal without a session never gains one (shells stay shells).
+        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), None), r(false, false, false));
+        // Exit ends Claude; the SessionEnd that /clear fires does not.
+        assert_eq!(decide(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a")), r(true, false, true));
+        assert_eq!(decide(&ev("SessionEnd", "a", Some("clear")), Some("a")), r(true, false, false));
+    }
+
+    #[test]
+    fn wrap_with_terminal_wraps_json_only() {
+        let body = r#"{"session_id":"s"}"#;
+        let wrapped: Value = serde_json::from_str(&wrap_with_terminal(body, Some("t1"))).unwrap();
+        assert_eq!(wrapped["terminalId"], "t1");
+        assert_eq!(wrapped["payload"]["session_id"], "s");
+        assert_eq!(wrap_with_terminal(body, None), body);
+        assert_eq!(wrap_with_terminal(body, Some("")), body);
+        assert_eq!(wrap_with_terminal("garbage", Some("t1")), "garbage");
+    }
+
+    #[test]
+    fn upgrade_adds_new_events_with_the_installed_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // Not installed: nothing to upgrade, file untouched.
+        assert_eq!(upgrade(&path), Ok(false));
+        assert!(!path.exists());
+        let cmd = "\"C:\\Program Files\\tw\\tw.exe\" --hook-sink \"C:\\spool\"";
+        // An install from before SessionStart/SessionEnd existed.
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"hooks":{{"Notification":[{{"matcher":"","hooks":[{{"type":"command","command":{c}}}]}}],"Stop":[{{"matcher":"","hooks":[{{"type":"command","command":{c}}}]}}]}}}}"#,
+                c = serde_json::to_string(cmd).unwrap()
+            ),
+        )
+        .unwrap();
+        assert!(is_installed(&path));
+        assert_eq!(upgrade(&path), Ok(true));
+        let root = read_settings(&path);
+        for ev in ["SessionStart", "SessionEnd"] {
+            // The existing install's command, verbatim — never this process's exe.
+            assert_eq!(root["hooks"][ev][0]["hooks"][0]["command"], cmd);
+        }
+        assert_eq!(root["hooks"]["Notification"].as_array().unwrap().len(), 1);
+        assert_eq!(upgrade(&path), Ok(false));
     }
 
     #[test]
