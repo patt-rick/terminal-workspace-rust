@@ -7,6 +7,7 @@ pub mod creds;
 pub mod accounts;
 pub mod oauth;
 pub mod usage;
+pub mod transcript;
 
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
