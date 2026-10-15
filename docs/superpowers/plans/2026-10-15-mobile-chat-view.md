@@ -127,6 +127,7 @@ Append a "Phase 0 results" section to the bottom of this plan:
 - platform × case → pass/fail;
 - if `\r` 100 ms after the paste did not submit on a platform, the delay that worked (try 250 ms);
 - if bracketed paste failed under ConPTY, note it. Task 10's `promptSequences` then uses the fallback (see the note there).
+- if **both** bracketed paste and the line-by-line fallback fail on a platform, stop and report to the owner before building anything. The composer design depends on one of them working.
 
 Commit: `git add docs/superpowers/plans/2026-10-15-mobile-chat-view.md && git commit -m "docs(remote): mobile chat phase 0 results"`
 
@@ -175,7 +176,7 @@ In `src-tauri/src/pty/mod.rs`, replace the body of `extracts_session_id_from_lau
 
 - [ ] **Step 2: Run them and confirm they fail**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml is_uuid extracts_session_id`
+Run: `cargo test --manifest-path src-tauri/Cargo.toml -- is_uuid extracts_session_id`
 Expected: compile error, because `is_uuid` is not defined.
 
 - [ ] **Step 3: Implement**
@@ -221,7 +222,7 @@ fn extract_claude_session(cmd: &str) -> Option<String> {
 
 - [ ] **Step 4: Run them and confirm they pass**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml is_uuid extracts_session_id`
+Run: `cargo test --manifest-path src-tauri/Cargo.toml -- is_uuid extracts_session_id`
 Expected: both tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -356,6 +357,10 @@ pub struct Transcript {
 impl Transcript {
     pub fn len(&self) -> usize {
         self.msgs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.msgs.is_empty()
     }
 
     /// The last `HISTORY_LIMIT` messages.
@@ -675,7 +680,8 @@ Replace the `ingest` stub with this, and add the free functions below the `impl`
             _ => {}
         }
         if interrupted {
-            let id = self.row_id(row);
+            // Distinct from the bubble's id when the row also has text.
+            let id = format!("{}-int", self.row_id(row));
             changed.extend(self.push_divider(id, ts.clone(), "Interrupted"));
         }
         if !blocks.is_empty() {
@@ -830,6 +836,9 @@ Expected: compile error, because `load_tail`, `Tail` and `TailRead` are not defi
 const CHUNK: u64 = 256 * 1024;
 /// Never read more than this backwards for the initial history.
 const MAX_BACKREAD: u64 = 16 * 1024 * 1024;
+/// Enough raw lines to yield ~200 messages (tool results and split assistant
+/// rows make lines outnumber messages).
+const LINE_BUDGET: usize = 3_000;
 
 /// Build the initial history from the end of the file without reading it all.
 /// Returns the transcript, the byte offset just past the last complete line
@@ -842,37 +851,41 @@ fn load_tail_chunked(path: &std::path::Path, chunk: u64) -> std::io::Result<(Tra
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path)?;
     let len = f.metadata()?.len();
+    // Read chunks backwards until there are enough lines, then parse once
+    // (linear: no re-parsing or re-copying per chunk).
     let mut start = len;
-    let mut buf: Vec<u8> = Vec::new();
-    loop {
+    let mut pieces: Vec<Vec<u8>> = Vec::new();
+    let mut newlines = 0usize;
+    while start > 0 && newlines <= LINE_BUDGET && len - start < MAX_BACKREAD {
         let step = chunk.min(start);
         start -= step;
         let mut piece = vec![0u8; step as usize];
         f.seek(SeekFrom::Start(start))?;
         f.read_exact(&mut piece)?;
-        piece.extend_from_slice(&buf);
-        buf = piece;
-
-        // Skip a leading partial line (unless at file start) and any trailing
-        // line still being written.
-        let head = if start == 0 {
-            0
-        } else {
-            buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1)
-        };
-        let end = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-        let mut t = Transcript::default();
-        if head < end {
-            for line in buf[head..end].split(|&b| b == b'\n') {
-                t.ingest(line);
-            }
-        }
-        let read_so_far = len - start;
-        if start == 0 || t.len() > HISTORY_LIMIT || read_so_far >= MAX_BACKREAD {
-            let truncated = start > 0 || t.len() > HISTORY_LIMIT;
-            return Ok((t, start + end as u64, truncated));
+        newlines += piece.iter().filter(|&&b| b == b'
+').count();
+        pieces.push(piece);
+    }
+    let buf: Vec<u8> = pieces.into_iter().rev().flatten().collect();
+    // Skip a leading partial line (unless at file start) and any trailing line
+    // still being written.
+    let head = if start == 0 {
+        0
+    } else {
+        buf.iter().position(|&b| b == b'
+').map_or(buf.len(), |i| i + 1)
+    };
+    let end = buf.iter().rposition(|&b| b == b'
+').map_or(0, |i| i + 1);
+    let mut t = Transcript::default();
+    if head < end {
+        for line in buf[head..end].split(|&b| b == b'
+') {
+            t.ingest(line);
         }
     }
+    let truncated = start > 0 || t.len() > HISTORY_LIMIT;
+    Ok((t, start + end as u64, truncated))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -939,12 +952,17 @@ git commit -m "feat(claude): read a transcript's tail and follow appends"
 
 ---
 
-### Task 5: Hooks route by terminal; add SessionStart
+### Task 5: Hooks route by terminal; SessionStart/SessionEnd; safe upgrade
 
 **Files:**
 - Modify: `src-tauri/src/claude/hooks.rs`
 - Modify: `src-tauri/src/pty/mod.rs` (`TW_TERMINAL_ID` env)
 - Modify: `src-tauri/src/lib.rs` (upgrade existing installs)
+
+Routing rules, which the `decide` tests pin:
+- `TW_TERMINAL_ID` is inherited by everything Claude spawns. A nested `claude -p` run by a tool, or `claude` typed in a shell terminal, sends events carrying the terminal's id but a **different** session id. Those events are dropped.
+- A terminal adopts a new session id only from `SessionStart` with source `clear`, `compact` or `resume`, and only when it already has a session. A shell terminal never becomes a chat terminal, and the picker-form `--resume` (no id at launch) stays a terminal.
+- `SessionEnd` (any reason except `clear`) marks Claude not alive. That covers `/exit` under PowerShell and WSL, where no OSC 133 arrives.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -959,9 +977,10 @@ In `hooks.rs` `mod tests`, replace `classify_permission_input_stop` with:
         )
         .unwrap();
         assert_eq!(perm.session_id, "s1");
+        assert_eq!(perm.event, "Notification");
         assert_eq!(perm.terminal_id, None);
         assert_eq!(perm.transcript_path.as_deref(), Some("/x/s1.jsonl"));
-        let (reason, msg) = perm.attention.unwrap();
+        let (reason, msg) = perm.attention.clone().unwrap();
         assert_eq!(reason, "needs-permission");
         assert!(msg.unwrap().contains("Bash"));
 
@@ -974,17 +993,51 @@ In `hooks.rs` `mod tests`, replace `classify_permission_input_stop` with:
         let stop = parse_event(r#"{"session_id":"s3","hook_event_name":"Stop"}"#).unwrap();
         assert_eq!(stop.attention, Some(("finished", None)));
 
-        // SessionStart routes but raises no attention.
         let start = parse_event(
             r#"{"terminalId":"t9","payload":{"session_id":"s4","hook_event_name":"SessionStart","source":"clear"}}"#,
         )
         .unwrap();
         assert_eq!(start.terminal_id.as_deref(), Some("t9"));
-        assert_eq!(start.session_id, "s4");
+        assert_eq!(start.source.as_deref(), Some("clear"));
         assert_eq!(start.attention, None);
+
+        let end = parse_event(
+            r#"{"session_id":"s5","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}"#,
+        )
+        .unwrap();
+        assert_eq!(end.source.as_deref(), Some("prompt_input_exit"));
+        assert_eq!(end.attention, None);
 
         assert!(parse_event(r#"{"session_id":"s","hook_event_name":"PreToolUse"}"#).is_none());
         assert!(parse_event("not json").is_none());
+    }
+
+    #[cfg(feature = "remote-access")]
+    #[test]
+    fn decide_routes_only_this_terminals_session() {
+        let ev = |event: &str, sid: &str, source: Option<&str>| HookEvent {
+            terminal_id: Some("t".into()),
+            session_id: sid.into(),
+            transcript_path: None,
+            event: event.into(),
+            source: source.map(str::to_string),
+            attention: None,
+        };
+        let r = |accept, adopt, ended| Route { accept, adopt, ended };
+        // Same session: routed.
+        assert_eq!(decide(&ev("Stop", "a", None), Some("a")), r(true, false, false));
+        // A nested `claude -p` sharing the env var: dropped.
+        assert_eq!(decide(&ev("Stop", "b", None), Some("a")), r(false, false, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("startup")), Some("a")), r(false, false, false));
+        // /clear (and resume/compact forks) moves the terminal to the new session.
+        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), Some("a")), r(true, true, false));
+        assert_eq!(decide(&ev("SessionStart", "b", Some("resume")), Some("a")), r(true, true, false));
+        assert_eq!(decide(&ev("SessionStart", "a", Some("compact")), Some("a")), r(true, false, false));
+        // A terminal without a session never gains one (shells stay shells).
+        assert_eq!(decide(&ev("SessionStart", "b", Some("clear")), None), r(false, false, false));
+        // Exit ends Claude; the SessionEnd that /clear fires does not.
+        assert_eq!(decide(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a")), r(true, false, true));
+        assert_eq!(decide(&ev("SessionEnd", "a", Some("clear")), Some("a")), r(true, false, false));
     }
 
     #[test]
@@ -999,11 +1052,14 @@ In `hooks.rs` `mod tests`, replace `classify_permission_input_stop` with:
     }
 
     #[test]
-    fn old_installs_need_upgrade_and_stay_installed() {
+    fn upgrade_adds_new_events_with_the_installed_command() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let cmd = "\"C:\\app.exe\" --hook-sink \"C:\\spool\"";
-        // An install from before SessionStart existed.
+        // Not installed: nothing to upgrade, file untouched.
+        assert_eq!(upgrade(&path), Ok(false));
+        assert!(!path.exists());
+        let cmd = "\"C:\\Program Files\\tw\\tw.exe\" --hook-sink \"C:\\spool\"";
+        // An install from before SessionStart/SessionEnd existed.
         std::fs::write(
             &path,
             format!(
@@ -1013,48 +1069,91 @@ In `hooks.rs` `mod tests`, replace `classify_permission_input_stop` with:
         )
         .unwrap();
         assert!(is_installed(&path));
-        assert!(needs_upgrade(&path));
-        install(&path, cmd).unwrap();
-        assert!(!needs_upgrade(&path));
-        assert_eq!(read_settings(&path)["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(upgrade(&path), Ok(true));
+        let root = read_settings(&path);
+        for ev in ["SessionStart", "SessionEnd"] {
+            // The existing install's command, verbatim — never this process's exe.
+            assert_eq!(root["hooks"][ev][0]["hooks"][0]["command"], cmd);
+        }
+        assert_eq!(root["hooks"]["Notification"].as_array().unwrap().len(), 1);
+        assert_eq!(upgrade(&path), Ok(false));
     }
 ```
 
-Also update the `install_then_uninstall_preserves_user_hooks` assertion block after `uninstall`. Add:
+In `install_then_uninstall_preserves_user_hooks`, after the existing `Stop` assertion at the end, add:
 
 ```rust
         assert_eq!(root["hooks"]["SessionStart"].as_array().unwrap().len(), 0);
+        assert_eq!(root["hooks"]["SessionEnd"].as_array().unwrap().len(), 0);
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml claude::hooks`
-Expected: compile errors, because `parse_event`, `wrap_with_terminal` and `needs_upgrade` are not defined.
+Expected: compile errors, because `parse_event`, `decide`, `Route`, `wrap_with_terminal` and `upgrade` are not defined.
 
 - [ ] **Step 3: Implement in `hooks.rs`**
 
 Replace the `EVENTS` constant with:
 
 ```rust
-/// The hook events we subscribe to. `SessionStart` lets the chat view follow
-/// `/clear` (it carries the new session id and transcript path).
-const EVENTS: [&str; 3] = ["Notification", "Stop", "SessionStart"];
+/// The hook events we subscribe to. `SessionStart`/`SessionEnd` let the phone's
+/// chat view follow `/clear` and notice Claude exiting.
+const EVENTS: [&str; 4] = ["Notification", "Stop", "SessionStart", "SessionEnd"];
 /// Present in every install, old or new — what "installed" means.
 const CORE_EVENTS: [&str; 2] = ["Notification", "Stop"];
 ```
 
-In `is_installed`, change `EVENTS.iter()` to `CORE_EVENTS.iter()`. Add after it:
+In `is_installed`, change `EVENTS.iter()` to `CORE_EVENTS.iter()`. Add after `uninstall`:
 
 ```rust
-/// Installed, but from before an event was added: re-run `install` to upgrade.
-pub fn needs_upgrade(settings_path: &Path) -> bool {
-    let root = read_settings(settings_path);
-    CORE_EVENTS.iter().all(|ev| has_our_entry(&root, ev))
-        && !EVENTS.iter().all(|ev| has_our_entry(&root, ev))
+/// The command an existing install uses (from a core event's marker entry).
+fn our_command(root: &Value) -> Option<String> {
+    CORE_EVENTS.iter().find_map(|ev| {
+        root.get("hooks")?
+            .get(ev)?
+            .as_array()?
+            .iter()
+            .filter_map(|e| e.get("hooks")?.as_array())
+            .flatten()
+            .find_map(|c| {
+                c.get("command")?
+                    .as_str()
+                    .filter(|s| s.contains(MARKER))
+                    .map(str::to_string)
+            })
+    })
+}
+
+/// Add events introduced after an install, reusing that install's own command.
+/// Existing entries are never rewritten, so a dev build can't take over the
+/// installed app's hooks. Returns whether anything changed.
+pub fn upgrade(settings_path: &Path) -> Result<bool, String> {
+    let mut root = read_settings(settings_path);
+    if !CORE_EVENTS.iter().all(|ev| has_our_entry(&root, ev)) {
+        return Ok(false);
+    }
+    let Some(command) = our_command(&root) else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    for event in EVENTS {
+        if !has_our_entry(&root, event) {
+            hooks_array(&mut root, event).push(json!({
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": command }],
+            }));
+            changed = true;
+        }
+    }
+    if changed {
+        write_settings(settings_path, &root)?;
+    }
+    Ok(changed)
 }
 ```
 
-Replace `run_sink`'s `std::fs::write(spool.join(name), body)` line with:
+Replace `run_sink`'s `let _ = std::fs::write(spool.join(name), body);` line with:
 
 ```rust
     let terminal = std::env::var("TW_TERMINAL_ID").ok();
@@ -1080,14 +1179,18 @@ pub fn wrap_with_terminal(body: &str, terminal: Option<&str>) -> String {
 Replace `HookAttention` and `classify` with:
 
 ```rust
-/// One routed hook event.
+/// One hook event from the spool.
 #[cfg(feature = "remote-access")]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookEvent {
     /// The PTY that spawned this Claude (wrapped payloads only).
     pub terminal_id: Option<String>,
     pub session_id: String,
     pub transcript_path: Option<String>,
+    /// `hook_event_name`.
+    pub event: String,
+    /// SessionStart `source` / SessionEnd `reason`.
+    pub source: Option<String>,
     /// (reason, message) when the event wants the user's attention.
     pub attention: Option<(&'static str, Option<String>)>,
 }
@@ -1101,8 +1204,8 @@ pub fn parse_event(body: &str) -> Option<HookEvent> {
         None => (None, &v),
     };
     let session_id = p.get("session_id")?.as_str()?.to_string();
-    let transcript_path = p.get("transcript_path").and_then(Value::as_str).map(str::to_string);
-    let attention = match p.get("hook_event_name")?.as_str()? {
+    let event = p.get("hook_event_name")?.as_str()?.to_string();
+    let attention = match event.as_str() {
         "Stop" => Some(("finished", None)),
         "Notification" => {
             let message = p.get("message").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1116,10 +1219,39 @@ pub fn parse_event(body: &str) -> Option<HookEvent> {
             };
             Some((reason, (!message.is_empty()).then_some(message)))
         }
-        "SessionStart" => None,
+        "SessionStart" | "SessionEnd" => None,
         _ => return None,
     };
-    Some(HookEvent { terminal_id, session_id, transcript_path, attention })
+    let source = p
+        .get("source")
+        .or_else(|| p.get("reason"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let transcript_path = p.get("transcript_path").and_then(Value::as_str).map(str::to_string);
+    Some(HookEvent { terminal_id, session_id, transcript_path, event, source, attention })
+}
+
+/// What to do with an event routed to a terminal whose session is `current`.
+#[cfg(feature = "remote-access")]
+#[derive(Debug, PartialEq, Eq)]
+pub struct Route {
+    /// The event belongs to this terminal's Claude.
+    pub accept: bool,
+    /// Switch the terminal to the event's session id (`/clear` and forks).
+    pub adopt: bool,
+    /// Claude exited.
+    pub ended: bool,
+}
+
+#[cfg(feature = "remote-access")]
+pub fn decide(ev: &HookEvent, current: Option<&str>) -> Route {
+    let continues = ev.event == "SessionStart"
+        && current.is_some()
+        && matches!(ev.source.as_deref(), Some("clear" | "compact" | "resume"));
+    let adopt = continues && current != Some(ev.session_id.as_str());
+    let accept = adopt || current == Some(ev.session_id.as_str());
+    let ended = accept && ev.event == "SessionEnd" && ev.source.as_deref() != Some("clear");
+    Route { accept, adopt, ended }
 }
 ```
 
@@ -1141,14 +1273,22 @@ In `start_watcher`, replace everything from `let Some(att) = classify(&body)` to
             let Some(terminal_id) = terminal else {
                 continue;
             };
-            pty.note_hook_session(&terminal_id, &ev.session_id, ev.transcript_path.clone());
-            pty.mark_claude_alive(&app, &terminal_id);
+            let current = pty.chat_source(&terminal_id).and_then(|s| s.session_id);
+            let route = decide(&ev, current.as_deref());
+            if !route.accept {
+                continue; // a nested Claude sharing the env var
+            }
+            if route.adopt {
+                pty.adopt_session(&terminal_id, &ev.session_id);
+            }
+            pty.note_transcript(&terminal_id, ev.transcript_path.clone());
+            pty.set_claude_alive(&app, &terminal_id, !route.ended);
             if let Some((reason, message)) = ev.attention {
                 crate::pty::emit_attention(&app, &terminal_id, reason, message);
             }
 ```
 
-`note_hook_session` and `mark_claude_alive` arrive in Task 6. This task compiles only after Task 6, so run the tests at the end of Task 6.
+`chat_source`, `adopt_session`, `note_transcript` and `set_claude_alive` arrive in Task 6. This task compiles only together with Task 6, so the tests run at the end of Task 6.
 
 - [ ] **Step 4: Set `TW_TERMINAL_ID` in the PTY env** (`src-tauri/src/pty/mod.rs`, `create`)
 
@@ -1163,24 +1303,19 @@ and in the WSLENV `names` vec add `"TW_TERMINAL_ID".to_string(),`.
 
 - [ ] **Step 5: Upgrade existing installs at startup** (`src-tauri/src/lib.rs`)
 
-Inside the `#[cfg(feature = "remote-access")]` block right after `claude::hooks::start_watcher(...)`, add:
+Right after the `claude::hooks::start_watcher(...)` call (inside its own `#[cfg(feature = "remote-access")]`), add:
 
 ```rust
+            // Installs made before SessionStart/SessionEnd existed get them,
+            // with their own command (see hooks::upgrade). WSL distros are
+            // upgraded the next time the user turns hooks on.
             #[cfg(feature = "remote-access")]
             if let Ok(home) = app.path().home_dir() {
-                // Installs made before SessionStart existed get it added.
-                let settings = home.join(".claude").join("settings.json");
-                if claude::hooks::needs_upgrade(&settings) {
-                    if let Some(cmd) =
-                        claude::hooks::native_hook_command(&claude::hooks::spool_dir(&data_dir))
-                    {
-                        let _ = claude::hooks::install(&settings, &cmd);
-                    }
-                }
+                let _ = claude::hooks::upgrade(&home.join(".claude").join("settings.json"));
             }
 ```
 
-(`data_dir` is already in scope there; `tauri::Manager` is imported in `lib.rs`. If not, add `use tauri::Manager;`.)
+(If `lib.rs` lacks `use tauri::Manager;`, add it.)
 
 - [ ] **Step 6: Commit** (together with Task 6, after its tests pass)
 
@@ -1196,19 +1331,19 @@ Inside the `#[cfg(feature = "remote-access")]` block right after `claude::hooks:
 
 ```rust
     #[test]
-    fn claude_alive_from_title_until_command_done() {
+    fn claude_alive_follows_titles_and_command_done() {
         let mut d = ShellDetector::default();
         assert!(!d.is_claude_alive());
-        let ev = d.feed(&osc("2;✳ Claude Code"));
-        assert!(ev.contains(&DetectEvent::ClaudeAlive(true)));
+        assert!(d.feed(&osc("2;✳ Claude Code")).contains(&DetectEvent::ClaudeAlive(true)));
         assert!(d.is_claude_alive());
         // Further Claude titles don't repeat the event.
         assert!(!d.feed(&osc("2;\u{2809} Working")).contains(&DetectEvent::ClaudeAlive(true)));
-        let ev = d.feed(&osc("133;D;0"));
-        assert!(ev.contains(&DetectEvent::ClaudeAlive(false)));
+        // Shell integration closing the command ends it (bash/zsh/fish)…
+        assert!(d.feed(&osc("133;D;0")).contains(&DetectEvent::ClaudeAlive(false)));
+        assert!(d.feed(&osc("2;✳ Claude Code")).contains(&DetectEvent::ClaudeAlive(true)));
+        // …and so does a non-Claude title (a shell resetting it after exit).
+        assert!(d.feed(&osc("2;C:\\repo")).contains(&DetectEvent::ClaudeAlive(false)));
         assert!(!d.is_claude_alive());
-        // A plain shell title never marks Claude alive.
-        assert!(!d.feed(&osc("2;C:\\repo")).contains(&DetectEvent::ClaudeAlive(true)));
         assert!(d.set_claude_alive(true));
         assert!(!d.set_claude_alive(true));
     }
@@ -1224,8 +1359,8 @@ Expected: compile error, because `ClaudeAlive` is not defined.
 Add the variant to `DetectEvent`:
 
 ```rust
-    /// A Claude Code TUI started (its title appeared) or ended (the shell's
-    /// OSC 133;D closed the command it ran in).
+    /// A Claude Code TUI started (its title appeared) or ended (a non-Claude
+    /// title, or the shell's OSC 133;D closing the command it ran in).
     ClaudeAlive(bool),
 ```
 
@@ -1236,7 +1371,7 @@ Add the field `claude_alive: bool,` to `ShellDetector`, and these methods inside
         self.claude_alive
     }
 
-    /// Set from outside (a Claude hook event arrived); true if it changed.
+    /// Set from outside (a Claude hook event); true if it changed.
     pub fn set_claude_alive(&mut self, alive: bool) -> bool {
         let changed = self.claude_alive != alive;
         self.claude_alive = alive;
@@ -1254,9 +1389,7 @@ In `finish_osc`, change the `"0" | "2"` arm to:
 
 ```rust
             "0" | "2" => {
-                if is_claude_title(rest) {
-                    self.note_alive(true, events);
-                }
+                self.note_alive(is_claude_title(rest), events);
                 let working = title_indicates_work(rest);
                 self.set_working(working, events);
             }
@@ -1271,10 +1404,18 @@ fn is_claude_title(title: &str) -> bool {
 }
 ```
 
-- [ ] **Step 4: Run it and confirm it passes**
+- [ ] **Step 4: Update the existing tests that now see `ClaudeAlive(true)`**
+
+These four existing tests feed a Claude title to a fresh detector. They now get `[ClaudeAlive(true), Working(true)]` where they expected `[Working(true)]`:
+- `braille_title_marks_working_then_idle` (first assert);
+- `marker_title_with_task_is_working`;
+- `sequence_split_across_chunks_is_handled` (second feed);
+- `st_terminated_osc_works`.
+
+Prepend `DetectEvent::ClaudeAlive(true),` to each of those expected vectors. Also check every other title assertion in that file. A non-Claude title fed after a Claude one now also yields `ClaudeAlive(false)`, so fix any vector that changes the same way.
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml pty::detect`
-Expected: all detect tests PASS. The existing tests use `assert_eq!(…, vec![…])` on title feeds; if any now also receive `ClaudeAlive(true)`, update those expected vectors to include `DetectEvent::ClaudeAlive(true)` as the **first** element on the first Claude title fed to a fresh detector.
+Expected: all detect tests PASS.
 
 - [ ] **Step 5: PTY state and accessors** (`src-tauri/src/pty/mod.rs`)
 
@@ -1336,35 +1477,40 @@ Add to `impl PtyManager` (next to `terminal_for_session`):
         (h.session_id.is_some(), out.detector.is_working(), out.detector.is_claude_alive())
     }
 
-    /// A hook event for this terminal: adopt its session id (it changes on
-    /// `/clear`) and transcript path. A new session without a path forgets the
-    /// old path.
+    /// The terminal's Claude moved to a new session (`/clear`, a fork); the
+    /// old transcript path no longer applies.
     #[cfg(feature = "remote-access")]
-    pub fn note_hook_session(&self, id: &str, session_id: &str, transcript_path: Option<String>) {
+    pub fn adopt_session(&self, id: &str, session_id: &str) {
         if !crate::claude::is_uuid(session_id) {
             return;
         }
         if let Some(h) = self.entries.lock().get_mut(id) {
-            if h.session_id.as_deref() != Some(session_id) {
-                h.session_id = Some(session_id.to_string());
-                h.transcript_path = None;
-            }
-            if transcript_path.is_some() {
-                h.transcript_path = transcript_path;
-            }
+            h.session_id = Some(session_id.to_string());
+            h.transcript_path = None;
         }
     }
 
-    /// A Claude hook proves Claude is running in this terminal.
+    /// Remember the transcript path a hook reported for the current session.
     #[cfg(feature = "remote-access")]
-    pub fn mark_claude_alive(&self, app: &AppHandle, id: &str) {
+    pub fn note_transcript(&self, id: &str, transcript_path: Option<String>) {
+        let Some(p) = transcript_path else {
+            return;
+        };
+        if let Some(h) = self.entries.lock().get_mut(id) {
+            h.transcript_path = Some(p);
+        }
+    }
+
+    /// A Claude hook says whether Claude is running here (SessionEnd → false).
+    #[cfg(feature = "remote-access")]
+    pub fn set_claude_alive(&self, app: &AppHandle, id: &str, alive: bool) {
         let changed = self
             .entries
             .lock()
             .get(id)
-            .is_some_and(|h| h.out.lock().detector.set_claude_alive(true));
+            .is_some_and(|h| h.out.lock().detector.set_claude_alive(alive));
         if changed {
-            emit_detect_event(app, id, detect::DetectEvent::ClaudeAlive(true));
+            emit_detect_event(app, id, detect::DetectEvent::ClaudeAlive(alive));
         }
     }
 ```
@@ -1396,8 +1542,8 @@ struct ClaudeAlivePayload {
 
 - [ ] **Step 6: Build and run the pty and hooks tests**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml pty:: claude::hooks`
-Expected: all PASS. If any other module still calls `hooks::classify`, run `cargo build --manifest-path src-tauri/Cargo.toml`; there should be none besides the watcher.
+Run: `cargo test --manifest-path src-tauri/Cargo.toml -- pty:: claude::hooks`
+Expected: all PASS. Then run `cargo build --manifest-path src-tauri/Cargo.toml`. Nothing should still reference `hooks::classify`.
 
 - [ ] **Step 7: Commit Tasks 5–6**
 
@@ -1653,9 +1799,18 @@ pub fn claude_hooks_installed(app: &AppHandle) -> bool {
 }
 ```
 
-- [ ] **Step 3: Send it in `hello.ok`** (`server.rs`, `handle_socket`)
+- [ ] **Step 3: Send it in `hello.ok`, and keep `Conn::handle` exhaustive** (`server.rs`)
 
-Add `claude_hooks: bridge::claude_hooks_installed(&ctx.app),` to the `ServerMsg::HelloOk { … }` literal.
+Add `claude_hooks: bridge::claude_hooks_installed(&ctx.app),` to the `ServerMsg::HelloOk { … }` literal in `handle_socket`.
+
+`Conn::handle` matches `ClientMsg` exhaustively, so the new variants need arms now or the crate won't build. Add a placeholder at the end of the `match msg { … }`; Task 9 replaces it:
+
+```rust
+            // Wired up in the next task.
+            ClientMsg::ChatOpen { .. }
+            | ClientMsg::ChatClose { .. }
+            | ClientMsg::TermReleaseSize { .. } => {}
+```
 
 - [ ] **Step 4: Build and test**
 
@@ -1725,12 +1880,18 @@ pub fn resolve(home: &Path, src: &ChatSource) -> Option<PathBuf> {
             _ => PathBuf::from(tp),
         };
         // Only ever read the session's own transcript file.
-        if p.file_name().and_then(|n| n.to_str()) == Some(&format!("{sid}.jsonl")) {
+        let want = format!("{sid}.jsonl");
+        if p.file_name().and_then(|n| n.to_str()) == Some(want.as_str()) {
             return Some(p);
         }
     }
+    // distro_home is cached after its first wsl.exe call, and the distro is
+    // already running (this terminal lives in it).
     let base = match distro {
+        #[cfg(windows)]
         Some(d) => crate::wsl::unc_path(d, &crate::wsl::distro_home(d)?),
+        #[cfg(not(windows))]
+        Some(_) => return None,
         None => home.to_path_buf(),
     };
     find_in_projects(&base.join(".claude").join("projects"), sid)
@@ -1897,7 +2058,7 @@ At the top, change `use super::bridge;` to `use super::{bridge, chat};`.
 
 Add to `Conn`: `chat: Option<chat::ChatFollow>,`, and in the `Conn { … }` construction in `handle_socket`: `chat: None,`.
 
-In `Conn::handle`, add arms:
+In `Conn::handle`, replace Task 8's placeholder arm with:
 
 ```rust
             ClientMsg::ChatOpen { terminal_id } => {
@@ -1988,7 +2149,7 @@ git commit -m "feat(remote): stream a Claude terminal's transcript as chat"
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { promptSequences, resolvesTool, upsertMessages } from './chat-model'
+import { hasPendingTool, promptSequences, resolvesTool, upsertMessages } from './chat-model'
 import type { ChatMessage } from './protocol'
 
 const msg = (id: string, text: string): ChatMessage => ({
@@ -2023,20 +2184,27 @@ describe('promptSequences', () => {
   })
 })
 
-describe('resolvesTool', () => {
-  it('is true only when an incoming tool call carries a result', () => {
-    const pending: ChatMessage = {
-      id: 'm',
-      role: 'assistant',
-      ts: '',
-      blocks: [{ kind: 'toolUse', id: 't', name: 'Bash', summary: 'ls', result: null }],
-    }
-    const done: ChatMessage = {
-      ...pending,
-      blocks: [{ kind: 'toolUse', id: 't', name: 'Bash', summary: 'ls', result: { ok: true, preview: '' } }],
-    }
-    expect(resolvesTool([pending])).toBe(false)
-    expect(resolvesTool([done])).toBe(true)
+describe('resolvesTool / hasPendingTool', () => {
+  const ok = { ok: true, preview: '' }
+  const tools = (t2: typeof ok | null): ChatMessage => ({
+    id: 'm',
+    role: 'assistant',
+    ts: '',
+    blocks: [
+      { kind: 'toolUse', id: 't1', name: 'Read', summary: 'a', result: ok },
+      { kind: 'toolUse', id: 't2', name: 'Bash', summary: 'ls', result: t2 },
+    ],
+  })
+  it('is true only when a previously pending tool call gets its result', () => {
+    const prev = [tools(null)]
+    // Same merged message re-sent: t1 was already done, t2 still waits.
+    expect(resolvesTool(prev, [tools(null)])).toBe(false)
+    expect(resolvesTool(prev, [tools(ok)])).toBe(true)
+    expect(resolvesTool([], [tools(ok)])).toBe(false)
+  })
+  it('sees a tool call still waiting', () => {
+    expect(hasPendingTool([tools(null)])).toBe(true)
+    expect(hasPendingTool([tools(ok)])).toBe(false)
   })
 })
 ```
@@ -2156,9 +2324,24 @@ export function promptSequences(text: string): { paste: string; enter: string } 
 /** Delay between the paste and its Enter (Phase 0 result). */
 export const ENTER_DELAY_MS = 100
 
-/** A tool call got its result: a pending permission prompt was answered. */
-export function resolvesTool(incoming: ChatMessage[]): boolean {
-  return incoming.some((m) => m.blocks.some((b) => b.kind === 'toolUse' && b.result !== null))
+/** Ids of tool calls still waiting for a result. */
+function pendingTools(msgs: ChatMessage[]): Set<string> {
+  const ids = new Set<string>()
+  for (const m of msgs) for (const b of m.blocks) if (b.kind === 'toolUse' && b.result === null) ids.add(b.id)
+  return ids
+}
+
+/** A tool call that was waiting got its result: the permission prompt was
+ *  answered. Messages are re-sent whole, so compare against `prev`. */
+export function resolvesTool(prev: ChatMessage[], incoming: ChatMessage[]): boolean {
+  const waiting = pendingTools(prev)
+  return incoming.some((m) =>
+    m.blocks.some((b) => b.kind === 'toolUse' && b.result !== null && waiting.has(b.id))
+  )
+}
+
+export function hasPendingTool(msgs: ChatMessage[]): boolean {
+  return pendingTools(msgs).size > 0
 }
 
 const MODE_KEY = 'tw_chat_mode'
@@ -2191,9 +2374,9 @@ If Phase 0 (Task 1) found that bracketed paste fails under ConPTY, change `promp
 - [ ] **Step 5: Run the tests and confirm they pass; typecheck**
 
 Run: `pnpm vitest run remote-web/src/chat-model.test.ts`
-Expected: 5 tests PASS.
+Expected: 6 tests PASS.
 Run: `npm --prefix remote-web run typecheck`
-Expected: errors only in `app.tsx` (the `onState` arity changed; it is fixed in Task 12). That is acceptable at this step.
+Expected: no errors (`app.tsx`'s `onState` handler with fewer parameters is still assignable).
 
 - [ ] **Step 6: Commit**
 
@@ -2433,7 +2616,18 @@ function Block({ b, user }: { b: ChatBlock; user: boolean }) {
         <div className="bubble">{b.text}</div>
       ) : (
         <div className="md">
-          <Markdown>{b.text}</Markdown>
+          <Markdown
+            disallowedElements={['img']}
+            components={{
+              a: (p) => (
+                <a href={p.href} target="_blank" rel="noreferrer">
+                  {p.children}
+                </a>
+              ),
+            }}
+          >
+            {b.text}
+          </Markdown>
         </div>
       )
     case 'image':
@@ -2663,6 +2857,8 @@ function Block({ b, user }: { b: ChatBlock; user: boolean }) {
 .composer {
   flex-shrink: 0;
   padding: 6px 8px 8px;
+  /* The key row (which owned the safe area) is hidden in chat. */
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--separator);
 }
 .composer-note {
@@ -2712,7 +2908,7 @@ function Block({ b, user }: { b: ChatBlock; user: boolean }) {
 }
 ```
 
-The `15px` composer font stops iOS Safari from zooming on focus, which it does for inputs under 16px in a non-standalone tab. If zoom still happens on a device, raise it to 16px.
+Links open in a new tab, so the PWA isn't navigated away, and images in Markdown aren't loaded. The `15px` composer font stops iOS Safari from zooming on focus, which it does for inputs under 16px in a non-standalone tab. If zoom still happens on a device, raise it to 16px.
 
 - [ ] **Step 5: Typecheck**
 
@@ -2741,7 +2937,7 @@ Add these imports:
 
 ```ts
 import { ChatView, type PermissionPrompt } from './chat-view'
-import { ENTER_DELAY_MS, modeStore, promptSequences, resolvesTool, type ViewMode } from './chat-model'
+import { ENTER_DELAY_MS, hasPendingTool, modeStore, promptSequences, resolvesTool, type ViewMode } from './chat-model'
 import type { ChatMessage } from './protocol'
 ```
 
@@ -2771,6 +2967,8 @@ Add after the sessions state:
   const [unavailable, setUnavailable] = useState<Record<string, true>>({})
   const unavailableRef = useRef(unavailable)
   unavailableRef.current = unavailable
+  const chatRef = useRef(chat)
+  chatRef.current = chat
 ```
 
 Add a helper below `termName`:
@@ -2807,11 +3005,16 @@ with:
     setMode(wantChat ? 'chat' : 'terminal')
     setChat({ id, messages: [], truncated: false, loaded: false })
     if (wantChat) {
+      termRef.current?.blur() // keystrokes must not reach the hidden terminal
       client.releaseSize(id)
       client.chatOpen(id)
     } else {
-      const term = termRef.current
-      if (term) client.resize(id, term.cols, term.rows)
+      // The key row may have just reappeared: refit before sending the size.
+      requestAnimationFrame(() => {
+        fitRef.current?.fit()
+        const term = termRef.current
+        if (term && curIdRef.current === id) client.resize(id, term.cols, term.rows)
+      })
     }
     setDrawerOpen(false)
 ```
@@ -2824,6 +3027,9 @@ Change `onState: (state, _version, vapidKey, theme) => {` to `onState: (state, _
 
 ```ts
         setHooksMissing(!claudeHooks)
+        // A refusal may have been transient (a read error): try chat again.
+        unavailableRef.current = {}
+        setUnavailable({})
         setWorking(new Set(state.projects.flatMap((p) => p.terminals).filter((t) => t.working).map((t) => t.id)))
         setAlive(Object.fromEntries(state.projects.flatMap((p) => p.terminals).map((t) => [t.id, t.claudeAlive])))
 ```
@@ -2854,13 +3060,17 @@ with:
 
 Note: `projectsRef.current` is still the pre-reconnect list here, which is fine for `chatFor`.
 
+In the same handler's fresh-load branch, change `attachTo(terminal.id)` to `attachTo(terminal.id, terminal)`. `projectsRef.current` is still `[]` at that point (the state update hasn't rendered), so without `info` a reloaded PWA would always open in terminal mode.
+
 In `onAttention`, change `setAttention((a) => ({ ...a, [tid]: reason }))` to:
 
 ```ts
         setAttention((a) => ({ ...a, [tid]: { reason, message } }))
         if (reason === 'needs-permission') {
           setPermission((p) => ({ ...p, [tid]: { message } }))
-        } else {
+        } else if (reason === 'finished') {
+          // Not waiting-input/notify: the idle sweeper and Claude's idle
+          // notice can fire while the prompt is still open.
           setPermission((p) => {
             if (!(tid in p)) return p
             const next = { ...p }
@@ -2878,11 +3088,21 @@ Add new handlers to the `RemoteClient({ … })` object:
       onChatHistory: (tid, messages, truncated) => {
         if (tid !== curIdRef.current) return
         setChat({ id: tid, messages, truncated, loaded: true })
+        // A prompt answered elsewhere (on the desktop) leaves no waiting tool.
+        if (!hasPendingTool(messages)) {
+          setPermission((p) => {
+            if (!(tid in p)) return p
+            const next = { ...p }
+            delete next[tid]
+            return next
+          })
+        }
       },
       onChatAppend: (tid, messages) => {
         if (tid !== curIdRef.current) return
+        const prev = chatRef.current.id === tid ? chatRef.current.messages : []
         setChat((c) => (c.id === tid ? { ...c, messages: upsertMessages(c.messages, messages) } : c))
-        if (resolvesTool(messages)) {
+        if (resolvesTool(prev, messages)) {
           setPermission((p) => {
             if (!(tid in p)) return p
             const next = { ...p }
@@ -2940,6 +3160,7 @@ Add before `const doPair`:
     modeStore.set(id, next)
     setMode(next)
     if (next === 'chat') {
+      termRef.current?.blur()
       clientRef.current?.releaseSize(id)
       clientRef.current?.chatOpen(id)
     } else {
@@ -3095,7 +3316,12 @@ In the spec:
 - change the `ChatMessage` model to `ts: String` (ISO-8601);
 - replace the `toolResult` block with `result: Option<ToolResult>` on `toolUse`;
 - in "Reading and tailing", replace "shrinks, or is replaced by a different file" with "shrinks";
-- add `claudeHooks: bool` to `hello.ok` under "Protocol additions".
+- add `claudeHooks: bool` to `hello.ok` under "Protocol additions";
+- Markdown is rendered with react-markdown (the desktop's library), not `marked`; links open in a new tab and images are not loaded;
+- session tracking: the `SessionEnd` hook is added, and so is the routing rule. A terminal adopts a new id only from `SessionStart` with source `clear`, `compact` or `resume`, and only when it already has a session. Events for other session ids (nested `claude -p`) are dropped. The picker-form `--resume` therefore never gets the chat view. Hooks are upgraded in place with the existing install's command; WSL distros are upgraded on the next enable;
+- Claude alive turns false on `SessionEnd`, on a non-Claude window title, or on OSC 133;D. This replaces "a shell prompt";
+- initial load: rows are parsed one at a time from up to 3,000 trailing lines (16 MB cap), not shallowly; the transcript search repeats every 2 s until the file exists (`distro_home` is cached);
+- `TermInfo.claude` is refreshed only on `hello.ok` / `term.created` (known limitation).
 
 - [ ] **Step 3: Commit**
 
@@ -3118,7 +3344,12 @@ Run the app (`pnpm tauri dev`), start Remote Access over Tailscale, and pair the
 - [ ] Card is not dismissed by the spinner stopping; it is dismissed once the tool result arrives.
 - [ ] `/clear` typed in the desktop TUI: the phone chat empties and follows the new session (hooks on).
 - [ ] With hooks off: the banner shows.
-- [ ] `/exit` in Claude: the composer disables with "Claude isn't running".
+- [ ] `/exit` in Claude, in a PowerShell terminal: the composer disables with "Claude isn't running".
+- [ ] Ask Claude to run `claude -p "say hi"` through its Bash tool: the phone chat does **not** switch sessions.
+- [ ] Parallel tools: when one tool finishes while another waits for permission, the card stays.
+- [ ] A prompt answered on the desktop: reopening that chat on the phone shows no stale card.
+- [ ] Reload the PWA (swipe it away and reopen) on a Claude terminal: it opens in chat, and the desktop doesn't letterbox.
+- [ ] After a hooks upgrade, `~/.claude/settings.json` has `SessionStart`/`SessionEnd` entries using the **installed** app's command, not the dev build's.
 - [ ] Chat ⇄ Terminal toggle both ways; the terminal view fits the phone and typing works.
 - [ ] Desktop pane is not letterboxed while the phone shows chat; it letterboxes again in terminal view.
 - [ ] Switch apps and come back: reconnects, chat reloads, working state is right.
