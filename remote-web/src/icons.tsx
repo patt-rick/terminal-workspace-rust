@@ -109,6 +109,27 @@ export const SendIcon = (p: P) => (
   </Icon>
 )
 
+export const PlusIcon = (p: P) => (
+  <Icon {...p}>
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </Icon>
+)
+
+export const PaperclipIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" />
+  </Icon>
+)
+
+export const ImageIcon = (p: P) => (
+  <Icon {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+  </Icon>
+)
+
 export const StopIcon = (p: P) => (
   <Icon {...p}>
     <rect x="6" y="6" width="12" height="12" rx="2" />

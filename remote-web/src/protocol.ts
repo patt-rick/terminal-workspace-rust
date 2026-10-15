@@ -99,6 +99,8 @@ export interface Handlers {
   onTheme?: (theme: RemoteTheme) => void
   onAttached?: (terminalId: string, tag: number) => void
   onSnapshot?: (terminalId: string, tag: number, bytes: Uint8Array) => void
+  /** The PTY's grid (on attach, on releaseSize, and when the desktop resizes it). */
+  onTermSize?: (terminalId: string, cols: number, rows: number) => void
   onOutput?: (tag: number, bytes: Uint8Array) => void
   onCreated?: (terminal: TermInfo) => void
   onClosed?: (terminalId: string) => void
@@ -126,6 +128,9 @@ export interface Handlers {
   onClose?: () => void
 }
 
+/** How long an image upload may take before it counts as failed. */
+const UPLOAD_TIMEOUT_MS = 120_000
+
 const b64ToBytes = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
 const strToB64 = (s: string): string => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
 
@@ -151,6 +156,8 @@ export class RemoteClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private watchdogTimer: ReturnType<typeof setInterval> | null = null
   private lastActivity = 0
+  private uploads = new Map<string, { resolve: (path: string) => void; reject: (e: Error) => void }>()
+  private nextReq = 1
 
   constructor(private h: Handlers) {}
 
@@ -196,6 +203,7 @@ export class RemoteClient {
     }
     ws.onclose = () => {
       this.stopHeartbeat()
+      this.failUploads('The connection dropped.')
       if (this.intentionalClose) {
         this.h.onClose?.()
       } else if (!this.stopped) {
@@ -226,6 +234,15 @@ export class RemoteClient {
           break
         case 'term.snapshot':
           this.h.onSnapshot?.(m.terminalId, m.tag, b64ToBytes(m.data))
+          break
+        case 'term.size':
+          this.h.onTermSize?.(m.terminalId, m.cols, m.rows)
+          break
+        case 'image.saved':
+          this.uploads.get(m.reqId)?.resolve(m.path)
+          break
+        case 'image.error':
+          this.uploads.get(m.reqId)?.reject(new Error(m.message))
           break
         case 'term.created':
           this.h.onCreated?.(m.terminal)
@@ -305,7 +322,8 @@ export class RemoteClient {
     // onclose path reconnects fast (mobile suspends backgrounded sockets).
     this.heartbeatTimer = setInterval(() => this.ping(), 20000)
     this.watchdogTimer = setInterval(() => {
-      if (Date.now() - this.lastActivity > 35000) {
+      // A big upload on a slow link can keep the server quiet; it has its own timeout.
+      if (Date.now() - this.lastActivity > 35000 && this.uploads.size === 0) {
         try {
           this.ws?.close()
         } catch {
@@ -332,6 +350,10 @@ export class RemoteClient {
     this.h.onOutput?.(tag, buf.subarray(4))
   }
 
+  private failUploads(message: string): void {
+    for (const u of [...this.uploads.values()]) u.reject(new Error(message))
+  }
+
   private send(o: unknown): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(o))
   }
@@ -356,6 +378,25 @@ export class RemoteClient {
   }
   chatClose(terminalId: string): void {
     this.send({ type: 'chat.close', terminalId })
+  }
+  /** Save an image on the desktop for a prompt; resolves to the path as the
+   *  terminal sees it. */
+  uploadImage(terminalId: string, mime: string, data: string): Promise<string> {
+    if (!this.isOpen()) return Promise.reject(new Error('Not connected.'))
+    const reqId = `img${this.nextReq++}`
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => done(() => reject(new Error('The upload timed out.'))), UPLOAD_TIMEOUT_MS)
+      const done = (f: () => void) => {
+        clearTimeout(timer)
+        this.uploads.delete(reqId)
+        f()
+      }
+      this.uploads.set(reqId, {
+        resolve: (path) => done(() => resolve(path)),
+        reject: (e) => done(() => reject(e)),
+      })
+      this.send({ type: 'image.upload', reqId, terminalId, mime, data })
+    })
   }
   /** True when a message can be sent right now. */
   isOpen(): boolean {
@@ -396,6 +437,7 @@ export class RemoteClient {
   }
   disconnect(): void {
     this.intentionalClose = true
+    this.failUploads('Disconnected.')
     this.stopHeartbeat()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)

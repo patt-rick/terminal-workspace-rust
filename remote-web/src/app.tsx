@@ -14,13 +14,16 @@ import {
 import type { ChatMessage } from './protocol'
 import { ChatView, type PermissionPrompt } from './chat-view'
 import {
-  ENTER_DELAY_MS,
   hasPendingTool,
+  joinWrapped,
   modeStore,
-  promptSequences,
+  parsePermissionOptions,
+  promptSteps,
   upsertMessages,
   type ViewMode,
 } from './chat-model'
+import { Drawer } from './drawer'
+import type { PreparedImage } from './images'
 import { GitSheet } from './git-sheet'
 import { SessionsSheet } from './sessions-sheet'
 import { applyTheme, xtermTheme, type RemoteTheme } from './theme'
@@ -31,10 +34,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
-  CloseIcon,
-  HistoryIcon,
   MenuIcon,
-  SparklesIcon,
   TerminalIcon,
 } from './icons'
 
@@ -130,6 +130,11 @@ export function App() {
   })
   const [alive, setAlive] = useState<Record<string, boolean>>({})
   const [permission, setPermission] = useState<Record<string, PermissionPrompt>>({})
+  // Read by sendPrompt between its writes; onAttention updates it at once.
+  const permRef = useRef(permission)
+  permRef.current = permission
+  /** Images the last prompt carried, checked against the transcript's echo of it. */
+  const expectImagesRef = useRef<{ id: string; count: number } | null>(null)
   const [hooksMissing, setHooksMissing] = useState(false)
   const [unavailable, setUnavailable] = useState<Record<string, true>>({})
   const unavailableRef = useRef(unavailable)
@@ -147,6 +152,8 @@ export function App() {
   const fitRef = useRef<FitAddon | null>(null)
   const curIdRef = useRef<string | null>(null)
   const curTagRef = useRef<number | null>(null)
+  /** The attached PTY's grid, from the latest term.size. */
+  const ptySizeRef = useRef<{ id: string; cols: number; rows: number } | null>(null)
   const phaseRef = useRef<Phase>(phase)
   phaseRef.current = phase
 
@@ -292,6 +299,7 @@ export function App() {
     } else {
       // The key row may have just reappeared: refit before sending the size.
       requestAnimationFrame(() => {
+        if (modeRef.current !== 'terminal') return
         fitRef.current?.fit()
         const term = termRef.current
         if (term && curIdRef.current === id) client.resize(id, term.cols, term.rows)
@@ -361,6 +369,15 @@ export function App() {
           termRef.current?.write(bytes)
         }
       },
+      onTermSize: (tid, cols, rows) => {
+        // Chat keeps the hidden terminal at the PTY's grid, so the TUI's output
+        // (and the permission menu read from it) lands where it was drawn.
+        if (tid !== curIdRef.current) return
+        ptySizeRef.current = { id: tid, cols, rows }
+        if (modeRef.current !== 'chat') return
+        const term = termRef.current
+        if (term && (term.cols !== cols || term.rows !== rows)) term.resize(cols, rows)
+      },
       onOutput: (tag, bytes) => {
         if (tag !== curTagRef.current) return
         termRef.current?.write(bytes)
@@ -403,6 +420,7 @@ export function App() {
       onAttention: (tid, reason, message) => {
         setAttention((a) => ({ ...a, [tid]: { reason, message } }))
         if (reason === 'needs-permission') {
+          permRef.current = { ...permRef.current, [tid]: { message } }
           setPermission((p) => ({ ...p, [tid]: { message } }))
         } else if (reason === 'finished') {
           // Not waiting-input/notify: the idle sweeper and Claude's idle
@@ -475,6 +493,17 @@ export function App() {
         if (tid !== curIdRef.current || c.id !== tid) return
         const next = upsertMessages(c.messages, messages)
         putChat({ ...c, messages: next })
+        // Claude reads a pasted image after the paste: if Enter beat it, the
+        // prompt went without the image. Say so rather than fail silently.
+        const want = expectImagesRef.current
+        const sent = want?.id === tid ? messages.find((m) => m.role === 'user') : undefined
+        if (want && sent) {
+          expectImagesRef.current = null
+          const got = sent.blocks.filter((b) => b.kind === 'image').length
+          if (got < want.count) {
+            setToast(`Claude got ${got} of ${want.count} image${want.count === 1 ? '' : 's'} — attach the rest again.`)
+          }
+        }
         // Parallel tool calls: the prompt may be for one that still waits.
         if (!hasPendingTool(next)) dropPermission(tid)
       },
@@ -543,7 +572,10 @@ export function App() {
     let t: ReturnType<typeof setTimeout> | null = null
     const onResize = () => {
       if (t) clearTimeout(t)
-      t = setTimeout(() => fitRef.current?.fit(), 200)
+      // In chat the hidden terminal keeps the PTY's grid (term.size), not the screen's.
+      t = setTimeout(() => {
+        if (modeRef.current === 'terminal') fitRef.current?.fit()
+      }, 200)
     }
     window.addEventListener('resize', onResize)
     return () => {
@@ -608,6 +640,8 @@ export function App() {
       term.loadAddon(fit)
       term.open(node)
       fit.fit()
+      const size = ptySizeRef.current
+      if (modeRef.current === 'chat' && size && size.id === curIdRef.current) term.resize(size.cols, size.rows)
       // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
       // The alt buffer has no scrollback, so xterm converts each wheel tick into
       // an ↑/↓ key — which a prompt reads as history navigation. Claude Code
@@ -773,6 +807,8 @@ export function App() {
       clientRef.current?.chatClose(id)
       // onResize won't fire if the grid didn't change, so always send it.
       requestAnimationFrame(() => {
+        // Switched back to chat within the frame: the desktop keeps the size.
+        if (modeRef.current !== 'terminal') return
         fitRef.current?.fit()
         const term = termRef.current
         if (term && curIdRef.current === id) clientRef.current?.resize(id, term.cols, term.rows)
@@ -781,15 +817,64 @@ export function App() {
     }
   }
 
-  const sendPrompt = (text: string): boolean => {
+  /** Upload the images one at a time, then type the prompt. Resolves to null
+   *  once sent, or to the reason it wasn't (the composer keeps its draft). */
+  const sendPrompt = async (text: string, images: PreparedImage[]): Promise<string | null> => {
     const id = curIdRef.current
     const client = clientRef.current
-    const seq = promptSequences(text)
-    if (!id || !client || !seq || !client.isOpen()) return false
-    client.input(id, seq.clear + seq.paste)
-    setTimeout(() => client.input(id, seq.enter), ENTER_DELAY_MS)
-    return true
+    if (!id || !client || !client.isOpen()) return 'Not connected.'
+    const paths: string[] = []
+    for (const img of images) {
+      try {
+        paths.push(await client.uploadImage(id, img.mime, img.data))
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    }
+    const steps = promptSteps(text, paths)
+    if (!steps) return null
+    for (const step of steps) {
+      if (!client.isOpen() || curIdRef.current !== id) return 'The connection changed — try again.'
+      // A prompt that opened while the images uploaded would take the Enter as "Yes".
+      if (permRef.current[id]) return 'Answer the permission prompt first.'
+      client.input(id, step.data)
+      if (step.wait) await new Promise((r) => setTimeout(r, step.wait))
+    }
+    if (paths.length) expectImagesRef.current = { id, count: paths.length }
+    return null
   }
+
+  const [permOptions, setPermOptions] = useState<string[]>([])
+  const permOpen = !!(currentId && permission[currentId])
+  // While the card is open, read the menu's labels off the hidden terminal,
+  // again (at most every 150 ms) as Claude redraws it.
+  useEffect(() => {
+    setPermOptions([])
+    const term = termRef.current
+    if (!permOpen || !term) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const scan = () => {
+      timer = null
+      const b = term.buffer.active
+      const rows: { text: string; wrapped: boolean }[] = []
+      for (let i = b.baseY; i < b.baseY + term.rows; i++) {
+        const line = b.getLine(i)
+        // A row that wraps on keeps its trailing blanks: they separate its last word from the next row's first.
+        const wrapsOn = !!b.getLine(i + 1)?.isWrapped
+        if (line) rows.push({ text: line.translateToString(!wrapsOn), wrapped: line.isWrapped })
+      }
+      const next = parsePermissionOptions(joinWrapped(rows))
+      setPermOptions((prev) => (prev.join('\n') === next.join('\n') ? prev : next))
+    }
+    scan()
+    const sub = term.onWriteParsed(() => {
+      if (!timer) timer = setTimeout(scan, 150)
+    })
+    return () => {
+      sub.dispose()
+      if (timer) clearTimeout(timer)
+    }
+  }, [permOpen, currentId])
 
   const answerPermission = (seq: string) => {
     const id = curIdRef.current
@@ -884,6 +969,7 @@ export function App() {
                 alive={!!alive[current.id]}
                 connected={!reconnecting}
                 permission={permission[current.id] ?? null}
+                permissionOptions={permOptions}
                 hooksMissing={hooksMissing}
                 onSend={sendPrompt}
                 onStop={() => {
@@ -931,55 +1017,17 @@ export function App() {
       )}
 
       {drawerOpen && (
-        <>
-          <div className="scrim" onClick={() => setDrawerOpen(false)} />
-          <div className="drawer">
-            <h2>Projects</h2>
-            {projects.map((p) => (
-              <div className="proj" key={p.id}>
-                <div className="proj-name">
-                  <span className="dot" style={{ background: p.color }} />
-                  <span className="label">{p.name}</span>
-                </div>
-                {p.terminals.length === 0 && <div className="proj-empty">No terminals</div>}
-                {p.terminals.map((t) => (
-                  <div
-                    key={t.id}
-                    className={`term-row ${t.id === currentId ? 'active' : ''}`}
-                    onClick={() => attachTo(t.id)}
-                  >
-                    <span className={`state-dot ${dotClass(working.has(t.id), attention[t.id]?.reason)}`} />
-                    <span className={`name ${t.live ? '' : 'dead'}`}>{t.name}</span>
-                    <button
-                      className="x"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        clientRef.current?.close(t.id)
-                      }}
-                      aria-label="Close terminal"
-                    >
-                      <CloseIcon size={13} />
-                    </button>
-                  </div>
-                ))}
-                <div className="mk">
-                  <button className="btn" onClick={() => clientRef.current?.create(p.id, 'shell')}>
-                    <TerminalIcon size={13} />
-                    Shell
-                  </button>
-                  <button className="btn" onClick={() => clientRef.current?.create(p.id, 'claude')}>
-                    <SparklesIcon size={13} />
-                    Claude
-                  </button>
-                  <button className="btn" onClick={() => openSessions(p.id)}>
-                    <HistoryIcon size={13} />
-                    Sessions
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
+        <Drawer
+          projects={projects}
+          currentId={currentId}
+          working={working}
+          attention={attention}
+          onPick={(id) => attachTo(id)}
+          onCloseTerminal={(id) => clientRef.current?.close(id)}
+          onCreate={(projectId, kind) => clientRef.current?.create(projectId, kind)}
+          onSessions={openSessions}
+          onDismiss={() => setDrawerOpen(false)}
+        />
       )}
 
       {gitOpen && (
@@ -1008,14 +1056,6 @@ export function App() {
       {toast && <div className="toast">{toast}</div>}
     </div>
   )
-}
-
-/** Busy beats attention, as on the desktop's terminal tabs. */
-function dotClass(busy: boolean, attention: string | undefined): string {
-  if (busy) return 'busy'
-  if (attention === 'needs-permission' || attention === 'failed') return 'att-red'
-  if (attention === 'finished') return 'att-green'
-  return attention ? 'att-amber' : ''
 }
 
 function PairScreen({
