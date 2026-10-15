@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasPendingTool, promptSequences, resolvesTool, upsertMessages } from './chat-model'
+import { hasPendingTool, promptSequences, upsertMessages } from './chat-model'
 import type { ChatMessage } from './protocol'
 
 const msg = (id: string, text: string): ChatMessage => ({
@@ -35,7 +35,7 @@ describe('promptSequences', () => {
   })
 })
 
-describe('resolvesTool / hasPendingTool', () => {
+describe('hasPendingTool', () => {
   const ok = { ok: true, preview: '' }
   const tools = (t2: typeof ok | null): ChatMessage => ({
     id: 'm',
@@ -46,15 +46,18 @@ describe('resolvesTool / hasPendingTool', () => {
       { kind: 'toolUse', id: 't2', name: 'Bash', summary: 'ls', result: t2 },
     ],
   })
-  it('is true only when a previously pending tool call gets its result', () => {
-    const prev = [tools(null)]
-    // Same merged message re-sent: t1 was already done, t2 still waits.
-    expect(resolvesTool(prev, [tools(null)])).toBe(false)
-    expect(resolvesTool(prev, [tools(ok)])).toBe(true)
-    expect(resolvesTool([], [tools(ok)])).toBe(false)
-  })
   it('sees a tool call still waiting', () => {
     expect(hasPendingTool([tools(null)])).toBe(true)
     expect(hasPendingTool([tools(ok)])).toBe(false)
+  })
+  it('still sees a parallel call waiting after another one resolves', () => {
+    const other: ChatMessage = {
+      id: 'n',
+      role: 'assistant',
+      ts: '',
+      blocks: [{ kind: 'toolUse', id: 't3', name: 'Bash', summary: 'mkdir x', result: null }],
+    }
+    const next = upsertMessages([tools(null), other], [tools(ok)])
+    expect(hasPendingTool(next)).toBe(true)
   })
 })

@@ -18,7 +18,6 @@ import {
   hasPendingTool,
   modeStore,
   promptSequences,
-  resolvesTool,
   upsertMessages,
   type ViewMode,
 } from './chat-model'
@@ -175,6 +174,21 @@ export function App() {
       return next
     })
 
+  // The ref is updated before the render so back-to-back chat messages see the latest list.
+  const putChat = (next: typeof chat) => {
+    chatRef.current = next
+    setChat(next)
+  }
+
+  /** Forget a chat refusal for `id` so chat is tried again. */
+  const clearUnavailable = (id: string) => {
+    if (!unavailableRef.current[id]) return
+    const next = { ...unavailableRef.current }
+    delete next[id]
+    unavailableRef.current = next
+    setUnavailable(next)
+  }
+
   const notify = useCallback((title: string, body: string) => {
     if ('Notification' in window && Notification.permission === 'granted') {
       // Prefer the service worker's notification: it keeps showing while the app
@@ -266,10 +280,11 @@ export function App() {
     localStorage.setItem(LAST_TERM_KEY, id)
     termRef.current?.reset()
     client.attach(id)
+    clearUnavailable(id)
     const wantChat = chatFor(id, info)
     modeRef.current = wantChat ? 'chat' : 'terminal'
     setMode(modeRef.current)
-    setChat({ id, messages: [], truncated: false, loaded: false })
+    putChat({ id, messages: [], truncated: false, loaded: false })
     if (wantChat) {
       termRef.current?.blur() // keystrokes must not reach the hidden terminal
       client.releaseSize(id)
@@ -448,15 +463,17 @@ export function App() {
       },
       onChatHistory: (tid, messages, truncated) => {
         if (tid !== curIdRef.current) return
-        setChat({ id: tid, messages, truncated, loaded: true })
+        putChat({ id: tid, messages, truncated, loaded: true })
         // A prompt answered elsewhere (on the desktop) leaves no waiting tool.
         if (!hasPendingTool(messages)) dropPermission(tid)
       },
       onChatAppend: (tid, messages) => {
-        if (tid !== curIdRef.current) return
-        const prev = chatRef.current.id === tid ? chatRef.current.messages : []
-        setChat((c) => (c.id === tid ? { ...c, messages: upsertMessages(c.messages, messages) } : c))
-        if (resolvesTool(prev, messages)) dropPermission(tid)
+        const c = chatRef.current
+        if (tid !== curIdRef.current || c.id !== tid) return
+        const next = upsertMessages(c.messages, messages)
+        putChat({ ...c, messages: next })
+        // Parallel tool calls: the prompt may be for one that still waits.
+        if (!hasPendingTool(next)) dropPermission(tid)
       },
       onChatUnavailable: (tid, reason) => {
         unavailableRef.current = { ...unavailableRef.current, [tid]: true }
@@ -745,6 +762,7 @@ export function App() {
     modeRef.current = next
     setMode(next)
     if (next === 'chat') {
+      clearUnavailable(id)
       termRef.current?.blur()
       clientRef.current?.releaseSize(id)
       clientRef.current?.chatOpen(id)
@@ -834,13 +852,13 @@ export function App() {
           <span className="title-text">{current ? current.name : 'No terminal'}</span>
         </span>
         <span className="status">{reconnecting ? 'Reconnecting…' : status}</span>
-        {current?.claude && !unavailable[current.id] && (
+        {current?.claude && (
           <button
             className="iconbtn"
-            onClick={() => switchMode(mode === 'chat' ? 'terminal' : 'chat')}
-            aria-label={mode === 'chat' ? 'Show terminal' : 'Show chat'}
+            onClick={() => switchMode(showChat ? 'terminal' : 'chat')}
+            aria-label={showChat ? 'Show terminal' : 'Show chat'}
           >
-            {mode === 'chat' ? <TerminalIcon size={17} /> : <ChatIcon size={17} />}
+            {showChat ? <TerminalIcon size={17} /> : <ChatIcon size={17} />}
           </button>
         )}
         <button className="iconbtn" onClick={openGit} aria-label="Git">
@@ -855,6 +873,7 @@ export function App() {
             <div className="term" ref={mountTerminal} onClick={() => termRef.current?.focus()} />
             {showChat && (
               <ChatView
+                key={current.id}
                 messages={chat.id === current.id ? chat.messages : []}
                 truncated={chat.id === current.id && chat.truncated}
                 loaded={chat.id === current.id && chat.loaded}

@@ -93,13 +93,16 @@ export function ChatView({
     ? 'Not connected'
     : !alive
       ? "Claude isn't running — open the terminal"
-      : null
+      : permission
+        ? 'Answer the permission prompt first'
+        : null
 
   return (
     <div className="chat">
       {hooksMissing && (
         <div className="chat-banner">
-          Turn on Claude notifications on the desktop so chat follows /clear.
+          Turn on Claude notifications on the desktop so chat can show permission prompts and
+          follow /clear.
         </div>
       )}
       <div className="chat-list" ref={listRef} onScroll={onScroll}>
@@ -156,7 +159,8 @@ export function ChatView({
           <button
             className="composer-btn"
             onClick={send}
-            disabled={disabled || !draft.trim()}
+            // The Enter after the paste would confirm the dialog's highlighted option.
+            disabled={disabled || !!permission || !draft.trim()}
             aria-label="Send"
           >
             <SendIcon size={16} />

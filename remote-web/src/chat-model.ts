@@ -40,15 +40,6 @@ function pendingTools(msgs: ChatMessage[]): Set<string> {
   return ids
 }
 
-/** A tool call that was waiting got its result: the permission prompt was
- *  answered. Messages are re-sent whole, so compare against `prev`. */
-export function resolvesTool(prev: ChatMessage[], incoming: ChatMessage[]): boolean {
-  const waiting = pendingTools(prev)
-  return incoming.some((m) =>
-    m.blocks.some((b) => b.kind === 'toolUse' && b.result !== null && waiting.has(b.id))
-  )
-}
-
 export function hasPendingTool(msgs: ChatMessage[]): boolean {
   return pendingTools(msgs).size > 0
 }
