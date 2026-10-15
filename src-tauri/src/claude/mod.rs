@@ -43,7 +43,7 @@ fn sessions_dir(home: &Path, project_root: &str) -> PathBuf {
 }
 
 /// Truncate to at most `max` chars (char-safe), appending '…' when shortened.
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
@@ -60,6 +60,16 @@ pub fn valid_session_id(id: &str) -> bool {
         && !id.contains('\\')
         && !id.contains("..")
         && !id.contains('\0')
+}
+
+/// A canonical 8-4-4-4-12 hex UUID — the only shape Claude session ids take.
+pub fn is_uuid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
 }
 
 /// Compare two filesystem paths for equality, tolerant of separator style,
@@ -274,6 +284,17 @@ pub fn delete_session(home: &Path, project_root: &str, session_id: &str) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_uuid_accepts_only_canonical_uuids() {
+        assert!(is_uuid("2b5c191b-945b-418d-9a3e-0d6c3f1e2a4b"));
+        assert!(is_uuid("2B5C191B-945B-418D-9A3E-0D6C3F1E2A4B"));
+        assert!(!is_uuid("--dangerously-skip-permissions"));
+        assert!(!is_uuid("abc-123"));
+        assert!(!is_uuid("2b5c191b-945b-418d-9a3e-0d6c3f1e2a4"));
+        assert!(!is_uuid("2b5c191b_945b-418d-9a3e-0d6c3f1e2a4b"));
+        assert!(!is_uuid("../5c191b-945b-418d-9a3e-0d6c3f1e2a4b"));
+    }
 
     #[test]
     fn encodes_windows_path_like_claude() {

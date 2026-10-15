@@ -146,13 +146,22 @@ struct PtyHandle {
     session_id: Option<String>,
 }
 
-/// Extract the Claude session id from a startup command, if present.
+/// Extract the Claude session id from a startup command, if present. Only a
+/// UUID counts, so the picker form (`--resume` followed by a flag) yields None.
 #[cfg(feature = "remote-access")]
 fn extract_claude_session(cmd: &str) -> Option<String> {
     let mut tokens = cmd.split_whitespace();
     while let Some(tok) = tokens.next() {
-        if tok == "--session-id" || tok == "--resume" {
-            return tokens.next().map(|s| s.to_string());
+        let value = match tok {
+            "--session-id" | "--resume" | "-r" => tokens.next(),
+            _ => tok
+                .strip_prefix("--session-id=")
+                .or_else(|| tok.strip_prefix("--resume=")),
+        };
+        if let Some(v) = value {
+            if crate::claude::is_uuid(v) {
+                return Some(v.to_string());
+            }
         }
     }
     None
@@ -738,18 +747,17 @@ mod tests {
     #[cfg(feature = "remote-access")]
     #[test]
     fn extracts_session_id_from_launch_and_resume_commands() {
-        assert_eq!(
-            extract_claude_session("claude --session-id abc-123"),
-            Some("abc-123".into())
-        );
-        assert_eq!(
-            extract_claude_session("claude --resume xyz --dangerously-skip-permissions"),
-            Some("xyz".into())
-        );
-        assert_eq!(
-            extract_claude_session("claude --dangerously-skip-permissions --session-id s1"),
-            Some("s1".into())
-        );
+        const U: &str = "2b5c191b-945b-418d-9a3e-0d6c3f1e2a4b";
+        let s = |c: String| extract_claude_session(&c);
+        assert_eq!(s(format!("claude --session-id {U}")), Some(U.into()));
+        assert_eq!(s(format!("claude --session-id={U}")), Some(U.into()));
+        assert_eq!(s(format!("claude --resume {U} --dangerously-skip-permissions")), Some(U.into()));
+        assert_eq!(s(format!("claude --resume={U}")), Some(U.into()));
+        assert_eq!(s(format!("claude -r {U}")), Some(U.into()));
+        assert_eq!(s(format!("claude --dangerously-skip-permissions --session-id {U}")), Some(U.into()));
+        // Picker form: the next token is a flag, not an id.
+        assert_eq!(extract_claude_session("claude --resume --dangerously-skip-permissions"), None);
+        assert_eq!(extract_claude_session("claude --session-id abc-123"), None);
         assert_eq!(extract_claude_session("claude"), None);
         assert_eq!(extract_claude_session("npm run dev"), None);
     }
