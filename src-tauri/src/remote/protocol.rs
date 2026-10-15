@@ -59,6 +59,15 @@ pub enum ClientMsg {
     },
     #[serde(rename = "push.unsubscribe")]
     PushUnsubscribe,
+    /// Follow a Claude terminal's transcript as chat. Only the terminal id is
+    /// accepted; the server resolves the file (AC-3.10).
+    #[serde(rename = "chat.open")]
+    ChatOpen { terminal_id: String },
+    #[serde(rename = "chat.close")]
+    ChatClose { terminal_id: String },
+    /// Give the PTY size back to the desktop (the phone is showing chat).
+    #[serde(rename = "term.releaseSize")]
+    TermReleaseSize { terminal_id: String },
     Ping,
 }
 
@@ -75,6 +84,8 @@ pub enum ServerMsg {
         /// The desktop's active theme (`meta`, `chrome`, `terminal`,
         /// `gradients`), passed through as the frontend sent it.
         theme: Option<serde_json::Value>,
+        /// Whether Claude hooks are installed (chat follows `/clear` only then).
+        claude_hooks: bool,
     },
     #[serde(rename = "hello.err")]
     HelloErr { message: String },
@@ -140,6 +151,24 @@ pub enum ServerMsg {
     /// The desktop switched theme (or edited the active custom one).
     #[serde(rename = "state.theme")]
     StateTheme { theme: serde_json::Value },
+    /// Replace the chat list (on open, and after the session changed).
+    #[serde(rename = "chat.history")]
+    ChatHistory {
+        terminal_id: String,
+        session_id: Option<String>,
+        messages: Vec<crate::claude::transcript::ChatMessage>,
+        truncated: bool,
+    },
+    /// New or updated messages; the client upserts by id.
+    #[serde(rename = "chat.append")]
+    ChatAppend {
+        terminal_id: String,
+        messages: Vec<crate::claude::transcript::ChatMessage>,
+    },
+    #[serde(rename = "chat.unavailable")]
+    ChatUnavailable { terminal_id: String, reason: String },
+    #[serde(rename = "state.claudeAlive")]
+    StateClaudeAlive { terminal_id: String, alive: bool },
     /// Another client paired; this connection is being disconnected.
     #[serde(rename = "session.evicted")]
     SessionEvicted,
@@ -170,6 +199,11 @@ pub struct TermInfo {
     pub project_id: String,
     /// True if a live PTY currently backs this record.
     pub live: bool,
+    /// The PTY runs a tracked Claude session (gets the phone's chat view).
+    pub claude: bool,
+    pub working: bool,
+    /// Claude's TUI is running right now (not just the shell it ran in).
+    pub claude_alive: bool,
 }
 
 /// Prepend the 4-byte tag to an output chunk for a binary WS frame.
@@ -265,6 +299,9 @@ mod tests {
             name: "n".into(),
             project_id: "p".into(),
             live: true,
+            claude: true,
+            working: false,
+            claude_alive: true,
         };
         let cases: Vec<(ServerMsg, &str)> = vec![
             (
@@ -273,6 +310,7 @@ mod tests {
                     app_version: "0".into(),
                     vapid_public_key: None,
                     theme: None,
+                    claude_hooks: false,
                 },
                 "hello.ok",
             ),
@@ -375,6 +413,36 @@ mod tests {
                 },
                 "claude.sessions",
             ),
+            (
+                ServerMsg::ChatHistory {
+                    terminal_id: "t".into(),
+                    session_id: None,
+                    messages: vec![],
+                    truncated: false,
+                },
+                "chat.history",
+            ),
+            (
+                ServerMsg::ChatAppend {
+                    terminal_id: "t".into(),
+                    messages: vec![],
+                },
+                "chat.append",
+            ),
+            (
+                ServerMsg::ChatUnavailable {
+                    terminal_id: "t".into(),
+                    reason: "r".into(),
+                },
+                "chat.unavailable",
+            ),
+            (
+                ServerMsg::StateClaudeAlive {
+                    terminal_id: "t".into(),
+                    alive: true,
+                },
+                "state.claudeAlive",
+            ),
             (ServerMsg::SessionEvicted, "session.evicted"),
             (ServerMsg::Error { message: "e".into() }, "error"),
             (ServerMsg::Pong, "pong"),
@@ -406,6 +474,9 @@ mod tests {
             r#"{"type":"push.subscribe","endpoint":"https://e","p256dh":"k","auth":"a"}"#,
             r#"{"type":"push.unsubscribe"}"#,
             r#"{"type":"ping"}"#,
+            r#"{"type":"chat.open","terminalId":"t"}"#,
+            r#"{"type":"chat.close","terminalId":"t"}"#,
+            r#"{"type":"term.releaseSize","terminalId":"t"}"#,
         ];
         for json in cases {
             assert!(
@@ -413,6 +484,33 @@ mod tests {
                 "client message must deserialize: {json}"
             );
         }
+    }
+
+    #[test]
+    fn chat_open_takes_only_a_terminal_id() {
+        // A smuggled path is ignored: the server resolves the file itself (AC-3.10).
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"type":"chat.open","terminalId":"t","path":"C:\\Windows\\win.ini","sessionId":"x"}"#,
+        )
+        .unwrap();
+        assert!(matches!(m, ClientMsg::ChatOpen { terminal_id } if terminal_id == "t"));
+    }
+
+    #[test]
+    fn term_info_serializes_chat_flags_camel_case() {
+        let v = serde_json::to_value(TermInfo {
+            id: "t".into(),
+            name: "n".into(),
+            project_id: "p".into(),
+            live: true,
+            claude: true,
+            working: true,
+            claude_alive: false,
+        })
+        .unwrap();
+        assert_eq!(v["claude"], true);
+        assert_eq!(v["working"], true);
+        assert_eq!(v["claudeAlive"], false);
     }
 
     #[test]

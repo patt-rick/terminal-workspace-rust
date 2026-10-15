@@ -31,11 +31,17 @@ pub fn state_snapshot(app: &AppHandle) -> StateSnapshot {
             terminals: p
                 .terminals
                 .into_iter()
-                .map(|t| TermInfo {
-                    live: pty.has(&t.id),
-                    id: t.id,
-                    name: t.name,
-                    project_id: p.id.clone(),
+                .map(|t| {
+                    let (claude, working, claude_alive) = pty.chat_flags(&t.id);
+                    TermInfo {
+                        live: pty.has(&t.id),
+                        id: t.id,
+                        name: t.name,
+                        project_id: p.id.clone(),
+                        claude,
+                        working,
+                        claude_alive,
+                    }
                 })
                 .collect(),
         })
@@ -62,12 +68,20 @@ struct TerminalAdded {
 }
 
 /// Build the Claude launch command, appending the Phase 1 skip-permissions flag
-/// when enabled (AC-3.2). `resume_id` produces a `--resume <id>` launch.
+/// when enabled (AC-3.2). `resume_id` produces a `--resume <id>` launch; a
+/// fresh launch gets its own `--session-id` (as the desktop does), so hooks
+/// and the phone's chat view can find its transcript.
 fn claude_command(app: &AppHandle, resume_id: Option<&str>) -> String {
     let mut cmd = String::from("claude");
-    if let Some(id) = resume_id {
-        cmd.push_str(" --resume ");
-        cmd.push_str(id);
+    match resume_id {
+        Some(id) => {
+            cmd.push_str(" --resume ");
+            cmd.push_str(id);
+        }
+        None => {
+            cmd.push_str(" --session-id ");
+            cmd.push_str(&Uuid::new_v4().to_string());
+        }
     }
     if claude_skip_permissions(app) {
         cmd.push_str(" --dangerously-skip-permissions");
@@ -118,12 +132,24 @@ fn spawn_terminal(
         },
     );
 
+    let (claude, working, claude_alive) = pty.chat_flags(&id);
     Ok(TermInfo {
         id,
         name,
         project_id: project_id.to_string(),
         live: true,
+        claude,
+        working,
+        claude_alive,
     })
+}
+
+/// Whether the Claude hooks are installed in the Windows home's settings.
+pub fn claude_hooks_installed(app: &AppHandle) -> bool {
+    app.path()
+        .home_dir()
+        .map(|h| crate::claude::hooks::is_installed(&h.join(".claude").join("settings.json")))
+        .unwrap_or(false)
 }
 
 /// Absolute cwd from a project + optional relative subdir.

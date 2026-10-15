@@ -394,6 +394,10 @@ impl Conn {
                     push.clear_subscription();
                 }
             }
+            // Wired up in the next task.
+            ClientMsg::ChatOpen { .. }
+            | ClientMsg::ChatClose { .. }
+            | ClientMsg::TermReleaseSize { .. } => {}
         }
     }
 
@@ -481,6 +485,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         vapid_public_key: ctx.push.as_ref().map(|p| p.vapid_public_key()),
         theme,
+        claude_hooks: bridge::claude_hooks_installed(&ctx.app),
     };
     if socket.send(text(&hello_ok)).await.is_err() {
         return;
