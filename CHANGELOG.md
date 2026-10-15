@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format follows
 `scripts/release.mjs` stamps it with the version and date at release time.
 
 ## [Unreleased]
+
+## [0.5.2] - 2026-10-15
 ### Changed
 - The phone app (remote access) has been redesigned to match the desktop: rounded panels,
   the desktop's colours, type and icons, status dots, and a tidier key row where every key
