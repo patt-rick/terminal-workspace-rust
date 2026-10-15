@@ -3361,4 +3361,28 @@ Run the app (`pnpm tauri dev`), start Remote Access over Tailscale, and pair the
 
 ## Phase 0 results
 
-_(filled in by Task 1)_
+Run 2026-10-15 on Windows 10 (ConPTY, PowerShell shell), Claude Code 2.1.300, against `pnpm tauri dev` with `TW_REMOTE_AUTOSTART=8899` and an isolated `TW_DATA_DIR`. A node script paired once and kept one WebSocket for every case. It created the Claude terminal itself (`term.create` kind `claude`), attached, sent `term.resize` 120x40, and rendered the output frames in `@xterm/headless` to read the screen. Input was sent exactly as the composer will send it: `ESC[200~ … ESC[201~` in one `term.input`, then `\r` in a second `term.input` 100 ms later.
+
+| Platform | Case | Result |
+|---|---|---|
+| Windows | single line (`What is 6 times 7?`) | pass: one prompt, submitted, replied `42` |
+| Windows | multi-line (2 lines) | pass: one two-line prompt, not split on `\n`, submitted, replied |
+| Windows | big paste (~6 KB, 3 lines) | pass: input shows `[Pasted text #2 +2 lines]`, then submits and replies. The echoed user message after submit shows the full expanded text. |
+| Windows | big paste (~17 KB, 301 lines) | pass at 100 ms |
+| Windows | permission digit `1` | pass: the digit alone picks the option, no Enter needed; the command ran |
+| Windows | Esc while streaming | pass: `⎿ Interrupted · What should Claude do instead?`, input left empty |
+| Windows | Esc before the first output token | interrupts, but see the surprises below |
+| WSL (Ubuntu) | Claude cases | not tested: `claude` in WSL is not logged in (stops at onboarding/login) |
+| WSL (Ubuntu) | byte path only | pass: `cat -v` under bash in `wsl.exe` inside the ConPTY receives `^[[200~hello⏎world^[[201~` intact, and the ESC+CR fallback arrives as `ESC`,`CR` |
+
+- **Enter delay:** 100 ms works everywhere tested, including the 17 KB paste. No longer delay is needed.
+- **Fallback:** not needed. Bracketed paste works under ConPTY, so Task 10's `promptSequences` keeps the bracketed form.
+- **Step 5** (`TW_TERMINAL_ID` across WSL interop) is still deferred to Task 15.
+
+Surprises that affect later tasks:
+
+1. **Esc before the first output token puts the prompt back in the input box.** The submitted user message vanishes from the history and its text is restored into Claude's input. No "Interrupted" line appears. If the phone then sends another prompt, it is appended to the restored text. The composer should clear the input before pasting, or tell the user. `Ctrl+U` (`\x15`) cleared a one-line restored prompt; it was not tried on a multi-line one. Esc after output has started behaves normally.
+2. **Claude Code 2.1.300's default permission mode is "auto mode".** A plain `claude` launch shows `⏵⏵ auto mode on` and handles most prompts itself. Prompts only appear in "manual mode" (shift+tab cycle: plan → bypass → auto → manual → accept edits). Read-only commands such as `echo` never prompt, even in manual mode; `mkdir` does. The prompt menu now has 4 options (`1. Yes`, `2. Yes, and don't ask again…`, `3. Yes, and switch to auto mode`, `4. No`), so don't hard-code the labels or the option count.
+3. **This owner's settings have `claudeSkipPermissions: true`,** so every app-launched Claude starts with `--dangerously-skip-permissions` and never prompts. Switching mode inside a bypass session doesn't bring prompts back ("Session was started with bypass permissions…"). The permission case was tested by running `/exit` and then a plain `claude` in the same terminal.
+4. **Transcript saving is off when the dev app is launched from inside a Claude Code session.** The PTY inherits `CLAUDE_CODE_CHILD_SESSION=1` and Claude prints `⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`. Only a test-harness problem: a normal launch of the app doesn't have this variable. But every later manual check of the chat view (it reads the transcript) must launch the app with `CLAUDE_CODE_CHILD_SESSION` and the other `CLAUDE_CODE_*` variables removed from the environment, or the follower will find no transcript.
+5. The phone's `term.resize` 120x40 held for the whole run, and the headless render stayed coherent. The desktop window was not inspected, so this says nothing about the desktop fighting for size.
