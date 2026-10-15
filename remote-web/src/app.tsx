@@ -12,7 +12,6 @@ import {
 } from './protocol'
 import { GitSheet } from './git-sheet'
 import { SessionsSheet } from './sessions-sheet'
-import { PredictiveEcho } from './predictive-echo'
 import { applyTheme, xtermTheme, type RemoteTheme } from './theme'
 import {
   BranchIcon,
@@ -25,13 +24,9 @@ import {
   MenuIcon,
   SparklesIcon,
   TerminalIcon,
-  ZapIcon,
 } from './icons'
 
 const TOKEN_KEY = 'tw_remote_token'
-// Speculative local echo is opt-in (prototype): it hides round-trip lag on
-// high-latency links but can briefly mispredict, so the user turns it on.
-const PRED_ECHO_KEY = 'tw_pred_echo'
 type Phase = 'pair' | 'connecting' | 'ready' | 'evicted' | 'closed'
 
 // Token lives in localStorage (not sessionStorage) so the session survives the
@@ -117,13 +112,8 @@ export function App() {
   const workingRef = useRef<Set<string>>(working)
   workingRef.current = working
 
-  const [predEcho, setPredEcho] = useState<boolean>(
-    () => localStorage.getItem(PRED_ECHO_KEY) === '1'
-  )
-
   const clientRef = useRef<RemoteClient | null>(null)
   const termRef = useRef<Terminal | null>(null)
-  const predRef = useRef<PredictiveEcho | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const curIdRef = useRef<string | null>(null)
   const curTagRef = useRef<number | null>(null)
@@ -227,7 +217,6 @@ export function App() {
       return next
     })
     localStorage.setItem(LAST_TERM_KEY, id)
-    predRef.current?.reset()
     termRef.current?.reset()
     client.attach(id)
     const term = termRef.current
@@ -256,7 +245,6 @@ export function App() {
           // Reconnect on a live page: the server has no memory of the previous
           // socket, so re-subscribe (replays scrollback).
           curTagRef.current = null
-          predRef.current?.reset()
           termRef.current?.reset()
           clientRef.current?.attach(id)
           const term = termRef.current
@@ -279,20 +267,17 @@ export function App() {
       onAttached: (tid, tag) => {
         if (tid === curIdRef.current) {
           curTagRef.current = tag
-          predRef.current?.reset()
           termRef.current?.reset()
         }
       },
       onSnapshot: (tid, _tag, bytes) => {
         if (tid === curIdRef.current) {
-          predRef.current?.reset()
           termRef.current?.write(bytes)
         }
       },
       onOutput: (tag, bytes) => {
         if (tag !== curTagRef.current) return
-        if (predRef.current) predRef.current.writeServer(bytes)
-        else termRef.current?.write(bytes)
+        termRef.current?.write(bytes)
       },
       onCreated: (t) => {
         setProjects((ps) =>
@@ -309,7 +294,6 @@ export function App() {
           curIdRef.current = null
           curTagRef.current = null
           setCurrentId(null)
-          predRef.current?.reset()
           termRef.current?.reset()
         }
       },
@@ -452,6 +436,7 @@ export function App() {
     const apply = () => {
       const kb = Math.max(0, root.clientHeight - vv.height - vv.offsetTop)
       root.style.setProperty('--kb-inset', kb > 120 ? `${Math.round(kb)}px` : '0px')
+      root.classList.toggle('kb-open', kb > 120)
     }
     apply()
     vv.addEventListener('resize', apply)
@@ -460,7 +445,25 @@ export function App() {
       vv.removeEventListener('resize', apply)
       vv.removeEventListener('scroll', apply)
       root.style.removeProperty('--kb-inset')
+      root.classList.remove('kb-open')
     }
+  }, [])
+
+  // Only an installed app on a phone with a home-bar inset (rounded screen
+  // corners) gets the key row's screen-matching corners; elsewhere the row sits
+  // on a browser toolbar, a nav bar or a square screen edge.
+  useEffect(() => {
+    const nav = navigator as Navigator & { standalone?: boolean }
+    if (!window.matchMedia('(display-mode: standalone)').matches && !nav.standalone) return
+    const probe = document.createElement('div')
+    probe.style.cssText = 'position:fixed;visibility:hidden;height:env(safe-area-inset-bottom)'
+    document.body.appendChild(probe)
+    const inset = probe.getBoundingClientRect().height
+    probe.remove()
+    // iOS phones report 21–34px; Android's 3-button nav bar (~48px) has square
+    // corners, and tablets' screen corners are far smaller than a phone's.
+    const phone = Math.min(screen.width, screen.height) < 500
+    if (phone && inset >= 20 && inset <= 40) document.documentElement.classList.add('screen-corners')
   }, [])
 
   const mountTerminal = useCallback(
@@ -479,10 +482,6 @@ export function App() {
       term.loadAddon(fit)
       term.open(node)
       fit.fit()
-      // Read the toggle from storage (not React state) so this one-time mount
-      // callback never closes over a stale value.
-      predRef.current = new PredictiveEcho(term, localStorage.getItem(PRED_ECHO_KEY) === '1')
-
       // --- Scrolling in the alternate buffer (Claude Code, vim, …) ---
       // The alt buffer has no scrollback, so xterm converts each wheel tick into
       // an ↑/↓ key — which a prompt reads as history navigation. Claude Code
@@ -598,8 +597,6 @@ export function App() {
       term.onData((data) => {
         const id = curIdRef.current
         if (!id) return
-        // Render the keystroke locally first (instant), then send it unchanged.
-        predRef.current?.predict(data)
         clientRef.current?.input(id, data)
       })
       term.onResize(({ cols, rows }) => {
@@ -708,21 +705,6 @@ export function App() {
       </div>
 
       <div className="keys">
-        <button
-          className={`key ${predEcho ? 'key-on' : ''}`}
-          title="Speculative local echo — hides typing lag on high-latency links"
-          aria-label="Predictive typing"
-          aria-pressed={predEcho}
-          onClick={() => {
-            const next = !predEcho
-            setPredEcho(next)
-            localStorage.setItem(PRED_ECHO_KEY, next ? '1' : '0')
-            predRef.current?.setEnabled(next)
-            termRef.current?.focus()
-          }}
-        >
-          <ZapIcon size={14} />
-        </button>
         <button className="key" onClick={() => sendKey('\x1b')}>
           Esc
         </button>
@@ -744,14 +726,6 @@ export function App() {
           </button>
           <button className="key" aria-label="Right" onClick={() => sendKey('\x1b[C')}>
             <ChevronRightIcon size={15} />
-          </button>
-        </div>
-        <div className="key-group paging">
-          <button className="key" onClick={() => sendKey('\x1b[5~')}>
-            PgUp
-          </button>
-          <button className="key" onClick={() => sendKey('\x1b[6~')}>
-            PgDn
           </button>
         </div>
       </div>

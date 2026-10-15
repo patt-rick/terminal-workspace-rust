@@ -176,7 +176,7 @@ button {
   text-align: center;
 }
 
-/* on-screen keys — every key fits the width; arrows and paging are grouped */
+/* on-screen keys — every key fits the width; the arrows are grouped */
 .keys {
   display: flex;
   gap: 6px;
@@ -190,15 +190,29 @@ button {
   border-radius: 8px;
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
+/* Installed to the home screen on a phone with rounded screen corners (marked
+   by a home-bar inset), with the keyboard closed, the row sits in the screen's
+   bottom corners: round its outer corners to follow the screen's curve. The
+   side and bottom gaps differ, so the radius is elliptical (gap-offset in each
+   axis), and the vertical part is capped so it never squeezes the key's top
+   corners. CSS can't read the device's corner radius; 44px is typical. */
+:root.screen-corners:not(.kb-open) .keys {
+  --screen-radius: 44px;
+  --edge-radius: calc(var(--screen-radius) - var(--gap-panel))
+    clamp(8px, calc(var(--screen-radius) - max(8px, env(safe-area-inset-bottom))), 30px);
+}
+:root.screen-corners:not(.kb-open) .keys > :first-child {
+  border-bottom-left-radius: var(--edge-radius);
+}
+:root.screen-corners:not(.kb-open) .keys > :last-child {
+  border-bottom-right-radius: var(--edge-radius);
+}
 .key-group {
   display: flex;
   overflow: hidden;
 }
 .key-group.arrows {
   flex: 4 1 0;
-}
-.key-group.paging {
-  flex: 2.4 1 0;
 }
 .key {
   display: inline-flex;
@@ -224,10 +238,6 @@ button {
 .key-group .key:active {
   background: color-mix(in srgb, var(--foreground) 16%, transparent);
   color: var(--foreground);
-}
-.key.key-on {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent);
 }
 
 /* status dots — the desktop's stateDotClass */

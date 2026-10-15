@@ -12,6 +12,10 @@ All notable changes to this project are documented here. Format follows
   fits on screen. It also follows the theme you use on the desktop, including custom
   themes, and updates live when you switch.
 
+### Removed
+- The phone app's key row no longer has the predictive-typing (⚡) toggle or the PgUp/PgDn
+  keys. Swipe on the terminal to scroll, including in Claude Code.
+
 ### Fixed
 - Tailscale remote access no longer leaves its HTTPS address (`tailscale serve`) running
   after you quit the app or it crashes; a leftover is cleared at the next launch.
