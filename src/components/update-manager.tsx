@@ -43,10 +43,12 @@ export function UpdateManager() {
       onClick={downloading ? undefined : dismiss}
     >
       <div
-        className="w-[400px] rounded-xl border border-border bg-overlay p-5 shadow-xl"
+        className={`flex w-[min(880px,90vw)] flex-col rounded-xl border border-border bg-overlay p-6 shadow-xl ${
+          info.notes ? 'h-[85vh]' : ''
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-sm font-semibold text-foreground">
+        <div className="text-base font-semibold text-foreground">
           Update available
         </div>
         <div className="mt-1 text-sm text-muted">
@@ -55,7 +57,7 @@ export function UpdateManager() {
         </div>
 
         {info.notes && (
-          <div className="md-body mt-3 max-h-40 overflow-auto rounded-md border border-border bg-field-background p-2.5 text-xs text-foreground/80">
+          <div className="md-body mt-4 min-h-0 flex-1 overflow-auto rounded-md border border-border bg-field-background p-4 text-sm leading-relaxed text-foreground/80">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{info.notes}</ReactMarkdown>
           </div>
         )}
@@ -75,7 +77,7 @@ export function UpdateManager() {
         )}
 
         {failed && error && (
-          <div className="mt-3 text-xs text-danger">{error}</div>
+          <div className="mt-3 max-h-40 overflow-auto text-xs text-danger">{error}</div>
         )}
 
         <div className="mt-5 flex justify-end gap-2">

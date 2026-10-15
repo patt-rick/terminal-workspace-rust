@@ -24,6 +24,8 @@ All notable changes to this project are documented here. Format follows
   the phone is in chat.
 
 ### Changed
+- The What's New window now shows release notes large and easy to read. From
+  the next update on, the update prompt does too.
 - The phone app's menu now looks like the desktop's project list: project
   tiles in their colours, terminals listed under each project with an icon for
   Claude or shell and a status (working, needs you, failed, done, exited), and

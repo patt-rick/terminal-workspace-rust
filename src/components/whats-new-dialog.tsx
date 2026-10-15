@@ -80,14 +80,14 @@ export function WhatsNewDialog() {
       onClick={dismiss}
     >
       <div
-        className="flex max-h-[80vh] w-[440px] flex-col overflow-hidden rounded-xl border border-border bg-overlay p-5 shadow-xl"
+        className="flex max-h-[85vh] w-[min(880px,90vw)] flex-col overflow-hidden rounded-xl border border-border bg-overlay p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-sm font-semibold text-foreground">
+        <div className="text-base font-semibold text-foreground">
           What's New in v{__APP_VERSION__}
         </div>
         <div className="mt-3 overflow-auto">
-          <ChangelogList entries={entries} />
+          <ChangelogList entries={entries} large />
         </div>
         <div className="mt-5 flex justify-end">
           <button
