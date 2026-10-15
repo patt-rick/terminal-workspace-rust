@@ -95,3 +95,22 @@ export const UploadIcon = (p: P) => (
     <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
   </Icon>
 )
+
+export const ChatIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </Icon>
+)
+
+export const SendIcon = (p: P) => (
+  <Icon {...p}>
+    <line x1="12" y1="19" x2="12" y2="5" />
+    <polyline points="5 12 12 5 19 12" />
+  </Icon>
+)
+
+export const StopIcon = (p: P) => (
+  <Icon {...p}>
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </Icon>
+)
