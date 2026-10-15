@@ -9,12 +9,25 @@ import {
   type ProjectInfo,
   type RepoInfo,
   type SessionSummary,
+  type TermInfo,
 } from './protocol'
+import type { ChatMessage } from './protocol'
+import { ChatView, type PermissionPrompt } from './chat-view'
+import {
+  ENTER_DELAY_MS,
+  hasPendingTool,
+  modeStore,
+  promptSequences,
+  resolvesTool,
+  upsertMessages,
+  type ViewMode,
+} from './chat-model'
 import { GitSheet } from './git-sheet'
 import { SessionsSheet } from './sessions-sheet'
 import { applyTheme, xtermTheme, type RemoteTheme } from './theme'
 import {
   BranchIcon,
+  ChatIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -90,7 +103,7 @@ export function App() {
   const [reconnecting, setReconnecting] = useState(false)
   const [pairError, setPairError] = useState<string | null>(null)
   const [working, setWorking] = useState<Set<string>>(new Set())
-  const [attention, setAttention] = useState<Record<string, string>>({})
+  const [attention, setAttention] = useState<Record<string, { reason: string; message: string | null }>>({})
   const [toast, setToast] = useState<string | null>(null)
 
   const [gitOpen, setGitOpen] = useState(false)
@@ -106,6 +119,24 @@ export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const sessionsProjectRef = useRef<string | null>(null)
+
+  const [mode, setMode] = useState<ViewMode>('chat')
+  const modeRef = useRef<ViewMode>('chat')
+  modeRef.current = mode
+  const [chat, setChat] = useState<{ id: string | null; messages: ChatMessage[]; truncated: boolean; loaded: boolean }>({
+    id: null,
+    messages: [],
+    truncated: false,
+    loaded: false,
+  })
+  const [alive, setAlive] = useState<Record<string, boolean>>({})
+  const [permission, setPermission] = useState<Record<string, PermissionPrompt>>({})
+  const [hooksMissing, setHooksMissing] = useState(false)
+  const [unavailable, setUnavailable] = useState<Record<string, true>>({})
+  const unavailableRef = useRef(unavailable)
+  unavailableRef.current = unavailable
+  const chatRef = useRef(chat)
+  chatRef.current = chat
 
   const projectsRef = useRef<ProjectInfo[]>([])
   projectsRef.current = projects
@@ -128,6 +159,21 @@ export function App() {
 
   const termName = (id: string): string =>
     projectsRef.current.flatMap((p) => p.terminals).find((t) => t.id === id)?.name ?? 'Terminal'
+
+  /** Whether `id` should show chat right now (a Claude terminal, chat mode, chat not refused). */
+  const chatFor = (id: string | null, info?: TermInfo): boolean => {
+    if (!id) return false
+    const t = info ?? projectsRef.current.flatMap((p) => p.terminals).find((x) => x.id === id)
+    return !!t?.claude && modeStore.get(id) === 'chat' && !unavailableRef.current[id]
+  }
+
+  const dropPermission = (tid: string) =>
+    setPermission((p) => {
+      if (!(tid in p)) return p
+      const next = { ...p }
+      delete next[tid]
+      return next
+    })
 
   const notify = useCallback((title: string, body: string) => {
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -203,10 +249,11 @@ export function App() {
     setSessionsOpen(false)
   }
 
-  const attachTo = useCallback((id: string) => {
+  const attachTo = useCallback((id: string, info?: TermInfo) => {
     const client = clientRef.current
     if (!client || curIdRef.current === id) return
     if (curIdRef.current) client.detach(curIdRef.current)
+    if (curIdRef.current) client.chatClose(curIdRef.current)
     curIdRef.current = id
     curTagRef.current = null
     setCurrentId(id)
@@ -219,17 +266,37 @@ export function App() {
     localStorage.setItem(LAST_TERM_KEY, id)
     termRef.current?.reset()
     client.attach(id)
-    const term = termRef.current
-    if (term) client.resize(id, term.cols, term.rows)
+    const wantChat = chatFor(id, info)
+    modeRef.current = wantChat ? 'chat' : 'terminal'
+    setMode(modeRef.current)
+    setChat({ id, messages: [], truncated: false, loaded: false })
+    if (wantChat) {
+      termRef.current?.blur() // keystrokes must not reach the hidden terminal
+      client.releaseSize(id)
+      client.chatOpen(id)
+    } else {
+      // The key row may have just reappeared: refit before sending the size.
+      requestAnimationFrame(() => {
+        fitRef.current?.fit()
+        const term = termRef.current
+        if (term && curIdRef.current === id) client.resize(id, term.cols, term.rows)
+      })
+    }
     setDrawerOpen(false)
   }, [])
 
   // Create the client once and connect if a token is already stored.
   useEffect(() => {
     const client = new RemoteClient({
-      onState: (state, _version, vapidKey, theme) => {
+      onState: (state, _version, vapidKey, theme, claudeHooks) => {
         setTheme(theme)
         setProjects(state.projects)
+        setHooksMissing(!claudeHooks)
+        // A refusal may have been transient (a read error): try chat again.
+        unavailableRef.current = {}
+        setUnavailable({})
+        setWorking(new Set(state.projects.flatMap((p) => p.terminals).filter((t) => t.working).map((t) => t.id)))
+        setAlive(Object.fromEntries(state.projects.flatMap((p) => p.terminals).map((t) => [t.id, t.claudeAlive])))
         setStatus('connected')
         setReconnecting(false)
         setPhase('ready')
@@ -247,8 +314,12 @@ export function App() {
           curTagRef.current = null
           termRef.current?.reset()
           clientRef.current?.attach(id)
-          const term = termRef.current
-          if (term) clientRef.current?.resize(id, term.cols, term.rows)
+          if (modeRef.current === 'chat' && chatFor(id)) {
+            clientRef.current?.chatOpen(id)
+          } else {
+            const term = termRef.current
+            if (term) clientRef.current?.resize(id, term.cols, term.rows)
+          }
           return
         }
         // Fresh page load (OS reloaded the PWA): restore the last-viewed
@@ -258,7 +329,7 @@ export function App() {
           ? state.projects.flatMap((p) => p.terminals).find((t) => t.id === last)
           : undefined
         if (terminal?.live) {
-          attachTo(terminal.id)
+          attachTo(terminal.id, terminal)
         } else {
           if (last && !terminal) localStorage.removeItem(LAST_TERM_KEY)
           setDrawerOpen(true)
@@ -283,7 +354,7 @@ export function App() {
         setProjects((ps) =>
           ps.map((p) => (p.id === t.projectId ? { ...p, terminals: [...p.terminals, t] } : p))
         )
-        attachTo(t.id)
+        attachTo(t.id, t)
       },
       onClosed: (tid) => {
         setProjects((ps) =>
@@ -312,7 +383,14 @@ export function App() {
       },
       onBell: (tid) => notify(termName(tid), 'Bell'),
       onAttention: (tid, reason, message) => {
-        setAttention((a) => ({ ...a, [tid]: reason }))
+        setAttention((a) => ({ ...a, [tid]: { reason, message } }))
+        if (reason === 'needs-permission') {
+          setPermission((p) => ({ ...p, [tid]: { message } }))
+        } else if (reason === 'finished') {
+          // Not waiting-input/notify: the idle sweeper and Claude's idle
+          // notice can fire while the prompt is still open.
+          dropPermission(tid)
+        }
         // Notify unless you're already looking at this terminal.
         if (tid !== curIdRef.current || document.hidden) {
           const body =
@@ -329,6 +407,7 @@ export function App() {
         }
       },
       onExit: (tid) => {
+        setAlive((a) => ({ ...a, [tid]: false }))
         setWorking((s) => {
           const n = new Set(s)
           n.delete(tid)
@@ -367,6 +446,33 @@ export function App() {
           setSessionsLoading(false)
         }
       },
+      onChatHistory: (tid, messages, truncated) => {
+        if (tid !== curIdRef.current) return
+        setChat({ id: tid, messages, truncated, loaded: true })
+        // A prompt answered elsewhere (on the desktop) leaves no waiting tool.
+        if (!hasPendingTool(messages)) dropPermission(tid)
+      },
+      onChatAppend: (tid, messages) => {
+        if (tid !== curIdRef.current) return
+        const prev = chatRef.current.id === tid ? chatRef.current.messages : []
+        setChat((c) => (c.id === tid ? { ...c, messages: upsertMessages(c.messages, messages) } : c))
+        if (resolvesTool(prev, messages)) dropPermission(tid)
+      },
+      onChatUnavailable: (tid, reason) => {
+        unavailableRef.current = { ...unavailableRef.current, [tid]: true }
+        setUnavailable((u) => ({ ...u, [tid]: true }))
+        if (tid === curIdRef.current) {
+          modeRef.current = 'terminal'
+          setMode('terminal')
+          setToast(reason)
+          requestAnimationFrame(() => {
+            fitRef.current?.fit()
+            const term = termRef.current
+            if (term && curIdRef.current === tid) clientRef.current?.resize(tid, term.cols, term.rows)
+          })
+        }
+      },
+      onClaudeAlive: (tid, isAlive) => setAlive((a) => ({ ...a, [tid]: isAlive })),
       onTheme: (theme) => setTheme(theme),
       onEvicted: () => {
         tokenStore.clear()
@@ -601,7 +707,8 @@ export function App() {
       })
       term.onResize(({ cols, rows }) => {
         const id = curIdRef.current
-        if (id) clientRef.current?.resize(id, cols, rows)
+        // In chat mode the desktop owns the size (term.releaseSize).
+        if (id && modeRef.current === 'terminal') clientRef.current?.resize(id, cols, rows)
       })
       // OSC 52: a program in the remote terminal copied to the clipboard — route it
       // to THIS device's clipboard (R3.16). Payload is "<selection>;<base64>".
@@ -630,6 +737,45 @@ export function App() {
     },
     [notify]
   )
+
+  const switchMode = (next: ViewMode) => {
+    const id = curIdRef.current
+    if (!id) return
+    modeStore.set(id, next)
+    modeRef.current = next
+    setMode(next)
+    if (next === 'chat') {
+      termRef.current?.blur()
+      clientRef.current?.releaseSize(id)
+      clientRef.current?.chatOpen(id)
+    } else {
+      clientRef.current?.chatClose(id)
+      // onResize won't fire if the grid didn't change, so always send it.
+      requestAnimationFrame(() => {
+        fitRef.current?.fit()
+        const term = termRef.current
+        if (term && curIdRef.current === id) clientRef.current?.resize(id, term.cols, term.rows)
+        term?.focus()
+      })
+    }
+  }
+
+  const sendPrompt = (text: string): boolean => {
+    const id = curIdRef.current
+    const client = clientRef.current
+    const seq = promptSequences(text)
+    if (!id || !client || !seq || !client.isOpen()) return false
+    client.input(id, seq.clear + seq.paste)
+    setTimeout(() => client.input(id, seq.enter), ENTER_DELAY_MS)
+    return true
+  }
+
+  const answerPermission = (seq: string) => {
+    const id = curIdRef.current
+    if (!id) return
+    clientRef.current?.input(id, seq)
+    dropPermission(id)
+  }
 
   const doPair = async (code: string) => {
     setPairError(null)
@@ -675,6 +821,7 @@ export function App() {
     )
 
   const current = projects.flatMap((p) => p.terminals).find((t) => t.id === currentId)
+  const showChat = !!current?.claude && mode === 'chat' && !unavailable[current.id]
 
   return (
     <div className="app">
@@ -687,6 +834,15 @@ export function App() {
           <span className="title-text">{current ? current.name : 'No terminal'}</span>
         </span>
         <span className="status">{reconnecting ? 'Reconnecting…' : status}</span>
+        {current?.claude && !unavailable[current.id] && (
+          <button
+            className="iconbtn"
+            onClick={() => switchMode(mode === 'chat' ? 'terminal' : 'chat')}
+            aria-label={mode === 'chat' ? 'Show terminal' : 'Show chat'}
+          >
+            {mode === 'chat' ? <TerminalIcon size={17} /> : <ChatIcon size={17} />}
+          </button>
+        )}
         <button className="iconbtn" onClick={openGit} aria-label="Git">
           <BranchIcon size={17} />
         </button>
@@ -695,7 +851,27 @@ export function App() {
 
       <div className="termwrap">
         {current ? (
-          <div className="term" ref={mountTerminal} onClick={() => termRef.current?.focus()} />
+          <>
+            <div className="term" ref={mountTerminal} onClick={() => termRef.current?.focus()} />
+            {showChat && (
+              <ChatView
+                messages={chat.id === current.id ? chat.messages : []}
+                truncated={chat.id === current.id && chat.truncated}
+                loaded={chat.id === current.id && chat.loaded}
+                working={working.has(current.id)}
+                alive={!!alive[current.id]}
+                connected={!reconnecting}
+                permission={permission[current.id] ?? null}
+                hooksMissing={hooksMissing}
+                onSend={sendPrompt}
+                onStop={() => {
+                  if (working.has(current.id)) clientRef.current?.input(current.id, '\x1b')
+                }}
+                onKey={answerPermission}
+                onViewTerminal={() => switchMode('terminal')}
+              />
+            )}
+          </>
         ) : (
           <div className="emptyterm">
             <TerminalIcon size={22} />
@@ -704,31 +880,33 @@ export function App() {
         )}
       </div>
 
-      <div className="keys">
-        <button className="key" onClick={() => sendKey('\x1b')}>
-          Esc
-        </button>
-        <button className="key" onClick={() => sendKey('\t')}>
-          Tab
-        </button>
-        <button className="key" onClick={() => sendKey('\x03')}>
-          ^C
-        </button>
-        <div className="key-group arrows">
-          <button className="key" aria-label="Left" onClick={() => sendKey('\x1b[D')}>
-            <ChevronLeftIcon size={15} />
+      {!showChat && (
+        <div className="keys">
+          <button className="key" onClick={() => sendKey('\x1b')}>
+            Esc
           </button>
-          <button className="key" aria-label="Up" onClick={() => sendKey('\x1b[A')}>
-            <ChevronUpIcon size={15} />
+          <button className="key" onClick={() => sendKey('\t')}>
+            Tab
           </button>
-          <button className="key" aria-label="Down" onClick={() => sendKey('\x1b[B')}>
-            <ChevronDownIcon size={15} />
+          <button className="key" onClick={() => sendKey('\x03')}>
+            ^C
           </button>
-          <button className="key" aria-label="Right" onClick={() => sendKey('\x1b[C')}>
-            <ChevronRightIcon size={15} />
-          </button>
+          <div className="key-group arrows">
+            <button className="key" aria-label="Left" onClick={() => sendKey('\x1b[D')}>
+              <ChevronLeftIcon size={15} />
+            </button>
+            <button className="key" aria-label="Up" onClick={() => sendKey('\x1b[A')}>
+              <ChevronUpIcon size={15} />
+            </button>
+            <button className="key" aria-label="Down" onClick={() => sendKey('\x1b[B')}>
+              <ChevronDownIcon size={15} />
+            </button>
+            <button className="key" aria-label="Right" onClick={() => sendKey('\x1b[C')}>
+              <ChevronRightIcon size={15} />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {drawerOpen && (
         <>
@@ -748,7 +926,7 @@ export function App() {
                     className={`term-row ${t.id === currentId ? 'active' : ''}`}
                     onClick={() => attachTo(t.id)}
                   >
-                    <span className={`state-dot ${dotClass(working.has(t.id), attention[t.id])}`} />
+                    <span className={`state-dot ${dotClass(working.has(t.id), attention[t.id]?.reason)}`} />
                     <span className={`name ${t.live ? '' : 'dead'}`}>{t.name}</span>
                     <button
                       className="x"
