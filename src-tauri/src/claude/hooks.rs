@@ -336,7 +336,14 @@ pub struct Parked {
     pub session_id: String,
     pub transcript_path: Option<String>,
     pub at: std::time::Instant,
+    /// Since when timer ticks have seen the terminal idle (None: working).
+    pub idle_since: Option<std::time::Instant>,
 }
+
+/// How long the terminal must stay idle before a quiet park is adopted, so a
+/// turn's final events (written as it goes idle) are read first.
+#[cfg(feature = "remote-access")]
+pub const IDLE_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[cfg(feature = "remote-access")]
 #[derive(Debug, PartialEq, Eq)]
@@ -355,16 +362,17 @@ pub fn should_park(ev: &HookEvent, current: Option<&str>, current_ended: bool) -
         && current.is_some_and(|c| c != ev.session_id)
 }
 
-/// What becomes of a parked start after `ev` arrives (`None`: a timer tick).
-/// - The current session ends within the window → adopt (the late SessionEnd).
-/// - The current session does anything else → drop: it's alive, so the start
-///   came from a nested Claude.
+/// What becomes of a parked start after `ev` arrives (`None`: a timer tick,
+/// which runs after that tick's spool files and tracks `idle_since`).
+/// - The current session's `/resume` SessionEnd within the window → adopt.
+/// - The current session does anything else (including a real exit) → drop:
+///   the start came from a nested Claude.
 /// - The parked session ends → drop (a nested `-p` run finishing).
 /// - The window passes with the current session silent and the terminal idle
-///   → adopt. A nested run happens mid-turn, while the terminal is working.
+///   for `IDLE_GRACE` → adopt. A nested run happens mid-turn, while working.
 #[cfg(feature = "remote-access")]
 pub fn parked_fate(
-    p: &Parked,
+    p: &mut Parked,
     ev: Option<&HookEvent>,
     current: Option<&str>,
     working: bool,
@@ -372,10 +380,20 @@ pub fn parked_fate(
 ) -> Fate {
     let fresh = now.saturating_duration_since(p.at) <= PARK_WINDOW;
     match ev {
-        None if !fresh && !working => Fate::Adopt,
-        None => Fate::Keep,
+        None => {
+            if working {
+                p.idle_since = None;
+                return Fate::Keep;
+            }
+            let idle_since = *p.idle_since.get_or_insert(now);
+            if !fresh && now.saturating_duration_since(idle_since) >= IDLE_GRACE {
+                Fate::Adopt
+            } else {
+                Fate::Keep
+            }
+        }
         Some(ev) if current == Some(ev.session_id.as_str()) => {
-            if ev.event == "SessionEnd" && fresh {
+            if ev.event == "SessionEnd" && fresh && ev.source.as_deref() == Some("resume") {
                 Fate::Adopt
             } else {
                 Fate::Drop
@@ -402,24 +420,10 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
         let pty = app.state::<crate::pty::PtyManager>();
-        // Timer pass: a parked resume whose old session went quiet is adopted.
-        parked.retain(|terminal_id, p| {
-            let current = pty.chat_source(terminal_id).and_then(|s| s.session_id);
-            let working = pty.chat_flags(terminal_id).1;
-            match parked_fate(p, None, current.as_deref(), working, std::time::Instant::now()) {
-                Fate::Keep => true,
-                Fate::Drop => false,
-                Fate::Adopt => {
-                    adopt_parked(&app, &pty, terminal_id, p);
-                    false
-                }
-            }
-        });
-        let Ok(entries) = std::fs::read_dir(&spool) else {
-            continue;
-        };
         // Spool names start with a nanosecond timestamp: oldest first.
-        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&spool)
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
         paths.sort();
         for path in paths {
             let Ok(body) = std::fs::read_to_string(&path) else {
@@ -441,7 +445,7 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                 continue;
             };
             let current = pty.chat_source(&terminal_id).and_then(|s| s.session_id);
-            if let Some(p) = parked.get(&terminal_id) {
+            if let Some(p) = parked.get_mut(&terminal_id) {
                 let working = pty.chat_flags(&terminal_id).1;
                 match parked_fate(p, Some(&ev), current.as_deref(), working, std::time::Instant::now()) {
                     Fate::Keep => {}
@@ -467,6 +471,7 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                             session_id: ev.session_id.clone(),
                             transcript_path: ev.transcript_path.clone(),
                             at: std::time::Instant::now(),
+                            idle_since: None,
                         },
                     );
                 }
@@ -486,6 +491,20 @@ pub fn start_watcher(app: tauri::AppHandle, spool: PathBuf) {
                 crate::pty::emit_attention(&app, &terminal_id, reason, message);
             }
         }
+        // Timer pass, after this tick's events had their chance to drop a park:
+        // a parked resume whose old session went quiet is adopted.
+        parked.retain(|terminal_id, p| {
+            let current = pty.chat_source(terminal_id).and_then(|s| s.session_id);
+            let working = pty.chat_flags(terminal_id).1;
+            match parked_fate(p, None, current.as_deref(), working, std::time::Instant::now()) {
+                Fate::Keep => true,
+                Fate::Drop => false,
+                Fate::Adopt => {
+                    adopt_parked(&app, &pty, terminal_id, p);
+                    false
+                }
+            }
+        });
     });
 }
 
@@ -655,28 +674,50 @@ mod tests {
         assert!(!should_park(&ev("SessionStart", "a", Some("resume")), Some("a"), false));
 
         let t0 = Instant::now();
-        let p = Parked { session_id: "b".into(), transcript_path: None, at: t0 };
-        let soon = t0 + Duration::from_secs(1);
-        let late = t0 + PARK_WINDOW + Duration::from_millis(500);
-        let fate = |e: Option<&HookEvent>, working, now| parked_fate(&p, e, Some("a"), working, now);
+        let at = |s: u64| t0 + Duration::from_millis(s);
+        let new = || Parked { session_id: "b".into(), transcript_path: None, at: t0, idle_since: None };
+        let tick = |p: &mut Parked, working, now| parked_fate(p, None, Some("a"), working, now);
+        let on = |p: &mut Parked, e: &HookEvent, now| parked_fate(p, Some(e), Some("a"), false, now);
+        let late = 3_500;
 
-        // The TUI's /resume with a late SessionEnd for `a`.
-        assert_eq!(fate(Some(&ev("SessionEnd", "a", Some("resume"))), false, soon), Fate::Adopt);
-        // …or a lost one: the window passes, `a` silent, terminal idle.
-        assert_eq!(fate(None, false, soon), Fate::Keep);
-        assert_eq!(fate(None, false, late), Fate::Adopt);
+        // The TUI's /resume with a late SessionEnd(resume) for `a`.
+        assert_eq!(on(&mut new(), &ev("SessionEnd", "a", Some("resume")), at(1_000)), Fate::Adopt);
+        // A real exit of `a` (not /resume) drops the park; decide() records the end.
+        assert_eq!(on(&mut new(), &ev("SessionEnd", "a", Some("prompt_input_exit")), at(1_000)), Fate::Drop);
+        assert!(decide(&ev("SessionEnd", "a", Some("prompt_input_exit")), Some("a"), false).ended);
+
+        // A lost SessionEnd: past the window, `a` silent, idle for the grace period.
+        let mut p = new();
+        assert_eq!(tick(&mut p, false, at(1_000)), Fate::Keep);
+        assert_eq!(tick(&mut p, false, at(late)), Fate::Adopt);
+
+        // working → idle past the window still waits out IDLE_GRACE.
+        let mut p = new();
+        assert_eq!(tick(&mut p, true, at(late)), Fate::Keep);
+        assert_eq!(tick(&mut p, false, at(4_000)), Fate::Keep);
+        assert_eq!(tick(&mut p, false, at(4_500)), Fate::Keep);
+        assert_eq!(tick(&mut p, true, at(4_800)), Fate::Keep); // busy again: restart
+        assert_eq!(tick(&mut p, false, at(5_000)), Fate::Keep);
+        assert_eq!(tick(&mut p, false, at(6_000)), Fate::Adopt);
+
+        // Past the window, the turn's Stop(a) lands in the same tick: the event
+        // pass runs first and drops the park before the timer could adopt it.
+        let mut p = new();
+        p.idle_since = Some(at(1_000));
+        assert_eq!(on(&mut p, &ev("Stop", "a", None), at(late)), Fate::Drop);
 
         // A nested `claude -p --resume b` while `a` keeps going: never adopted.
-        assert_eq!(fate(Some(&ev("Stop", "a", None)), true, soon), Fate::Drop);
-        assert_eq!(fate(Some(&ev("Notification", "a", None)), false, late), Fate::Drop);
+        assert_eq!(on(&mut new(), &ev("Stop", "a", None), at(1_000)), Fate::Drop);
+        assert_eq!(on(&mut new(), &ev("Notification", "a", None), at(late)), Fate::Drop);
         // Mid-turn (working) the timer never adopts, however long it waits.
-        assert_eq!(fate(None, true, late), Fate::Keep);
-        assert_eq!(fate(None, true, t0 + Duration::from_secs(600)), Fate::Keep);
+        let mut p = new();
+        assert_eq!(tick(&mut p, true, at(late)), Fate::Keep);
+        assert_eq!(tick(&mut p, true, at(600_000)), Fate::Keep);
         // The nested run's own events: its Stop is ignored, its end drops it.
-        assert_eq!(fate(Some(&ev("Stop", "b", None)), true, soon), Fate::Keep);
-        assert_eq!(fate(Some(&ev("SessionEnd", "b", Some("other"))), true, soon), Fate::Drop);
-        // A SessionEnd for `a` after the window is not taken as the late one.
-        assert_eq!(fate(Some(&ev("SessionEnd", "a", Some("resume"))), true, late), Fate::Drop);
+        assert_eq!(on(&mut new(), &ev("Stop", "b", None), at(1_000)), Fate::Keep);
+        assert_eq!(on(&mut new(), &ev("SessionEnd", "b", Some("other")), at(1_000)), Fate::Drop);
+        // A SessionEnd(resume) for `a` after the window is not taken as the late one.
+        assert_eq!(on(&mut new(), &ev("SessionEnd", "a", Some("resume")), at(late)), Fate::Drop);
     }
 
     #[test]
