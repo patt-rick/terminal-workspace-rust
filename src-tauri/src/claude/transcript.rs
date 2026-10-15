@@ -322,6 +322,106 @@ fn result_text(content: Option<&Value>) -> String {
     }
 }
 
+const CHUNK: u64 = 256 * 1024;
+/// Never read more than this backwards for the initial history.
+const MAX_BACKREAD: u64 = 16 * 1024 * 1024;
+/// Enough raw lines to yield ~200 messages (tool results and split assistant
+/// rows make lines outnumber messages).
+const LINE_BUDGET: usize = 3_000;
+
+/// Build the initial history from the end of the file without reading it all.
+/// Returns the transcript, the byte offset just past the last complete line
+/// (where tailing resumes), and whether older messages were left out.
+pub fn load_tail(path: &std::path::Path) -> std::io::Result<(Transcript, u64, bool)> {
+    load_tail_chunked(path, CHUNK)
+}
+
+fn load_tail_chunked(path: &std::path::Path, chunk: u64) -> std::io::Result<(Transcript, u64, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    // Read chunks backwards until there are enough lines, then parse once
+    // (linear: no re-parsing or re-copying per chunk).
+    let mut start = len;
+    let mut pieces: Vec<Vec<u8>> = Vec::new();
+    let mut newlines = 0usize;
+    while start > 0 && newlines <= LINE_BUDGET && len - start < MAX_BACKREAD {
+        let step = chunk.min(start);
+        start -= step;
+        let mut piece = vec![0u8; step as usize];
+        f.seek(SeekFrom::Start(start))?;
+        f.read_exact(&mut piece)?;
+        newlines += piece.iter().filter(|&&b| b == b'\n').count();
+        pieces.push(piece);
+    }
+    let buf: Vec<u8> = pieces.into_iter().rev().flatten().collect();
+    // Skip a leading partial line (unless at file start) and any trailing line
+    // still being written.
+    let head = if start == 0 {
+        0
+    } else {
+        buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1)
+    };
+    let end = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let mut t = Transcript::default();
+    if head < end {
+        for line in buf[head..end].split(|&b| b == b'\n') {
+            t.ingest(line);
+        }
+    }
+    let truncated = start > 0 || t.len() > HISTORY_LIMIT;
+    Ok((t, start + end as u64, truncated))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TailRead {
+    /// Complete new lines since the last read (possibly none).
+    Lines(Vec<Vec<u8>>),
+    /// The file shrank; reload from scratch.
+    Reset,
+}
+
+/// Follows an append-only file from a byte offset, yielding complete lines.
+pub struct Tail {
+    offset: u64,
+    partial: Vec<u8>,
+}
+
+impl Tail {
+    pub fn at(offset: u64) -> Self {
+        Self { offset, partial: Vec::new() }
+    }
+
+    pub fn read_new(&mut self, path: &std::path::Path) -> std::io::Result<TailRead> {
+        use std::io::{Read, Seek, SeekFrom};
+        let len = std::fs::metadata(path)?.len();
+        let consumed = self.offset + self.partial.len() as u64;
+        if len < consumed {
+            return Ok(TailRead::Reset);
+        }
+        if len == consumed {
+            return Ok(TailRead::Lines(Vec::new()));
+        }
+        let mut f = std::fs::File::open(path)?;
+        f.seek(SeekFrom::Start(consumed))?;
+        let mut fresh = Vec::with_capacity((len - consumed) as usize);
+        f.take(len - consumed).read_to_end(&mut fresh)?;
+        self.partial.extend_from_slice(&fresh);
+        let Some(last_nl) = self.partial.iter().rposition(|&b| b == b'\n') else {
+            return Ok(TailRead::Lines(Vec::new()));
+        };
+        let rest = self.partial.split_off(last_nl + 1);
+        let complete = std::mem::replace(&mut self.partial, rest);
+        self.offset += complete.len() as u64;
+        Ok(TailRead::Lines(
+            complete[..complete.len() - 1]
+                .split(|&b| b == b'\n')
+                .map(<[u8]>::to_vec)
+                .collect(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +555,67 @@ mod tests {
         let h = t.history();
         assert_eq!(h.len(), HISTORY_LIMIT);
         assert_eq!(h[0].id, "u5");
+    }
+
+    fn write(path: &std::path::Path, s: &str) {
+        std::fs::write(path, s).unwrap();
+    }
+    fn append(path: &std::path::Path, s: &str) {
+        use std::io::Write;
+        std::fs::OpenOptions::new().append(true).open(path).unwrap().write_all(s.as_bytes()).unwrap();
+    }
+    fn user(i: usize) -> String {
+        format!("{{\"type\":\"user\",\"uuid\":\"u{i}\",\"message\":{{\"content\":\"m{i}\"}}}}\n")
+    }
+
+    #[test]
+    fn load_tail_reads_last_messages_and_stops_at_complete_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.jsonl");
+        let mut body = String::new();
+        for i in 0..300 {
+            body.push_str(&user(i));
+        }
+        body.push_str("{\"type\":\"user\",\"uuid\":\"partial\""); // no newline yet
+        write(&p, &body);
+        let (t, offset, truncated) = load_tail_chunked(&p, 4096).unwrap();
+        let h = t.history();
+        assert_eq!(h.len(), HISTORY_LIMIT);
+        assert_eq!(h.last().unwrap().id, "u299");
+        assert!(truncated);
+        assert_eq!(offset as usize, body.rfind('\n').unwrap() + 1);
+    }
+
+    #[test]
+    fn load_tail_small_file_is_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.jsonl");
+        write(&p, &(user(0) + &user(1)));
+        let (t, _, truncated) = load_tail(&p).unwrap();
+        assert_eq!(t.len(), 2);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn tail_keeps_partial_lines_and_resets_on_shrink() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.jsonl");
+        write(&p, &user(0));
+        let mut tail = Tail::at(std::fs::metadata(&p).unwrap().len());
+        assert_eq!(tail.read_new(&p).unwrap(), TailRead::Lines(vec![]));
+        append(&p, "{\"type\":\"user\",");
+        assert_eq!(tail.read_new(&p).unwrap(), TailRead::Lines(vec![]));
+        append(&p, "\"uuid\":\"u1\",\"message\":{\"content\":\"m1\"}}\n");
+        match tail.read_new(&p).unwrap() {
+            TailRead::Lines(lines) => {
+                assert_eq!(lines.len(), 1);
+                let mut t = Transcript::default();
+                assert_eq!(t.ingest(&lines[0]), vec!["u1".to_string()]);
+            }
+            TailRead::Reset => panic!(),
+        }
+        write(&p, "");
+        assert_eq!(tail.read_new(&p).unwrap(), TailRead::Reset);
     }
 
     #[test]
