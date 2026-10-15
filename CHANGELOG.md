@@ -7,7 +7,7 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 ### Added
-- The phone app now shows Claude Code terminals as a chat:
+- On the phone, Claude Code sessions started from the app (new or resumed) now show as a chat:
   - Your messages and Claude's replies wrap to the phone's width, and tool calls
     collapse into one-line rows you can tap open.
   - You type in a normal text box, with autocorrect and dictation.

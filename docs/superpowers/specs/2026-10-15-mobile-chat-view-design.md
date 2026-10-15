@@ -434,12 +434,14 @@ What changed from the design during planning, testing against real Claude Code
   `resume`), on a non-Claude or empty window title (Claude sends an empty title
   on exit, and PowerShell resets it even after a kill), or on OSC 133;D. For
   native shells, a 2 s sweep also checks the terminal's Job Object for a
-  Claude process. `TermInfo.claude` is refreshed only on `hello.ok` and
-  `term.created`.
+  Claude process. It flips the flag to false only when every process in the job is a known shell or console
+  host, so an npm/node install, or Claude behind `wsl`, `ssh` or `docker`,
+  relies on the title and hook rules. `TermInfo.claude` is refreshed only on
+  `hello.ok` and `term.created`.
 - **Composer.**
-  - **Send** writes Ctrl+U first (``), because an Esc before Claude
+  - **Send** writes Ctrl+U first (`\x15`), because an Esc before Claude
     prints anything puts the prompt back in the input box. Then it writes the
-    bracketed paste, and `` 100 ms later. All three were verified on
+    bracketed paste, and `\r` 100 ms later. All three were verified on
     Windows ConPTY.
   - Send is disabled while a permission card is open, because Claude would
     take the Enter as the dialog's default choice.
