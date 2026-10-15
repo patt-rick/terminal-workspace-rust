@@ -3,6 +3,7 @@
 //! protocol, pairing, and attach/type/create/close + snapshot replay.
 
 mod bridge;
+mod chat;
 mod client;
 pub mod protocol;
 pub mod push;

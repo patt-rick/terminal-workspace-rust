@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use super::bridge;
+use super::{bridge, chat};
 use super::protocol::{output_frame, ClientMsg, ServerMsg};
 use super::push::{PushManager, PushSubscription};
 use super::ratelimit::RateLimiter;
@@ -182,6 +182,12 @@ struct WorkingEvt {
 }
 
 #[derive(Deserialize)]
+struct AliveEvt {
+    id: String,
+    alive: bool,
+}
+
+#[derive(Deserialize)]
 struct IdEvt {
     id: String,
 }
@@ -205,6 +211,16 @@ fn spawn_state_forwarders(app: &AppHandle, out_tx: mpsc::Sender<Message>) -> Vec
             let _ = tx.try_send(text(&ServerMsg::StateWorking {
                 terminal_id: p.id,
                 working: p.working,
+            }));
+        }
+    }));
+
+    let tx = out_tx.clone();
+    ids.push(app.listen("terminals:claude-alive", move |ev| {
+        if let Ok(p) = serde_json::from_str::<AliveEvt>(ev.payload()) {
+            let _ = tx.try_send(text(&ServerMsg::StateClaudeAlive {
+                terminal_id: p.id,
+                alive: p.alive,
             }));
         }
     }));
@@ -280,6 +296,7 @@ struct Conn {
     out_tx: mpsc::Sender<Message>,
     attachments: HashMap<String, Attachment>,
     next_tag: u32,
+    chat: Option<chat::ChatFollow>,
 }
 
 impl Conn {
@@ -325,6 +342,9 @@ impl Conn {
             ClientMsg::TermClose { terminal_id } => {
                 bridge::close_terminal(&self.ctx.app, &terminal_id);
                 self.detach(&terminal_id);
+                if self.chat.as_ref().is_some_and(|c| c.terminal_id == terminal_id) {
+                    self.chat = None;
+                }
                 self.send(ServerMsg::TermClosed { terminal_id }).await;
             }
             ClientMsg::GitRepos { project_id } => {
@@ -394,10 +414,34 @@ impl Conn {
                     push.clear_subscription();
                 }
             }
-            // Wired up in the next task.
-            ClientMsg::ChatOpen { .. }
-            | ClientMsg::ChatClose { .. }
-            | ClientMsg::TermReleaseSize { .. } => {}
+            ClientMsg::ChatOpen { terminal_id } => {
+                self.chat = None; // one chat per connection
+                if self.ctx.app.state::<PtyManager>().has(&terminal_id) {
+                    self.chat = Some(chat::start(
+                        self.ctx.app.clone(),
+                        terminal_id,
+                        self.out_tx.clone(),
+                    ));
+                } else {
+                    self.send(ServerMsg::ChatUnavailable {
+                        terminal_id,
+                        reason: "That terminal has closed.".into(),
+                    })
+                    .await;
+                }
+            }
+            ClientMsg::ChatClose { terminal_id } => {
+                if self.chat.as_ref().is_some_and(|c| c.terminal_id == terminal_id) {
+                    self.chat = None;
+                }
+            }
+            ClientMsg::TermReleaseSize { terminal_id } => {
+                let pty = self.ctx.app.state::<PtyManager>();
+                if pty.remote_size(&terminal_id).is_some() {
+                    pty.restore_local_size(&terminal_id);
+                    crate::pty::emit_remote_size(&self.ctx.app, &terminal_id, None);
+                }
+            }
         }
     }
 
@@ -501,6 +545,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         out_tx,
         attachments: HashMap::new(),
         next_tag: 1,
+        chat: None,
     };
 
     loop {
@@ -549,6 +594,7 @@ async fn handle_socket(mut socket: WebSocket, ctx: ServerCtx) {
         pty.restore_local_size(&id);
         crate::pty::emit_remote_size(&conn.ctx.app, &id, None);
     }
+    conn.chat = None;
     use tauri::Listener;
     for id in listener_ids {
         conn.ctx.app.unlisten(id);

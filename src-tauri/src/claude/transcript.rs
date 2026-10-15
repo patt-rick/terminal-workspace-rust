@@ -112,10 +112,6 @@ impl Transcript {
         self.msgs.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.msgs.is_empty()
-    }
-
     /// The last `HISTORY_LIMIT` messages.
     pub fn history(&self) -> Vec<ChatMessage> {
         let start = self.msgs.len().saturating_sub(HISTORY_LIMIT);
