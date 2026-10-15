@@ -20,6 +20,9 @@ All notable changes to this project are documented here. Format follows
 ### Fixed
 - Claude notifications (needs permission, finished) keep working after
   `/clear`.
+- Busy indicators and "finished" alerts follow Claude Code 2.1.300's new
+  spinner. Before, the desktop and the phone showed Claude as busy while it was
+  idle, and the finish bell rang when the next turn started.
 
 ## [0.5.2] - 2026-10-15
 ### Changed

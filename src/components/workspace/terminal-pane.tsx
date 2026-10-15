@@ -9,6 +9,7 @@ import { useWorkspace } from '../../state/store'
 import { useActiveTheme } from '../../themes/theme-provider'
 import type { Theme } from '../../themes'
 import { ipc } from '../../lib/ipc'
+import { createTitleWorkTracker } from '../../lib/agent-title'
 import { getWindowsBuild, isMac } from '../../lib/platform'
 import { bindingForEvent } from '../../lib/keybindings'
 import { currentKeybindings } from '../../state/keybindings'
@@ -29,18 +30,6 @@ const parseConEmuProgress = (data: string): boolean | null => {
   if (stateChar === '0' || stateChar === '2') return false
   if (stateChar === '1' || stateChar === '3' || stateChar === '4') return true
   return null
-}
-
-// Agent TUIs (Claude Code) report turn activity through the window title: while
-// working they prefix it with an animated spinner — braille frames
-// (U+2800–U+28FF) or the ✳ marker — then reset to a bare "✳ Claude Code" idle.
-const SPINNER_PREFIX = /^[✳⠀-⣿]/
-const titleIndicatesWork = (title: string): boolean => {
-  if (!SPINNER_PREFIX.test(title)) return false
-  const code = title.trimStart().charCodeAt(0)
-  if (code >= 0x2800 && code <= 0x28ff) return true
-  const task = title.replace(/^[✳⠀-⣿\s ]+/, '').trim()
-  return task.length > 0 && !/^claude code\b/i.test(task)
 }
 
 // Read colors straight from the active theme object (not the DOM) so the
@@ -308,10 +297,11 @@ export function TerminalPane({ terminalId, active, onBell }: Props) {
     }
     const setTitle = useWorkspace.getState().setTerminalTitle
     let titleWorking = false
+    const titleIndicatesWork = createTitleWorkTracker()
     const titleDisposable = term.onTitleChange((title) => {
       setTitle(terminalId, title)
       const working = titleIndicatesWork(title)
-      if (working === titleWorking) return
+      if (working === null || working === titleWorking) return
       setBusy(working)
       if (titleWorking && !working && !(activeRef.current && document.hasFocus())) {
         bellRef.current?.()

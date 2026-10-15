@@ -1,11 +1,12 @@
 //! Working/idle + bell detection from the raw PTY byte stream, so remote clients
 //! learn a terminal is busy without a desktop pane parsing it. Ported from the
-//! frontend heuristics (terminal-pane.tsx):
+//! frontend heuristics (src/lib/agent-title.ts, terminal-pane.tsx):
 //!
 //! - Agent TUIs (Claude Code) report turn activity through the window TITLE:
 //!   while working it is prefixed with an animated braille spinner
 //!   (U+2800–U+28FF) or the ✳ marker, resetting to a bare "✳ Claude Code" idle.
-//!   Newer versions (2.1.300) spin ◐◑◒◓ instead and idle on "✳ <topic>".
+//!   Newer versions (2.1.300) spin ◐◑◒◓ instead and idle on "✳ <topic>", so
+//!   a "✳ <task>" title is read by the spinner family seen last.
 //! - OSC 9;4 (ConEmu progress) reports busy/idle.
 //! - OSC 133 C/D (shell integration) brackets a running command.
 //! - A standalone BEL is a bell.
@@ -43,8 +44,17 @@ pub struct ShellDetector {
     osc: Vec<u8>,
     working: bool,
     claude_alive: bool,
-    /// A ◐◑◒◓ spinner title was seen: this Claude marks idle with "✳ <topic>".
-    circle_spinner: bool,
+    /// The spinner family in the last Claude spinner title; decides what a
+    /// "✳ <task>" title means.
+    last_spinner: Option<Spinner>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Spinner {
+    /// Older Claude Code: "✳ <task>" is a working frame.
+    Braille,
+    /// Claude Code 2.1.300+: "✳ <topic>" is the idle title.
+    Circle,
 }
 
 // Guard against an unterminated OSC growing without bound.
@@ -130,12 +140,22 @@ impl ShellDetector {
         };
         match code {
             "0" | "2" => {
-                self.note_alive(is_claude_title(rest), events);
-                if rest.trim_start().chars().next().is_some_and(is_circle_spinner) {
-                    self.circle_spinner = true;
+                let claude = is_claude_title(rest);
+                let starting = claude && !self.claude_alive;
+                self.note_alive(claude, events);
+                match rest.trim_start().chars().next() {
+                    Some(c) if is_braille(c) => self.last_spinner = Some(Spinner::Braille),
+                    Some(c) if is_circle_spinner(c) => self.last_spinner = Some(Spinner::Circle),
+                    _ if !claude => self.last_spinner = None,
+                    _ => {}
                 }
-                let working = title_indicates_work(rest, self.circle_spinner);
-                self.set_working(working, events);
+                // A Claude that just started is idle until a spinner says otherwise,
+                // even if the shell marked its launch command as running.
+                match title_indicates_work(rest, self.last_spinner) {
+                    Some(working) => self.set_working(working, events),
+                    None if starting => self.set_working(false, events),
+                    None => {}
+                }
             }
             "9" => {
                 if let Some(working) = parse_conemu_progress(rest) {
@@ -152,6 +172,7 @@ impl ShellDetector {
                     self.set_working(true, events);
                 } else if let Some(after) = rest.strip_prefix('D') {
                     self.note_alive(false, events);
+                    self.last_spinner = None;
                     self.set_working(false, events);
                     // OSC 133;D;<exit-code> — surface success/failure.
                     let exit_code = after
@@ -208,22 +229,30 @@ fn is_claude_title(title: &str) -> bool {
 }
 
 /// Whether a window title indicates the agent is mid-task (see module docs).
-/// With the circle spinner, "✳ <topic>" is the idle title that ends a turn.
-fn title_indicates_work(title: &str, circle_spinner: bool) -> bool {
+/// `None` means the title alone can't tell: a "✳ <task>" title before any
+/// spinner was seen (a resumed 2.1.300 session opens on its idle "✳ <topic>").
+fn title_indicates_work(title: &str, last_spinner: Option<Spinner>) -> Option<bool> {
     let t = title.trim_start();
     let Some(first) = t.chars().next() else {
-        return false;
+        return Some(false);
     };
     if is_braille(first) || is_circle_spinner(first) {
-        return true;
+        return Some(true);
     }
-    if first != '✳' || circle_spinner {
-        return false;
+    if first != '✳' {
+        return Some(false);
     }
     let task = t
         .trim_start_matches(|c: char| c == '✳' || is_braille(c) || c.is_whitespace())
         .trim();
-    !task.is_empty() && !task.to_lowercase().starts_with("claude code")
+    if task.is_empty() || task.to_lowercase().starts_with("claude code") {
+        return Some(false);
+    }
+    match last_spinner {
+        Some(Spinner::Braille) => Some(true),
+        Some(Spinner::Circle) => Some(false),
+        None => None,
+    }
 }
 
 /// OSC 9;4;<state>;<progress> — states 1/3/4 busy, 0/2 idle. `rest` is the text
@@ -263,7 +292,40 @@ mod tests {
     #[test]
     fn marker_title_with_task_is_working() {
         let mut d = ShellDetector::default();
-        assert_eq!(d.feed(&osc("2;✳ Compiling…")), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("2;⠋ Compiling…")), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("2;✳ Compiling…")), vec![]);
+        assert_eq!(d.feed(&osc("2;✳ Claude Code")), vec![DetectEvent::Working(false)]);
+    }
+
+    #[test]
+    fn marker_title_before_any_spinner_leaves_working_alone() {
+        // A resumed 2.1.300 session opens straight on its idle "✳ <topic>".
+        let mut d = ShellDetector::default();
+        assert_eq!(d.feed(&osc("0;✳ Multiplication of 6 and 7")), vec![DetectEvent::ClaudeAlive(true)]);
+        assert!(!d.is_working());
+        assert_eq!(d.feed(&osc("0;◐ Multiplication of 6 and 7")), vec![DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("0;✳ Multiplication of 6 and 7")), vec![DetectEvent::Working(false)]);
+    }
+
+    #[test]
+    fn resumed_claude_clears_shell_command_working() {
+        let mut d = ShellDetector::default();
+        assert_eq!(d.feed(&osc("133;C")), vec![DetectEvent::Working(true)]);
+        assert_eq!(
+            d.feed(&osc("0;✳ Topic")),
+            vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(false)]
+        );
+    }
+
+    #[test]
+    fn spinner_family_follows_the_running_claude() {
+        let mut d = ShellDetector::default();
+        d.feed(&osc("0;◐ Topic"));
+        d.feed(&osc("0;✳ Topic"));
+        d.feed(&osc("0;"));
+        // An older Claude in the same terminal: its ✳ frames are working again.
+        assert_eq!(d.feed(&osc("0;⠋ Task")), vec![DetectEvent::ClaudeAlive(true), DetectEvent::Working(true)]);
+        assert_eq!(d.feed(&osc("0;✳ Task")), vec![]);
     }
 
     #[test]
